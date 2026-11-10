@@ -21,6 +21,7 @@ ap.add_argument("--base", required=True)
 ap.add_argument("--out", required=True)
 ap.add_argument("--image", default="http://127.0.0.1:5124")
 ap.add_argument("--video", default="http://127.0.0.1:5127")
+ap.add_argument("--still", default="", help="film from this picture instead of drawing a new one")
 ap.add_argument("--agentgen", default=os.environ.get("AGENTGEN_DIR") or r"D:\Agent Gen")
 a = ap.parse_args()
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -87,19 +88,22 @@ def ensure_video():
     raise SystemExit("the video engine did not start")
 
 
-say("drawing the new look")
-base = base64.b64encode(open(a.base, "rb").read()).decode()
-# whatever it is told to be: the words are the picture
-png, ty = post(a.image + "/txt2img", {
-    "width": 512, "height": 1024, "seed": int(time.time()) % 100000,
-    # Agent Gen's way: a person and their body, then the look; clothes only if the look names them
-    "steps": 30, "guidance": 7,
-    "prompt": ("full body photo head to toe, feet visible, %s, " + ("fully nude, completely naked, no underwear, nothing on, " if BARE else "") + "standing facing the camera, plain light grey studio background, photorealistic, detailed face, natural light, sharp focus") % (
-        LOOK if not LOOK.lower().startswith("herself") and not LOOK.startswith("emo hairstyle") else "photo of a 22 year old American woman, " + LOOK.split(":", 1)[-1]),
-    "negative": "child, teen, underage, childlike, young girl, phone, extra fingers, mutated hands, black sclera, plastic skin, heavy makeup, white face paint, tight close up, cropped, cut off feet, cut off head, cut off legs, knees cut off, several people" + (", panties, underwear, thong, bikini, briefs, shorts" if BARE else ""),
-}, 300)
-if "image" not in ty:
-    raise SystemExit("the image engine said: %s" % png[:200])
+if a.still:
+    png, ty = open(a.still, "rb").read(), "image/png"
+else:
+    say("drawing the new look")
+    base = base64.b64encode(open(a.base, "rb").read()).decode()
+    # whatever it is told to be: the words are the picture
+    png, ty = post(a.image + "/txt2img", {
+        "width": 512, "height": 1024, "seed": int(time.time()) % 100000,
+        # Agent Gen's way: a person and their body, then the look; clothes only if the look names them
+        "steps": 30, "guidance": 7,
+        "prompt": ("full body photo head to toe, feet visible, %s, " + ("fully nude, completely naked, topless, bottomless, " if BARE else "") + "standing facing the camera, plain light grey studio background, photorealistic, detailed face, natural light, sharp focus") % (
+            LOOK if not LOOK.lower().startswith("herself") and not LOOK.startswith("emo hairstyle") else "photo of a 22 year old American woman, " + LOOK.split(":", 1)[-1]),
+        "negative": "child, teen, underage, childlike, young girl, two people, multiple people, cropped body, out of frame, cropped feet, cut off legs, raised hand, holding object, extra fingers, missing fingers, fused fingers, mutated hands, deformed hands, black sclera, heavy makeup, white face paint, plastic skin",
+    }, 300)
+    if "image" not in ty:
+        raise SystemExit("the image engine said: %s" % png[:200])
 look_png = os.path.join(a.out, "_look.png")
 open(look_png, "wb").write(png)
 try:
