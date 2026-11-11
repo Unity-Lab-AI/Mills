@@ -298,14 +298,29 @@ impl Unity {
         // her, whatever the brain flagged: a scene about her gets her likeness. What she wears comes from what the person
         // asked (none named: nude), and her scene keeps only the moment, so nothing she imagines about herself gets in.
         let selfie = truthy(&a["selfie"]) || regex::Regex::new(r"(?i)\b(selfie|unity|myself|herself)\b").unwrap().is_match(&scene);
-        let mut wear = String::new();
+        let mut wear = String::new(); let mut kept_wear = false;
         if selfie { if let Some((w, m)) = self.dress(hub, &ci.asked, &scene).await { wear = w; if !m.is_empty() { scene = m; } } }
+        // her outfit persists from one picture (and session) to the next until she is told to wear something else, asked
+        // for nudes, or reset (Settings → Desktop Unity)
+        if selfie {
+            let acct = hub.accounts().into_iter().find(|x| x.username == ci.user);
+            if let Some(acct) = acct {
+                if !wear.is_empty() { let w = wear.clone(); self.with_store(&acct, |st| st["outfit"] = json!(w)); }
+                else {
+                    let kept = s(&self.store(&acct), "outfit");
+                    if !kept.is_empty() {
+                        if self.asks_nude(hub, &ci.asked).await { self.with_store(&acct, |st| { if let Some(o) = st.as_object_mut() { o.remove("outfit"); } }); }
+                        else { wear = kept; kept_wear = true; }
+                    }
+                }
+            }
+        }
         // dressed: the outfit first and only her face and hair (her body words drew her in underwear instead of the outfit),
         // and her desktop self puts it on too (unless she already ordered it this turn)
         let prompt = if !selfie { scene } else if wear.is_empty() {
             format!("photo of one 22 year old American woman alone, solo, fully nude, completely naked, topless, bottomless, {}, {scene}, photorealistic, detailed face, natural light, sharp focus", self.selfie_look)
         } else {
-            if !ci.media.iter().any(|m| m.starts_with("companion:outfit:") || m.starts_with("companion-sent:outfit")) {
+            if !kept_wear && !ci.media.iter().any(|m| m.starts_with("companion:outfit:") || m.starts_with("companion-sent:outfit")) {
                 let look = format!("wearing {wear}");
                 if ci.out.is_none() { ci.media.push(format!("companion:outfit:0:{}:{}", ci.user, pgm_core_internal::text::urlencode(&look))); } else { ci.send(json!({ "type": "companion", "action": "outfit", "amount": 0, "look": look })); ci.media.push(format!("companion-sent:outfit:{}", pgm_core_internal::text::urlencode(&look))); }
             }
@@ -328,6 +343,18 @@ impl Unity {
         let p: String = s(&j, "photo").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().trim_matches(|c: char| c == '.' || c == ',').to_string();
         if p.is_empty() { None } else { Some(p) }
     }
+    /// Does this message ask to see her naked (so the outfit she kept comes off)? One short call to her brain; false when
+    /// it does not answer (she keeps the outfit).
+    async fn asks_nude(&self, hub: &Arc<dyn AiHub>, asked: &str) -> bool {
+        let ask = format!("Read this message from a person to Unity, a young woman: \"{asked}\"\nAnswer with JSON only: {{\"undressed\": true or false}}. undressed: does it ask to see her naked, nude, topless or undressed?");
+        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 30, "temperature": 0 } });
+        match self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 60_000).await {
+            Ok((st, v)) if (200..300).contains(&st) => serde_json::from_str::<Value>(s(&v["message"], "content").trim()).map(|j| truthy(&j["undressed"])).unwrap_or(false),
+            _ => false,
+        }
+    }
+    /// Forget the outfit she kept (Reset).
+    pub fn forget_outfit(&self, a: &Account) { self.with_store(a, |st| { if let Some(o) = st.as_object_mut() { o.remove("outfit"); } }); }
     async fn dress(&self, hub: &Arc<dyn AiHub>, asked: &str, scene: &str) -> Option<(String, String)> {
         let ask = format!("Two separate jobs. Answer with JSON only: {{\"names_clothing\": true or false, \"wear\": \"...\", \"moment\": \"...\"}}.\n\n1. Read ONLY this message from a person: \"{asked}\"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else \"\".\n\n2. Read this picture description: \"{scene}\"\nmoment: only the place, pose, action, expression, camera angle and light, in a few words.");
         let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 200, "temperature": 0 } });

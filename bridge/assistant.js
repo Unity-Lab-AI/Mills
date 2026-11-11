@@ -892,13 +892,15 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       // Desktop Unity on the website: a new look is filmed by the image engine (one at a time, a newer order stops the
       // one being filmed), then her page fetches the clips from here
       if (p === '/api/assistant/look' && req.method === 'POST') {
-        const look = String((await readBody(req)).look || '').replace(/[\u0000-\u001f]/g, '').slice(0, 300).trim();
+        const b = await readBody(req); const reset = b.reset === true; // reset: back to a fresh one of herself
+        const look = reset ? 'herself' : String(b.look || '').replace(/[\u0000-\u001f]/g, '').slice(0, 300).trim();
         if (!look) { send(res, 400, { error: 'What should she look like?' }); return true; }
         if (!(await ensureImage())) { send(res, 503, { error: 'The image engine on the AI host is not starting.' }); return true; }
-        try { const r = await fetch(IMAGE_URL + '/companion/look', { method: 'POST', body: JSON.stringify({ user: acct.username, look }), signal: AbortSignal.timeout(30000) }); const j = await r.json().catch(() => ({})); send(res, r.ok ? 200 : 502, r.ok ? j : { error: 'Image engine: ' + (j.error || r.status) }); }
+        try { const r = await fetch(IMAGE_URL + '/companion/look', { method: 'POST', body: JSON.stringify({ user: acct.username, look, reset }), signal: AbortSignal.timeout(30000) }); const j = await r.json().catch(() => ({})); send(res, r.ok ? 200 : 502, r.ok ? j : { error: 'Image engine: ' + (j.error || r.status) }); }
         catch (e) { send(res, 502, { error: 'Image engine: ' + e.message }); }
         return true;
       }
+      if (p === '/api/assistant/outfit-forget' && req.method === 'POST') { const s = store(acct); delete s.outfit; save(s); send(res, 200, { ok: true }); return true; }
       if (p === '/api/assistant/look' && req.method === 'GET') {
         try { const r = await fetch(IMAGE_URL + '/companion/status?user=' + encodeURIComponent(acct.username), { signal: AbortSignal.timeout(15000) }); send(res, 200, r.ok ? await r.json() : { ok: false, clips: [], busy: false }); }
         catch { send(res, 200, { ok: false, clips: [], busy: false }); }

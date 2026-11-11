@@ -385,11 +385,28 @@ fn companion_do(app: &AppHandle, what: String) -> R<bool> {
     });
     Ok(true)
 }
-/// Never the same her twice: the first time she shows in a run of the app, a fresh one of her is drawn and filmed
-/// (she shows her last one meanwhile).
+/// Her look persists from one start to the next (she keeps what she was told to wear); only when she has no look of
+/// her own yet is a fresh one of her drawn and filmed. Reset (Settings) goes back to a fresh one of herself.
 static FRESHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const SELF_LOOK: &str = "emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones";
-fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) && !DRESSING.load(std::sync::atomic::Ordering::SeqCst) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
+fn has_own_look(app: &AppHandle) -> bool { let d = companion_dir(app); ["idle", "walk", "sit", "wave", "dance"].iter().all(|n| d.join(format!("{n}.webp")).exists()) }
+fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) && !DRESSING.load(std::sync::atomic::Ordering::SeqCst) && !has_own_look(app) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
+/// Reset (Settings → Desktop Unity): her own look and the clips made for things she was told go; she stands as the
+/// built-in her at once (in the middle, where she was is forgotten) while a fresh one of herself is filmed.
+#[tauri::command]
+fn companion_reset(app: AppHandle) -> R<bool> {
+    clog("reset");
+    if let Some(pid) = LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()).take() { stop_look(pid); }
+    LOOK_RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    DRESSING.store(false, std::sync::atomic::Ordering::SeqCst);
+    let d = companion_dir(&app);
+    if let Ok(rd) = std::fs::read_dir(&d) { for e in rd.flatten() { let n = e.file_name().to_string_lossy().to_string(); if n.ends_with(".webp") || n == "status.json" || n == "_look.png" { let _ = std::fs::remove_file(e.path()); } } }
+    let _ = std::fs::remove_file(d.join("base.png"));
+    use tauri::Emitter;
+    let _ = app.emit_to("companion", "companion", json!({ "action": "reset" }));
+    let _ = app.emit_to("companion", "companion-clips", json!({ "ok": true }));
+    companion_outfit(&app, SELF_LOOK.into())
+}
 static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 #[tauri::command]
 fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
@@ -421,7 +438,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| { clog(&format!("second start {args:?}")); if let Some(act) = companion_arg(&args) { let a = app.clone(); tauri::async_runtime::spawn(async move { if let Err(e) = companion(a, act, None, companion_look(&args)).await { eprintln!("companion: {e}"); } }); } else { show_main(app) } }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, companion_set, companion_status, companion_note, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, companion_reset, companion_set, companion_status, companion_note, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here, machine_status, machine_link, machine_act, machine_service])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
