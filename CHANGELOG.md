@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.56.2 — 2026-11-10
+
+PATCH: the leather getup is gone for good.
+
+### Removed
+- **Her old goth look in the hub config** (asked: "in vibe roller the images she made of her self to go along side the desktop Unity appearacence wasnt a nude and it was still the shit fucking leather getup. get rid of that shit! nuke it destroy it with prdjudice"): the hub config's `assistant.selfieLook` (piercings, tattoos, black leather jacket over a pink bra, fishnets) overrode her likeness in every picture of her. It is deleted from `bridge/config.json` and from the host-local configs (gee-pc, the live and dev hubs), and the setting itself is gone from both hubs: her likeness in pictures is always the built-in one (the emo girl next door, nude unless told what to wear), so no config can bring the getup back. `bridge/assistant.js` 1.5.1, native pgm-ai-internal.
+
 ## 5.56.1 — 2026-11-10
 
 PATCH: Desktop Unity goes with the app when it is minimised.
