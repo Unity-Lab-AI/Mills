@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 use crate::hub::{answer, AiHub, Resp};
 use crate::unity::{s, truthy, Unity, ACTS, EMOTIONS, HISTORY_KEEP};
 use crate::unity_brain as brain;
+/// When each person's desktop app last said it is open (POST /api/assistant/desk-alive).
+static DESK_ALIVE: std::sync::LazyLock<Mutex<HashMap<String, std::time::Instant>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 use pgm_identity_internal::Account;
 use pgm_net_internal::http::Req;
 
@@ -56,6 +58,10 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                     else { brain::run_claude(&h, &acc, &if photo.is_empty() { text.clone() } else { format!("{text}\n\n(They sent a photo, id {photo}; use edit_image / inpaint_image with image \"camera\" to work with it.)") }, &mut ci, &br).await };
                 match res {
                     Ok(reply) => {
+                        // her desktop orders that went out live: not media; her reply says she is changing
+                        let sent: Vec<String> = ci.media.iter().filter_map(|m| m.strip_prefix("companion-sent:").map(|c| { let (a, l) = c.split_once(':').unwrap_or((c, "")); format!("companion:{a}:0::{l}") })).collect();
+                        ci.media.retain(|m| !m.starts_with("companion-sent:"));
+                        let reply = format!("{reply}{}", desk_line(&sent));
                         u.with_store(&acc, |st| {
                             let h = st["history"].as_array_mut().unwrap();
                             h.push(json!({ "role": "user", "content": format!("{text}{}", if photo.is_empty() { String::new() } else { format!("\n[[image:{photo}]]") }) }));
@@ -114,19 +120,28 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         // Desktop Unity on the website: a new look is filmed by the image engine on the AI host (one at a time, a newer
         // order stops the one being filmed), then her page fetches the clips from here
         "/api/assistant/look" if post => {
-            let look: String = s(&r.json(), "look").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string();
+            // {reset: true}: back to a fresh one of herself (her clips go at once)
+            let reset = truthy(&r.json()["reset"]);
+            let look: String = if reset { "herself".into() } else { s(&r.json(), "look").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string() };
             if look.is_empty() { return Some(answer(400, json!({ "error": "What should she look like?" }))); }
             if !u.ensure_image(hub).await { return Some(answer(503, json!({ "error": "The image engine on the AI host is not starting." }))); }
-            match u.engine_json(hub, &format!("{}/companion/look", u.image_url), "POST", json!({ "user": un, "look": look }), 30_000).await {
+            match u.engine_json(hub, &format!("{}/companion/look", u.image_url), "POST", json!({ "user": un, "look": look, "reset": reset }), 30_000).await {
                 Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
                 Ok((_, v)) => answer(502, json!({ "error": format!("Image engine: {}", s(&v, "error")) })),
                 Err(e) => answer(502, json!({ "error": format!("Image engine: {e}") })),
             }
         }
-        "/api/assistant/look" if get => match u.engine_json(hub, &format!("{}/companion/status?user={un}", u.image_url), "GET", Value::Null, 15_000).await {
-            Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
-            _ => answer(200, json!({ "ok": false, "clips": [], "busy": false })),
-        },
+        // Reset (Settings → Desktop Unity): the outfit her pictures kept is forgotten
+        "/api/assistant/outfit-forget" if post => { u.forget_outfit(a); answer(200, json!({ "ok": true })) }
+        // the desktop app says it is open (every minute): its own PC films that person's looks, so the website does not
+        "/api/assistant/desk-alive" if post => { DESK_ALIVE.lock().unwrap_or_else(|e| e.into_inner()).insert(un.clone(), std::time::Instant::now()); answer(200, json!({ "ok": true })) }
+        "/api/assistant/look" if get => {
+            let desk = DESK_ALIVE.lock().unwrap_or_else(|e| e.into_inner()).get(un).map(|t| t.elapsed() < Duration::from_secs(150)).unwrap_or(false);
+            match u.engine_json(hub, &format!("{}/companion/status?user={un}", u.image_url), "GET", Value::Null, 15_000).await {
+                Ok((st, mut v)) if (200..300).contains(&st) => { v["deskApp"] = json!(desk); answer(200, v) }
+                _ => answer(200, json!({ "ok": false, "clips": [], "busy": false, "deskApp": desk })),
+            }
+        }
         "/api/assistant/look-clip" if get => {
             let name = r.param("name").unwrap_or_default();
             if !["idle", "walk", "sit", "wave", "dance"].contains(&name.as_str()) { return Some(answer(404, json!({ "error": "No such clip." }))); }

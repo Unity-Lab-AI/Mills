@@ -8,7 +8,11 @@ const CLIPS = { idle: 'companion/idle.webp', walk: 'companion/walk.webp', sit: '
 const SPEED = 140;          // px a second when she walks
 const ONCE_MS = 4200;       // a wave / dance plays this long, then she goes back to standing
 const WANDER_MS = 45000;    // left alone this long, she strolls a little on her own
-let x = innerWidth * 0.8, y = 0, facing = -1, clip = '', moving = null, until = 0, lastOrder = Date.now(), sitting = false;
+const BUILTIN = { ...CLIPS };
+// where she stands is kept from one start to the next (fractions of the window, so a resize keeps her place)
+const PLACE = 'vrCompanionPlace';
+let saved = {}; try { saved = JSON.parse(localStorage.getItem(PLACE) || '{}'); } catch {}
+let x = innerWidth * (Number.isFinite(saved.fx) ? saved.fx : 0.8), y = innerHeight * (Number.isFinite(saved.fy) ? saved.fy : 0), facing = saved.facing === 1 ? 1 : -1, clip = '', moving = null, until = 0, lastOrder = Date.now(), sitting = false;
 
 function play(name) {
   if (clip === name) return;
@@ -23,6 +27,7 @@ function draw() {
   her.style.bottom = y + 'px';
   her.style.transform = facing < 0 ? 'scaleX(-1)' : 'none'; // the walk clip faces right
 }
+function keep() { try { localStorage.setItem(PLACE, JSON.stringify({ fx: x / Math.max(1, innerWidth), fy: y / Math.max(1, innerHeight), facing })); } catch {} }
 function walkTo(tx, ty) {
   sitting = false;
   moving = { tx: Math.max(0, Math.min(innerWidth, tx)), ty: Math.max(0, Math.min(innerHeight, ty)) };
@@ -34,7 +39,7 @@ function tick(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (moving) {
     const dx = moving.tx - x, dy = moving.ty - y, d = Math.hypot(dx, dy), step = SPEED * dt;
-    if (d <= step) { x = moving.tx; y = moving.ty; moving = null; play('idle'); }
+    if (d <= step) { x = moving.tx; y = moving.ty; moving = null; play('idle'); keep(); }
     else { x += dx / d * step; y += dy / d * step; }
   } else if (until && Date.now() > until) { until = 0; play('idle'); }
   else if (!sitting && !until && Date.now() - lastOrder > WANDER_MS) { // a little stroll on her own
@@ -59,7 +64,8 @@ function order(o) {
     case 'go_right_edge': walkTo(innerWidth, y); break;
     case 'sit': moving = null; sitting = true; play('sit'); break;
     case 'wave': case 'dance': moving = null; sitting = false; play(a); until = Date.now() + ONCE_MS; break;
-    case 'turn': facing = -facing; break;
+    case 'turn': facing = -facing; keep(); break;
+    case 'reset': for (const k of Object.keys(CLIPS)) CLIPS[k] = BUILTIN[k]; moving = null; sitting = false; x = innerWidth / 2; y = 0; facing = -1; keep(); clip = ''; play('idle'); break;
     case 'clip': if (o.url) { moving = null; sitting = false; clip = 'custom'; her.src = o.url; until = Date.now() + 2200; } break;
     case 'stop': case 'idle': case 'stand': case 'show': default: moving = null; sitting = false; play('idle');
   }

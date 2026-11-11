@@ -213,6 +213,7 @@ async fn companion(app: AppHandle, action: String, amount: Option<f64>, look: Op
                 .parent(&main).map_err(|e| e.to_string())?
                 .build().map_err(|e| { clog(&format!("build failed: {e}")); e.to_string() })?;
             clog("window built");
+            watch_companion(&app);
             fit_companion(&app);
             let a2 = app.clone();
             main.on_window_event(move |ev| match ev {
@@ -239,8 +240,25 @@ fn companion_arg(args: &[String]) -> Option<String> { args.iter().position(|a| a
 /// The companion window laid exactly over the app window (its inner area); hidden while the app is minimised.
 fn fit_companion(app: &AppHandle) {
     let (Some(main), Some(c)) = (app.get_webview_window("main"), app.get_webview_window("companion")) else { return };
-    if main.is_minimized().unwrap_or(false) { let _ = c.hide(); return; }
+    // minimised or hidden (Windows parks a minimised window far off screen at -32000): she goes with it
+    let gone = main.is_minimized().unwrap_or(false) || !main.is_visible().unwrap_or(true)
+        || main.outer_position().map(|p| p.x <= -30000 || p.y <= -30000).unwrap_or(false);
+    static HID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if gone { if c.is_visible().unwrap_or(false) { let _ = c.hide(); HID.store(true, std::sync::atomic::Ordering::SeqCst); } return; }
     if let (Ok(p), Ok(s)) = (main.inner_position(), main.inner_size()) { let _ = c.set_position(p); let _ = c.set_size(s); }
+    // back from minimised: she shows again (only when the minimise hid her, and she is on)
+    if HID.swap(false, std::sync::atomic::Ordering::SeqCst) && companion_on(app) { let _ = c.show(); let _ = c.set_ignore_cursor_events(true); }
+}
+/// Minimise does not always send a window event on Windows: her window checks the app's twice a second.
+fn watch_companion(app: &AppHandle) {
+    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ON.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+    let a = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let b = a.clone();
+        let _ = a.run_on_main_thread(move || fit_companion(&b));
+    });
 }
 /// `--look <text>` with `--companion outfit`.
 fn companion_look(args: &[String]) -> Option<String> { args.iter().position(|a| a == "--look").and_then(|i| args.get(i + 1).cloned()) }
@@ -259,6 +277,7 @@ fn companion_clips(app: AppHandle) -> Value {
 static DRESSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LOOK_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LOOK_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+static CUR_LOOK: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// Stop a look being filmed: its Python (and what it started), and the video engine's job for it.
 fn stop_look(pid: u32) {
     #[cfg(windows)] { use std::os::windows::process::CommandExt; let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).creation_flags(0x0800_0000).status(); }
@@ -273,6 +292,9 @@ fn stop_look(pid: u32) {
 fn companion_outfit(app: &AppHandle, look: String) -> R<bool> {
     let look: String = look.chars().filter(|c| !c.is_control()).take(200).collect::<String>().trim().to_string();
     if look.is_empty() { return Err("What should she wear?".into()); }
+    // the same look again while it is being filmed (her reply and the hub both ordered it): nothing restarts
+    { let cur = CUR_LOOK.lock().unwrap_or_else(|e| e.into_inner()); if DRESSING.load(std::sync::atomic::Ordering::SeqCst) && *cur == look { clog(&format!("already filming: {look}")); return Ok(true); } }
+    *CUR_LOOK.lock().unwrap_or_else(|e| e.into_inner()) = look.clone();
     // an order always wins: a look being filmed (her fresh one at start, or an older order) is stopped for it
     let my = LOOK_RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     if let Some(pid) = LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()).take() { clog(&format!("stopping the look being filmed for: {look}")); stop_look(pid); }
@@ -367,11 +389,28 @@ fn companion_do(app: &AppHandle, what: String) -> R<bool> {
     });
     Ok(true)
 }
-/// Never the same her twice: the first time she shows in a run of the app, a fresh one of her is drawn and filmed
-/// (she shows her last one meanwhile).
+/// Her look persists from one start to the next (she keeps what she was told to wear); only when she has no look of
+/// her own yet is a fresh one of her drawn and filmed. Reset (Settings) goes back to a fresh one of herself.
 static FRESHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const SELF_LOOK: &str = "emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones";
-fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) && !DRESSING.load(std::sync::atomic::Ordering::SeqCst) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
+fn has_own_look(app: &AppHandle) -> bool { let d = companion_dir(app); ["idle", "walk", "sit", "wave", "dance"].iter().all(|n| d.join(format!("{n}.webp")).exists()) }
+fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) && !DRESSING.load(std::sync::atomic::Ordering::SeqCst) && !has_own_look(app) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
+/// Reset (Settings → Desktop Unity): her own look and the clips made for things she was told go; she stands as the
+/// built-in her at once (in the middle, where she was is forgotten) while a fresh one of herself is filmed.
+#[tauri::command]
+fn companion_reset(app: AppHandle) -> R<bool> {
+    clog("reset");
+    if let Some(pid) = LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()).take() { stop_look(pid); }
+    LOOK_RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    DRESSING.store(false, std::sync::atomic::Ordering::SeqCst);
+    let d = companion_dir(&app);
+    if let Ok(rd) = std::fs::read_dir(&d) { for e in rd.flatten() { let n = e.file_name().to_string_lossy().to_string(); if n.ends_with(".webp") || n == "status.json" || n == "_look.png" { let _ = std::fs::remove_file(e.path()); } } }
+    let _ = std::fs::remove_file(d.join("base.png"));
+    use tauri::Emitter;
+    let _ = app.emit_to("companion", "companion", json!({ "action": "reset" }));
+    let _ = app.emit_to("companion", "companion-clips", json!({ "ok": true }));
+    companion_outfit(&app, SELF_LOOK.into())
+}
 static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 #[tauri::command]
 fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
@@ -403,7 +442,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| { clog(&format!("second start {args:?}")); if let Some(act) = companion_arg(&args) { let a = app.clone(); tauri::async_runtime::spawn(async move { if let Err(e) = companion(a, act, None, companion_look(&args)).await { eprintln!("companion: {e}"); } }); } else { show_main(app) } }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, companion_set, companion_status, companion_note, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, companion_reset, companion_set, companion_status, companion_note, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here, machine_status, machine_link, machine_act, machine_service])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
