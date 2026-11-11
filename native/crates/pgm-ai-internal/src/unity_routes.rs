@@ -56,6 +56,10 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                     else { brain::run_claude(&h, &acc, &if photo.is_empty() { text.clone() } else { format!("{text}\n\n(They sent a photo, id {photo}; use edit_image / inpaint_image with image \"camera\" to work with it.)") }, &mut ci, &br).await };
                 match res {
                     Ok(reply) => {
+                        // her desktop orders that went out live: not media; her reply says she is changing
+                        let sent: Vec<String> = ci.media.iter().filter_map(|m| m.strip_prefix("companion-sent:").map(|c| { let (a, l) = c.split_once(':').unwrap_or((c, "")); format!("companion:{a}:0::{l}") })).collect();
+                        ci.media.retain(|m| !m.starts_with("companion-sent:"));
+                        let reply = format!("{reply}{}", desk_line(&sent));
                         u.with_store(&acc, |st| {
                             let h = st["history"].as_array_mut().unwrap();
                             h.push(json!({ "role": "user", "content": format!("{text}{}", if photo.is_empty() { String::new() } else { format!("\n[[image:{photo}]]") }) }));
