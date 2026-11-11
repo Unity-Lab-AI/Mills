@@ -33,6 +33,17 @@ passthrough), G3 (OpenAI passthrough, cross-format) and G5 (Responses API) are n
   Cursor / Continue / any OpenAI client, and curl, with a note that a Claude subscription login serves Claude Code
   only. The setups are `web/apisetup.js` 1.0.0 (pure functions); the old single-key section works as before against an
   older hub.
+- **Raw Anthropic passthrough (G2).** `POST /v1/messages` to an Anthropic-speaking provider (an Anthropic API key, or a
+  host's Claude login through the relay) is forwarded as it is, not flattened to text: tools, tool_choice, thinking,
+  images, documents, cache_control, system arrays and the `anthropic-beta` headers arrive intact, with only the model
+  alias swapped for the real id and the provider's own auth put on; the answer (JSON or the SSE stream, byte for byte)
+  and Anthropic's errors (a real 429 with retry-after too) come back unchanged. Usage is read from the stream for the
+  ledger and the key's counters (`tokensIn`, `tokensOut`, add-only). The key's concurrency slot is held for the stream
+  and a caller hanging up frees it and closes the upstream. A Claude **subscription** login serves Claude Code only: its
+  refusal of another harness becomes a plain 403 ("this provider is a Claude subscription login: it serves Claude
+  Code; use Claude Code with this key, or pick a provider that has an API key"); nothing makes another harness pass
+  as Claude Code. Other provider kinds keep the text path until G3. New module gateway.rs; config
+  `api.anthropicBase` (a test hook). Checks R575–R579.
 - Checks R560–R565 (keys, limits, routing, the default key, concurrency, the security log) and R568–R570 (the setups,
   the page, the keys list code; numbered R565–R567 on their branch).
 
