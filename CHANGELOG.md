@@ -7,6 +7,46 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.58.0 — 2026-11-11
+
+MINOR: **the API gateway, first slices: several keys, model routing across providers, concurrent requests, and a setup
+page** (T-369; Sponge, 2026-11-10: "someone running an AI host, the team or the individual users that can use the AI …
+should be able to hook that into anything"; plan: team note plans/api-gateway.md). Slices G1 and G4; G2 (raw Anthropic
+passthrough), G3 (OpenAI passthrough, cross-format) and G5 (Responses API) are next.
+
+- **Keys (G1).** A person can make several named keys (`POST /api/apikey/create {label, expiresDays, providers?,
+  models?, maxConcurrent?}`, shown once, `mills_` prefix; `POST /api/apikey/revoke {id}`; `GET /api/apikey` lists them,
+  never a secret). A key can only be narrowed below what its person may use. Add-only data: the legacy key stays the
+  "default" key in `api-keys.json[user]` and the named ones go in a `keys` array the frozen JavaScript hub ignores.
+  Create, revoke and the first use of a key each day go to the security log (`apikey.create`, `apikey.revoke`,
+  `apikey.use`; never the secret).
+- **Model routing (G1).** `model` resolves across every provider the person may use for the API (their own and what
+  others share with the API use and model scope), narrowed by the key: a plain id goes to the first usable provider
+  offering it (the key's providers, then the person's own, then shared; online and uncapped first), `<provider>/<model>`
+  picks one; `GET /v1/models` lists every model once with its provider (and the alias where two providers offer the
+  same id), in both list shapes. The default key keeps answering from its bound provider and model as before.
+- **Concurrency (G1).** The one-request-at-a-time rule is a per-key limit now (`maxConcurrent`, config
+  `api.maxConcurrent`, default 8, at most 64); over it 429 with `retry-after`. A person's stop cancels all their API
+  answers.
+- **Settings → API access (G4).** A keys list with Create and Revoke, and a **Connect a tool** panel with copy-ready
+  setups filled with the hub's address, the key and a model: Claude Code (bash and PowerShell), Codex, jcode, opencode,
+  Cursor / Continue / any OpenAI client, and curl, with a note that a Claude subscription login serves Claude Code
+  only. The setups are `web/apisetup.js` 1.0.0 (pure functions); the old single-key section works as before against an
+  older hub.
+- **Raw Anthropic passthrough (G2).** `POST /v1/messages` to an Anthropic-speaking provider (an Anthropic API key, or a
+  host's Claude login through the relay) is forwarded as it is, not flattened to text: tools, tool_choice, thinking,
+  images, documents, cache_control, system arrays and the `anthropic-beta` headers arrive intact, with only the model
+  alias swapped for the real id and the provider's own auth put on; the answer (JSON or the SSE stream, byte for byte)
+  and Anthropic's errors (a real 429 with retry-after too) come back unchanged. Usage is read from the stream for the
+  ledger and the key's counters (`tokensIn`, `tokensOut`, add-only). The key's concurrency slot is held for the stream
+  and a caller hanging up frees it and closes the upstream. A Claude **subscription** login serves Claude Code only: its
+  refusal of another harness becomes a plain 403 ("this provider is a Claude subscription login: it serves Claude
+  Code; use Claude Code with this key, or pick a provider that has an API key"); nothing makes another harness pass
+  as Claude Code. Other provider kinds keep the text path until G3. New module gateway.rs; config
+  `api.anthropicBase` (a test hook). Checks R575–R579.
+- Checks R560–R565 (keys, limits, routing, the default key, concurrency, the security log) and R568–R570 (the setups,
+  the page, the keys list code; numbered R565–R567 on their branch).
+
 ## 5.57.4 — 2026-11-10
 
 PATCH: the GPU is only used while something asks for it.

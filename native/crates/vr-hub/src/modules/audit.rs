@@ -38,7 +38,7 @@ fn what(r: &Req) -> Option<(&'static str, String, Value)> {
     use hyper::Method;
     let (post, get) = (r.method == Method::POST, r.method == Method::GET);
     let p = r.path.as_str();
-    let b = if post && ["/api/admin/", "/api/hosts/", "/api/providers/", "/api/device", "/api/guilds/server/password"].iter().any(|x| p.starts_with(x)) { r.json() } else { Value::Null };
+    let b = if post && ["/api/admin/", "/api/hosts/", "/api/providers/", "/api/apikey/", "/api/device", "/api/guilds/server/password"].iter().any(|x| p.starts_with(x)) { r.json() } else { Value::Null };
     let user = || sv(&b, "username").to_lowercase();
     Some(match p {
         "/api/logout" if post => ("signout", String::new(), json!({})),
@@ -65,7 +65,8 @@ fn what(r: &Req) -> Option<(&'static str, String, Value)> {
         "/api/providers/update" if post => ("provider.update", sv(&b, "id"), if b.get("shared").is_some() { json!({ "shared": truthy(&b["shared"]) }) } else { json!({}) }),
         "/api/providers/remove" if post => ("provider.remove", sv(&b, "id"), json!({})),
         "/api/apikey/rotate" if post => ("apikey.new", String::new(), json!({})),
-        "/api/apikey/revoke" if post => ("apikey.revoke", String::new(), json!({})),
+        "/api/apikey/create" if post => ("apikey.create", sv(&b, "label"), json!({ "label": sv(&b, "label"), "expiresDays": b["expiresDays"], "providers": b["providers"], "models": b["models"], "maxConcurrent": b["maxConcurrent"] })),
+        "/api/apikey/revoke" if post => ("apikey.revoke", { let i = sv(&b, "id"); if i.is_empty() { "default".to_string() } else { i } }, json!({})),
         "/api/forgejo/connect" if post => ("forgejo.connect", String::new(), json!({})),
         "/api/forgejo/disconnect" if post => ("forgejo.disconnect", String::new(), json!({})),
         "/api/guilds/server/password" if post => ("guild.password", sv(&b, "server"), json!({})),

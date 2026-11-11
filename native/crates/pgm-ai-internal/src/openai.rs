@@ -22,7 +22,8 @@ use pgm_identity_internal::Account;
 use pgm_net_internal::http::Req;
 
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
-const NO_AI: &str = "No AI is available: this hub has no Claude of its own and no AI host offering one is connected.";
+const NO_KEY_USE: &str = "This key has no provider or model it may use: its limits leave nothing of what you may use for the API.";
+const NO_AI: &str ="No AI is available: this hub has no Claude of its own and no AI host offering one is connected.";
 
 #[derive(Debug)]
 pub struct ApiErr { pub status: u16, pub msg: String }
@@ -40,7 +41,14 @@ impl Cancel {
 /// fields (Anthropic cache_read / cache_creation, OpenAI cached_tokens), which the usage ledger normalises.
 pub struct Answer { text: String, model: String, usage: Value, native: Value }
 
-pub struct Api { root: PathBuf, mills: PathBuf, keys: Mutex<Map<String, Value>>, running: Mutex<HashMap<String, Arc<Cancel>>>, http: reqwest::Client }
+/// Which key made a request and what it may do: the person's default key (the legacy fields of their record, `id`
+/// "default") or one of the named keys in `keys` (add-only: the frozen JS hub ignores them).
+#[derive(Clone, Debug, Default)]
+pub struct KeyCtx { pub id: String, pub label: String, pub providers: Vec<String>, pub models: Vec<String>, pub max: Option<u64>, pub named: bool }
+impl KeyCtx { pub fn default_key() -> KeyCtx { KeyCtx { id: "default".into(), label: "default".into(), ..Default::default() } } }
+/// The answers being made: slot → (person, key id, its cancel).
+type RunMap = HashMap<u64, (String, String, Arc<Cancel>)>;
+pub struct Api { root: PathBuf, mills: PathBuf, keys: Mutex<Map<String, Value>>, running: Mutex<RunMap>, run_seq: std::sync::atomic::AtomicU64, http: reqwest::Client }
 use pgm_core_internal::json::{read_json, s, write_json_private as write_json};
 fn js_len(t: &str) -> usize { t.encode_utf16().count() }
 
@@ -54,35 +62,64 @@ impl Api {
         // (no redirects: an endpoint someone typed in must not lead this hub on to an address of its own choosing)
         let _ = pgm_net_internal::client::http_client(std::time::Duration::from_secs(15));
         let http = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build().expect("http");
-        Api { root: root.to_path_buf(), mills: root.join(".."), keys: Mutex::new(keys), running: Mutex::default(), http }
+        Api { root: root.to_path_buf(), mills: root.join(".."), keys: Mutex::new(keys), running: Mutex::default(), run_seq: Default::default(), http }
     }
     fn save(&self) { write_json(&self.root.join("api-keys.json"), &Value::Object(self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
+    /// A named key by id.
+    fn named_key(&self, u: &str, id: &str) -> Option<Value> { self.key_of(u)["keys"].as_array()?.iter().find(|k| k["id"] == json!(id)).cloned() }
     fn key_of(&self, u: &str) -> Value { self.keys.lock().unwrap_or_else(|e| e.into_inner()).get(u).cloned().unwrap_or(json!({})) }
     fn set_key(&self, u: &str, v: Option<Value>) { { let mut k = self.keys.lock().unwrap_or_else(|e| e.into_inner()); match v { Some(v) => { k.insert(u.into(), v); } None => { k.remove(u); } } } self.save(); }
     pub fn busy(&self) -> bool { !self.running.lock().unwrap_or_else(|e| e.into_inner()).is_empty() }
-    pub fn stop(&self, u: &str) { if let Some(c) = self.running.lock().unwrap_or_else(|e| e.into_inner()).get(u) { c.fire(); } }
+    /// Cancels every API answer of that person, whichever key it came in on.
+    pub fn stop(&self, u: &str) { for (user, _, c) in self.running.lock().unwrap_or_else(|e| e.into_inner()).values() { if user == u { c.fire(); } } }
     pub fn drop_provider(&self, id: &str) {
         let changed = { let mut k = self.keys.lock().unwrap_or_else(|e| e.into_inner()); let mut ch = false; for v in k.values_mut() { if v["provider"] == json!(id) { if let Some(o) = v.as_object_mut() { o.remove("provider"); ch = true; } } } ch };
         if changed { self.save(); }
     }
     fn status(&self, u: &str) -> Value {
         let a = self.key_of(u);
-        let days = a["expiresDays"].as_u64().unwrap_or(0);
-        let created = chrono::DateTime::parse_from_rfc3339(a["createdAt"].as_str().unwrap_or("")).ok().map(|d| d.timestamp_millis() as u64);
-        let expires = match (created, days) { (Some(c), d) if d > 0 => Some(c + d * 86_400_000), _ => None };
+        let (days, expires, expired) = expiry(&a);
         let tunnel = read_json(&self.root.join("tunnel.json")).map(|t| s(&t, "url")).unwrap_or_default();
-        json!({ "hasKey": !s(&a, "hash").is_empty(), "prefix": s(&a, "prefix"), "createdAt": a.get("createdAt").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null), "expiresDays": days, "expiresAt": expires, "expired": expires.map(|e| e < now_ms()).unwrap_or(false),
-            "provider": if s(&a, "provider").is_empty() { "host".into() } else { s(&a, "provider") }, "model": s(&a, "model"), "endpoint": format!("{tunnel}/v1"), "calls": a["calls"].as_u64().unwrap_or(0), "lastUsed": a.get("lastUsed").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null) })
+        let mut keys = vec![];
+        if !s(&a, "hash").is_empty() { keys.push(key_view(&a, "default", "default")); }
+        for k in a["keys"].as_array().cloned().unwrap_or_default() { keys.push(key_view(&k, &s(&k, "id"), &s(&k, "label"))); }
+        json!({ "hasKey": !s(&a, "hash").is_empty(), "prefix": s(&a, "prefix"), "createdAt": a.get("createdAt").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null), "expiresDays": days, "expiresAt": expires, "expired": expired,
+            "provider": if s(&a, "provider").is_empty() { "host".into() } else { s(&a, "provider") }, "model": s(&a, "model"), "endpoint": format!("{tunnel}/v1"), "calls": a["calls"].as_u64().unwrap_or(0), "lastUsed": a.get("lastUsed").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null), "keys": keys })
     }
-    fn account_for_key(&self, r: &Req) -> Result<String, String> {
+    /// Changes the person's record (the default key's legacy fields and `keys`) and saves it; an empty record goes away.
+    fn edit(&self, u: &str, f: impl FnOnce(&mut Value)) { let mut rec = self.key_of(u); if !rec.is_object() { rec = json!({}); } f(&mut rec); let empty = rec.as_object().map(|m| m.is_empty()).unwrap_or(true); self.set_key(u, if empty { None } else { Some(rec) }); }
+    /// The key a request carries: its person and what that key may do. A key switched off or expired is refused.
+    fn account_for_key(&self, r: &Req) -> Result<(String, KeyCtx), String> {
         let k = r.header("authorization").and_then(|v| v.strip_prefix("Bearer ")).map(|v| v.trim().to_string()).unwrap_or_else(|| r.header("x-api-key").unwrap_or("").trim().to_string());
         if !(k.len() == 54 && k.starts_with("mills_") && k[6..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())) { return Err("Missing or malformed API key. Use \"Authorization: Bearer mills_…\" (or \"x-api-key: mills_…\") with the key from Settings → API access.".into()); }
         let h = pgm_core_internal::crypto::sha256_hex(k.as_bytes());
-        let found = self.keys.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(_, v)| crate::work::same_secret(v["hash"].as_str().unwrap_or(""), &h)).map(|(u, _)| u.clone());
-        let Some(u) = found else { return Err("Unknown API key (rotated, revoked, or never issued).".into()) };
-        if self.status(&u)["expired"] == json!(true) { return Err("This API key has expired; rotate it in Settings → API access.".into()); }
-        Ok(u)
+        let found = { let all = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+            all.iter().find_map(|(u, v)| {
+                if crate::work::same_secret(v["hash"].as_str().unwrap_or(""), &h) { return Some((u.clone(), v.clone(), KeyCtx::default_key())); }
+                v["keys"].as_array()?.iter().find(|x| crate::work::same_secret(x["hash"].as_str().unwrap_or(""), &h)).map(|x| (u.clone(), x.clone(), KeyCtx {
+                    id: s(x, "id"), label: s(x, "label"), named: true, max: x["maxConcurrent"].as_u64().filter(|n| *n > 0).map(|n| n.min(64)),
+                    providers: str_list(&x["providers"]), models: str_list(&x["models"]) }))
+            }) };
+        let Some((u, rec, ctx)) = found else { return Err("Unknown API key (rotated, revoked, or never issued).".into()) };
+        if ctx.named && rec["enabled"] == json!(false) { return Err("This API key is switched off.".into()); }
+        if expiry(&rec).2 { return Err("This API key has expired; rotate it (or make a new one) in Settings → API access.".into()); }
+        Ok((u, ctx))
     }
+}
+fn str_list(v: &Value) -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() }
+/// (expiresDays, expiry in ms, expired) of a key record.
+fn expiry(a: &Value) -> (u64, Option<u64>, bool) {
+    let days = a["expiresDays"].as_u64().unwrap_or(0);
+    let created = chrono::DateTime::parse_from_rfc3339(a["createdAt"].as_str().unwrap_or("")).ok().map(|d| d.timestamp_millis() as u64);
+    let expires = match (created, days) { (Some(c), d) if d > 0 => Some(c + d * 86_400_000), _ => None };
+    (days, expires, expires.map(|e| e < now_ms()).unwrap_or(false))
+}
+/// A key as the list shows it: never the secret or its hash.
+fn key_view(k: &Value, id: &str, label: &str) -> Value {
+    let (days, expires, expired) = expiry(k);
+    json!({ "id": id, "label": label, "prefix": s(k, "prefix"), "createdAt": k.get("createdAt").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null), "expiresDays": days, "expiresAt": expires, "expired": expired,
+        "enabled": k["enabled"] != json!(false), "calls": k["calls"].as_u64().unwrap_or(0), "lastUsed": k.get("lastUsed").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null),
+        "providers": str_list(&k["providers"]), "models": str_list(&k["models"]), "maxConcurrent": k.get("maxConcurrent").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null), "default": id == "default" })
 }
 fn clamp_days(d: &Value) -> u64 { let n = d.as_f64().or_else(|| d.as_str().and_then(|x| x.parse().ok())).unwrap_or(0.0).round() as i64; if [0, 1, 7, 30, 90].contains(&n) { n as u64 } else { 0 } }
 
@@ -437,7 +474,7 @@ fn tools_reply(an: ToolAnswer, model: String, cid: &str, created: u64, stream: b
     let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n")));
     sse_answer(rx)
 }
-fn self_http(hub: &dyn AiHub) -> &reqwest::Client { &hub.api().http }
+pub(crate) fn self_http(hub: &dyn AiHub) -> &reqwest::Client { &hub.api().http }
 async fn next_or_cancel(src: &mut Src, cancel: &Cancel) -> Result<Option<Vec<u8>>, ApiErr> {
     if cancel.is() { return Err(err(502, "cancelled")); }
     tokio::select! { _ = cancel.woke.notified() => Err(err(502, "cancelled")), c = src.next() => Ok(c) }
@@ -498,7 +535,7 @@ async fn complete_cli(hub: &Arc<dyn AiHub>, p: &Value, model: &str, system: &str
 }
 
 // ---------- the API's answers ----------
-fn cors(mut r: hyper::Response<pgm_net_internal::http::Body>) -> Resp {
+pub(crate) fn cors(mut r: hyper::Response<pgm_net_internal::http::Body>) -> Resp {
     let h = r.headers_mut();
     h.insert("access-control-allow-origin", hyper::header::HeaderValue::from_static("*"));
     h.insert("access-control-allow-headers", hyper::header::HeaderValue::from_static("Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta"));
@@ -506,7 +543,7 @@ fn cors(mut r: hyper::Response<pgm_net_internal::http::Body>) -> Resp {
 }
 fn jout(status: u16, v: Value) -> Resp { cors(pgm_net_internal::http::json(status, &v)) }
 fn oa_error(status: u16, m: &str, t: &str) -> Resp { jout(status, json!({ "error": { "message": m, "type": t, "code": Value::Null } })) }
-fn ant_error(status: u16, m: &str, t: &str) -> Resp {
+pub(crate) fn ant_error(status: u16, m: &str, t: &str) -> Resp {
     let t = match t { "service_unavailable" => "overloaded_error", "rate_limit_error" | "authentication_error" | "invalid_request_error" | "not_found_error" => t, _ => "api_error" };
     jout(status, json!({ "type": "error", "error": { "type": t, "message": m } }))
 }
@@ -530,16 +567,47 @@ fn from_anthropic(b: &Value) -> (String, Vec<(String, String)>) {
     (system, msgs)
 }
 /// Marks a person's answer as running until dropped; the caller hanging up cancels it.
-struct Running { hub: Arc<dyn AiHub>, user: String, cancel: Arc<Cancel> }
-impl Drop for Running { fn drop(&mut self) { self.cancel.fire(); self.hub.api().running.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.user); self.hub.work().busy_changed.notify_one(); } }
-fn start_running(hub: &Arc<dyn AiHub>, user: &str) -> Option<Running> {
-    let mut r = hub.api().running.lock().unwrap_or_else(|e| e.into_inner());
-    if r.contains_key(user) { return None; }
-    let c = Arc::new(Cancel::default()); r.insert(user.into(), c.clone()); drop(r);
+pub(crate) struct Running { hub: Arc<dyn AiHub>, slot: u64, pub(crate) cancel: Arc<Cancel> }
+impl Drop for Running { fn drop(&mut self) { self.cancel.fire(); self.hub.api().running.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.slot); self.hub.work().busy_changed.notify_one(); } }
+/// How many answers one key may have going at once: its own `maxConcurrent`, else config `api.maxConcurrent`, else 8.
+pub(crate) fn max_concurrent(hub: &dyn AiHub, key: &KeyCtx) -> usize { key.max.or_else(|| hub.cfg().get("api").and_then(|a| a["maxConcurrent"].as_u64()).filter(|n| *n > 0)).unwrap_or(8).min(64) as usize }
+/// A slot for one more answer of that key (None: it is at its limit).
+pub(crate) fn start_running(hub: &Arc<dyn AiHub>, user: &str, key: &KeyCtx) -> Option<Running> {
+    let max = max_concurrent(&**hub, key);
+    let api = hub.api();
+    let mut r = api.running.lock().unwrap_or_else(|e| e.into_inner());
+    if r.values().filter(|(u, k, _)| u == user && *k == key.id).count() >= max { return None; }
+    let c = Arc::new(Cancel::default()); let slot = api.run_seq.fetch_add(1, Ordering::SeqCst);
+    r.insert(slot, (user.into(), key.id.clone(), c.clone())); drop(r);
     hub.work().busy_changed.notify_one();
-    Some(Running { hub: hub.clone(), user: user.into(), cancel: c })
+    Some(Running { hub: hub.clone(), slot, cancel: c })
 }
-fn count_use(hub: &dyn AiHub, u: &str) { let api = hub.api(); let mut k = api.key_of(u); k["calls"] = json!(k["calls"].as_u64().unwrap_or(0) + 1); k["lastUsed"] = json!(pgm_core_internal::time::iso_now()); api.set_key(u, Some(k)); }
+/// 429 with `retry-after`, in the shape the caller speaks.
+pub(crate) fn too_many(anthropic: bool, key: &KeyCtx, max: usize) -> Resp {
+    let m = format!("Too many requests at once on this key (the limit is {max}{}); wait for one to finish and try again.", if key.named { format!(" for key \"{}\"", key.label) } else { String::new() });
+    let mut r = if anthropic { ant_error(429, &m, "rate_limit_error") } else { oa_error(429, &m, "rate_limit_error") };
+    r.headers_mut().insert("retry-after", hyper::header::HeaderValue::from_static("1"));
+    r
+}
+/// Counts a call on its key; the first call of a day goes to the security log (key id and prefix, never the secret).
+pub(crate) fn count_use(hub: &dyn AiHub, u: &str, key: &KeyCtx) {
+    let api = hub.api(); let now = pgm_core_internal::time::iso_now();
+    let mut first_today = false; let mut prefix = String::new();
+    api.edit(u, |rec| {
+        let bump = |k: &mut Value, first: &mut bool, prefix: &mut String| { *first = s(k, "lastUsed").get(..10) != now.get(..10); *prefix = s(k, "prefix"); k["calls"] = json!(k["calls"].as_u64().unwrap_or(0) + 1); k["lastUsed"] = json!(now); };
+        if !key.named { bump(rec, &mut first_today, &mut prefix); }
+        else if let Some(k) = rec["keys"].as_array_mut().and_then(|a| a.iter_mut().find(|k| k["id"] == json!(key.id))) { bump(k, &mut first_today, &mut prefix); }
+    });
+    if first_today { pgm_core_internal::audit::record(u, "apikey.use", &key.id, json!({ "prefix": prefix, "label": key.label }), ""); }
+}
+/// Adds an answer's tokens to its key's counters (`tokensIn`: everything read, cache included; `tokensOut`).
+pub(crate) fn count_tokens(hub: &dyn AiHub, u: &str, key: &KeyCtx, input: u64, output: u64) {
+    hub.api().edit(u, |rec| {
+        let add = |k: &mut Value| { k["tokensIn"] = json!(k["tokensIn"].as_u64().unwrap_or(0) + input); k["tokensOut"] = json!(k["tokensOut"].as_u64().unwrap_or(0) + output); };
+        if !key.named { add(rec); }
+        else if let Some(k) = rec["keys"].as_array_mut().and_then(|a| a.iter_mut().find(|k| k["id"] == json!(key.id))) { add(k); }
+    });
+}
 fn total(u: &Value) -> Value { let mut v = u.clone(); v["total_tokens"] = json!(u["prompt_tokens"].as_u64().unwrap_or(0) + u["completion_tokens"].as_u64().unwrap_or(0)); v }
 
 /// /v1/*: the API itself (its own keys, no browser session).
@@ -548,46 +616,117 @@ pub async fn v1(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
     if r.method == hyper::Method::OPTIONS { return cors(hyper::Response::builder().status(204).body(pgm_net_internal::http::full("")).expect("response")); }
     let anthropic = p.starts_with("/v1/messages") || (p == "/v1/models" && r.header("anthropic-version").is_some());
     let fail = |st: u16, m: &str, t: &str| if anthropic { ant_error(st, m, t) } else { oa_error(st, m, t) };
-    let user = match hub.api().account_for_key(r) { Ok(u) => u, Err(e) => return fail(401, &e, "authentication_error") };
-    v1_as(hub, r, user).await
+    let (user, key) = match hub.api().account_for_key(r) { Ok(u) => u, Err(e) => return fail(401, &e, "authentication_error") };
+    v1_key(hub, r, user, key).await
 }
 /// The API as that account, who the caller already is (a key checked by [`v1`], or a gateway product's signed request
-/// for a person it linked): the same answers, the same providers and sharing, the same one-at-a-time rule.
-pub async fn v1_as(hub: &Arc<dyn AiHub>, r: &Req, user: String) -> Resp {
+/// for a person it linked): the same answers, the same providers and sharing, as their default key.
+pub async fn v1_as(hub: &Arc<dyn AiHub>, r: &Req, user: String) -> Resp { v1_key(hub, r, user, KeyCtx::default_key()).await }
+
+fn slug(t: &str) -> String { let mut o = String::new(); for c in t.to_lowercase().chars() { if c.is_alphanumeric() { o.push(c); } else if !o.ends_with('-') { o.push('-'); } } o.trim_matches('-').to_string() }
+/// What a provider is called in `<provider>/<model>`: its host's nickname, else its label.
+fn alias_of(p: &Value) -> String { let n = s(p, "nickname"); let n = if n.is_empty() { s(p, "label") } else { n }; slug(&n) }
+fn is_usable(p: &Value) -> bool { p["online"] != json!(false) && s(p, "capped").is_empty() }
+/// The providers this key may answer from, in the order a plain model id is looked up (the key's pinned provider, then
+/// the person's own, then shared ones), each with only the models the person and the key may use for the API: a shared
+/// provider's scope (the API use, its models) and the key's own `providers` / `models` narrow it, never widen it.
+fn api_offers(hub: &Arc<dyn AiHub>, user: &str, a: &Value, key: &KeyCtx) -> Vec<Value> {
+    let (w, ai) = (hub.work(), hub.ai());
+    let mut all = crate::work::providers_list(&**hub, user);
+    let pinned: Vec<String> = if key.named { key.providers.clone() } else { vec![s(a, "provider")] };
+    let mut head: Vec<Value> = vec![];
+    for id in &pinned {
+        let p = all.iter().find(|x| x["id"] == json!(id)).cloned().or_else(|| if id.is_empty() { None } else { w.provider_get(ai, id, user) });
+        if let Some(p) = p { if !head.iter().any(|x| x["id"] == p["id"]) { head.push(p); } }
+    }
+    if !key.named && head.is_empty() { if let Some(p) = w.default_for(ai, user) { head.push(all.iter().find(|x| x["id"] == p["id"]).cloned().unwrap_or(p)); } }
+    all.retain(|x| !head.iter().any(|h| h["id"] == x["id"]));
+    all.sort_by_key(|x| x["owner"] != json!(user)); // stable: own first, shared after
+    // the default key bound to a provider (Settings → API access) answers from that one alone, as it always did; a key
+    // with no binding, and every named key, route across everything they may use
+    if key.named || s(a, "provider").is_empty() || head.is_empty() { head.extend(all); }
+    head.into_iter().filter_map(|mut p| {
+        let id = s(&p, "id");
+        if matches!(p["kind"].as_str(), Some("host-jcode") | Some("jcode")) { return None; }
+        if key.named && !key.providers.is_empty() && !key.providers.contains(&id) { return None; }
+        if id.starts_with("h:") && ai.scope_check(user, &id, "api", "").is_err() { return None; }
+        let ms: Vec<Value> = p["models"].as_array().cloned().unwrap_or_default().into_iter().filter(|m| m.as_str().map(|m| (key.models.is_empty() || key.models.iter().any(|k| k == m)) && (!id.starts_with("h:") || ai.scope_check(user, &id, "api", m).is_ok())).unwrap_or(false)).collect();
+        if ms.is_empty() { return None; }
+        p["models"] = json!(ms); Some(p)
+    }).collect()
+}
+/// The provider and model a request's `model` names: a plain id (the first usable provider offering it) or
+/// `<provider>/<model>`.
+fn route_model(offers: &[Value], asked: &str) -> Option<(Value, String)> {
+    let has = |p: &Value, m: &str| p["models"].as_array().map(|a| a.iter().any(|x| x == &json!(m))).unwrap_or(false);
+    let first = |v: Vec<&Value>| v.iter().find(|p| is_usable(p)).or(v.first()).map(|p| (*p).clone());
+    if let Some(p) = first(offers.iter().filter(|p| has(p, asked)).collect()) { return Some((p, asked.to_string())); }
+    let (pre, m) = asked.split_once('/')?;
+    let pre = slug(pre);
+    first(offers.iter().filter(|p| has(p, m) && (alias_of(p) == pre || slug(&s(p, "label")) == pre || slug(&s(p, "id")) == pre)).collect()).map(|p| (p, m.to_string()))
+}
+/// Every model once (plain id, the first provider that offers it) with the provider's label, and a `<provider>/<model>`
+/// entry for each provider when two offer the same id: (id, owned_by).
+fn list_models(offers: &[Value]) -> Vec<(String, String)> {
+    let owned = |p: &Value| if p["kind"] == json!("host") { "mills".to_string() } else { s(p, "label") };
+    let mut seen: Vec<String> = vec![]; let mut out = vec![];
+    for p in offers { for m in p["models"].as_array().cloned().unwrap_or_default().iter().filter_map(|m| m.as_str()) { if !seen.iter().any(|x| x == m) { seen.push(m.to_string()); out.push((m.to_string(), owned(p))); } } }
+    for m in seen.iter() { let who: Vec<&Value> = offers.iter().filter(|p| p["models"].as_array().map(|a| a.iter().any(|x| x == &json!(m))).unwrap_or(false)).collect(); if who.len() > 1 { for p in who { out.push((format!("{}/{m}", alias_of(p)), owned(p))); } } }
+    out
+}
+async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Resp {
     let p = r.path.as_str();
     if r.method == hyper::Method::OPTIONS { return cors(hyper::Response::builder().status(204).body(pgm_net_internal::http::full("")).expect("response")); }
     let anthropic = p.starts_with("/v1/messages") || (p == "/v1/models" && r.header("anthropic-version").is_some());
     let fail = |st: u16, m: &str, t: &str| if anthropic { ant_error(st, m, t) } else { oa_error(st, m, t) };
     let api = hub.api();
     let a = api.key_of(&user);
-    let Some(prov) = hub.work().effective(hub.ai(), &user, &s(&a, "provider")) else { return fail(503, "No AI is available: this hub has no Claude of its own and no AI host offering one is connected.", "service_unavailable") };
-    let models: Vec<String> = prov["models"].as_array().map(|m| m.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     let body: Option<Value> = if r.body.is_empty() { Some(json!({})) } else { serde_json::from_slice(&r.body).ok() };
-    // a provider shared with a scope: the API must be among its uses, and a model asked for among its models (the error
-    // names the owner); without a model asked, the first model the person may use answers
-    if s(&prov, "id").starts_with("h:") {
-        let asked = if r.method == hyper::Method::GET { "" } else { body.as_ref().and_then(|b| b["model"].as_str()).unwrap_or("") };
-        if let Err(m) = hub.ai().scope_check(&user, &s(&prov, "id"), "api", asked) { return fail(403, &m, "permission_error"); }
-    }
+    let asked = if r.method == hyper::Method::GET { "" } else { body.as_ref().and_then(|b| b["model"].as_str()).unwrap_or("") };
+    let offers = api_offers(hub, &user, &a, &key);
+    // which provider and model answers: what `model` names across everything this key may use; the default key's bound
+    // provider / model still answer when it names none we know (and a provider shared with a scope the API or the model
+    // is not in refuses, naming the owner); a named key refuses a model it may not use
+    let routed = if asked.is_empty() { None } else { route_model(&offers, asked) };
+    let legacy = || -> Result<(Value, String), Resp> {
+        let Some(prov) = hub.work().effective(hub.ai(), &user, &s(&a, "provider")) else { return Err(fail(503, "No AI is available: this hub has no Claude of its own and no AI host offering one is connected.", "service_unavailable")) };
+        if s(&prov, "id").starts_with("h:") { if let Err(m) = hub.ai().scope_check(&user, &s(&prov, "id"), "api", asked) { return Err(fail(403, &m, "permission_error")); } }
+        let models: Vec<String> = str_list(&prov["models"]);
+        let m = pick_model(&prov, &Some(asked).filter(|m| models.iter().any(|x| x == m)).map(String::from).unwrap_or_else(|| s(&a, "model")));
+        Ok((prov, m))
+    };
+    let chosen: Result<(Value, String), Resp> = match routed {
+        Some(x) => Ok(x),
+        None if key.named => {
+            if !asked.is_empty() { let names: Vec<String> = list_models(&offers).into_iter().map(|x| x.0).collect(); Err(fail(404, &format!("The model \"{asked}\" is not available to this key{}.", if names.is_empty() { String::new() } else { format!(" (it may use: {})", names.join(", ")) }), "not_found_error")) }
+            else if let Some(p) = offers.first() { let m = p["models"][0].as_str().unwrap_or("").to_string(); Ok((p.clone(), m)) }
+            else { Err(fail(403, NO_KEY_USE, "permission_error")) }
+        }
+        None => legacy(),
+    };
     match (r.method.as_str(), p) {
         ("GET", "/v1/models") => {
-            if anthropic { return jout(200, json!({ "data": models.iter().map(|m| json!({ "type": "model", "id": m, "display_name": m, "created_at": "1970-01-01T00:00:00Z" })).collect::<Vec<_>>(), "has_more": false, "first_id": models.first(), "last_id": models.last() })); }
-            jout(200, json!({ "object": "list", "data": models.iter().map(|m| json!({ "id": m, "object": "model", "created": 0, "owned_by": if prov["kind"] == json!("host") { json!("mills") } else { prov["owner"].clone() } })).collect::<Vec<_>>() }))
+            let list = if !offers.is_empty() { list_models(&offers) } else if key.named { return fail(403, NO_KEY_USE, "permission_error") } else { match legacy() { Ok((prov, _)) => str_list(&prov["models"]).into_iter().map(|x| (x, if prov["kind"] == json!("host") { "mills".to_string() } else { s(&prov, "owner") })).collect(), Err(e) => return e } };
+            if anthropic { return jout(200, json!({ "data": list.iter().map(|(m, _)| json!({ "type": "model", "id": m, "display_name": m, "created_at": "1970-01-01T00:00:00Z" })).collect::<Vec<_>>(), "has_more": false, "first_id": list.first().map(|x| &x.0), "last_id": list.last().map(|x| &x.0) })); }
+            jout(200, json!({ "object": "list", "data": list.iter().map(|(m, o)| json!({ "id": m, "object": "model", "created": 0, "owned_by": o })).collect::<Vec<_>>() }))
         }
         ("POST", "/v1/messages/count_tokens") => {
             let Some(b) = body else { return ant_error(400, "Body is not JSON.", "invalid_request_error") };
             let (system, msgs) = from_anthropic(&b);
-            let chars = js_len(&system) + msgs.iter().map(|m| js_len(&m.1)).sum::<usize>();
+            let chars = js_len(&system) + msgs.iter().map(|m| js_len(&m.1)).sum::<usize>() + crate::gateway::tools_chars(&b); // a rough count: the tool definitions count too
             jout(200, json!({ "input_tokens": chars.div_ceil(4).max(1) }))
         }
         ("POST", "/v1/messages") => {
             let Some(b) = body else { return ant_error(400, "Body is not JSON.", "invalid_request_error") };
             let (system, msgs) = from_anthropic(&b);
             if msgs.is_empty() { return ant_error(400, "messages: at least one user or assistant message is required.", "invalid_request_error"); }
-            let Some(run) = start_running(hub, &user) else { return ant_error(429, "One request at a time per key; the previous one is still answering.", "rate_limit_error") };
-            let model = pick_model(&prov, &b["model"].as_str().filter(|m| models.iter().any(|x| x == m)).map(String::from).unwrap_or_else(|| s(&a, "model")));
+            let (prov, model) = match chosen { Ok(x) => x, Err(e) => return e };
+            // an Anthropic-speaking provider (API key, a host's Claude login) gets the request raw (G2, gateway.rs); the text
+            // path below stays for the others until cross-format arrives (G3)
+            if crate::gateway::speaks_anthropic(&prov) { return crate::gateway::messages(hub, r, &user, &key, &prov, &model, b).await; }
+            let Some(run) = start_running(hub, &user, &key) else { return too_many(true, &key, max_concurrent(&**hub, &key)) };
             let max = b["max_tokens"].as_f64().filter(|n| *n > 0.0).map(|n| (n.round() as u64).min(128000));
-            count_use(&**hub, &user);
+            count_use(&**hub, &user, &key);
             let mid = format!("msg_{}", pgm_core_internal::crypto::random_hex(12));
             let ant_usage = |u: &Value| json!({ "input_tokens": u["prompt_tokens"].as_u64().unwrap_or(0), "output_tokens": u["completion_tokens"].as_u64().unwrap_or(0) });
             let pid = s(&prov, "id");
@@ -623,12 +762,11 @@ pub async fn v1_as(hub: &Arc<dyn AiHub>, r: &Req, user: String) -> Resp {
             let Some(b) = body else { return oa_error(400, "Body is not JSON.", "invalid_request_error") };
             let msgs: Vec<(String, String)> = b["messages"].as_array().map(|a| a.iter().filter(|m| m["role"].is_string()).map(|m| (s(m, "role"), content_text(&m["content"]))).collect()).unwrap_or_default();
             if msgs.is_empty() { return oa_error(400, "\"messages\" is required.", "invalid_request_error"); }
-            let Some(run) = start_running(hub, &user) else { return oa_error(429, "One request at a time per key; the previous one is still answering.", "rate_limit_error") };
+            let (prov, model) = match chosen { Ok(x) => x, Err(e) => return e };
+            let Some(run) = start_running(hub, &user, &key) else { return too_many(false, &key, max_concurrent(&**hub, &key)) };
             let system = msgs.iter().filter(|m| m.0 == "system").map(|m| m.1.clone()).collect::<Vec<_>>().join("\n\n");
-            let asked = b["model"].as_str().filter(|m| (m.starts_with("claude") || (!m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c)))) && models.iter().any(|x| x == m)).map(String::from);
-            let model = pick_model(&prov, &asked.unwrap_or_else(|| s(&a, "model")));
             let max = b["max_tokens"].as_u64();
-            count_use(&**hub, &user);
+            count_use(&**hub, &user, &key);
             let cid = format!("chatcmpl-{}", pgm_core_internal::crypto::random_hex(12)); let created = now_ms() / 1000;
             let pid = s(&prov, "id");
             if crate::toolconv::wants_tools(&b) { // T-317: tools in, tool calls out (a request without them takes the path below, unchanged)
@@ -708,7 +846,47 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             api.set_key(u, Some(k));
             answer(200, api.status(u))
         }
-        "/api/apikey/revoke" if post => { api.set_key(u, None); answer(200, api.status(u)) }
+        // another key next to the default one (a label, an expiry, optionally narrowed to some providers / models and its own
+        // concurrency limit); the key is in the answer once
+        "/api/apikey/create" if post => {
+            let label: String = s(&b, "label").trim().chars().take(60).collect();
+            let label = if label.is_empty() { "key".to_string() } else { label };
+            if api.key_of(u)["keys"].as_array().map(|k| k.len()).unwrap_or(0) >= 20 { return Some(answer(400, json!({ "error": "That is the limit: 20 extra keys. Revoke one first." }))); }
+            let providers = match b.get("providers") { None | Some(Value::Null) => vec![], Some(v) => str_list(v) };
+            for id in &providers {
+                if w.provider_get(hub.ai(), id, u).is_none() { return Some(answer(400, json!({ "error": format!("You may not use the provider \"{id}\" (or it does not exist), so a key cannot be limited to it.") }))); }
+                if let Err(m) = hub.ai().scope_check(u, id, "api", "") { return Some(answer(400, json!({ "error": m }))); }
+            }
+            let models = match b.get("models") { None | Some(Value::Null) => vec![], Some(v) => str_list(v) };
+            if !models.is_empty() {
+                let offered = api_offers(hub, u, &json!({}), &KeyCtx { named: true, providers: providers.clone(), ..Default::default() });
+                let all: Vec<String> = offered.iter().flat_map(|p| str_list(&p["models"])).collect();
+                if let Some(m) = models.iter().find(|m| !all.contains(m)) { return Some(answer(400, json!({ "error": format!("The model \"{m}\" is not one you may use for the API{}, so a key cannot be limited to it.", if providers.is_empty() { "" } else { " on those providers" }) }))); }
+            }
+            let max = b["maxConcurrent"].as_f64().filter(|n| *n >= 1.0).map(|n| (n.round() as u64).min(64));
+            let key = format!("mills_{}", pgm_core_internal::crypto::random_hex(24));
+            let id = format!("k-{}", pgm_core_internal::crypto::random_hex(4));
+            let mut rec = json!({ "id": id, "label": label, "hash": pgm_core_internal::crypto::sha256_hex(key.as_bytes()), "prefix": &key[..12], "createdAt": pgm_core_internal::time::iso_now(), "expiresDays": clamp_days(&b["expiresDays"]), "lastUsed": Value::Null, "calls": 0, "enabled": true });
+            if !providers.is_empty() { rec["providers"] = json!(providers); }
+            if !models.is_empty() { rec["models"] = json!(models); }
+            if let Some(m) = max { rec["maxConcurrent"] = json!(m); }
+            let view = key_view(&rec, &id, &label);
+            api.edit(u, |r| { if !r["keys"].is_array() { r["keys"] = json!([]); } if let Some(a) = r["keys"].as_array_mut() { a.push(rec); } });
+            let mut st = api.status(u); st["created"] = view; st["id"] = json!(id);
+            let mut o = Map::new(); o.insert("key".into(), json!(key)); for (k2, v) in st.as_object().cloned().unwrap_or_default() { o.insert(k2, v); }
+            answer(200, Value::Object(o))
+        }
+        // one key by id; without an id (or "default") the person's default key, as it always was
+        "/api/apikey/revoke" if post => {
+            let id = s(&b, "id");
+            if id.is_empty() || id == "default" {
+                api.edit(u, |r| { if let Some(m) = r.as_object_mut() { for k in ["hash", "prefix", "createdAt", "expiresDays", "calls", "lastUsed", "provider", "model"] { m.remove(k); } if m.get("keys").and_then(Value::as_array).map(|a| a.is_empty()).unwrap_or(true) { m.remove("keys"); } } });
+            } else {
+                if api.named_key(u, &id).is_none() { return Some(answer(404, json!({ "error": "No such key." }))); }
+                api.edit(u, |r| { if let Some(a) = r["keys"].as_array_mut() { a.retain(|k| k["id"] != json!(id)); } if r["keys"].as_array().map(|a| a.is_empty()).unwrap_or(false) { if let Some(m) = r.as_object_mut() { m.remove("keys"); } } });
+            }
+            answer(200, api.status(u))
+        }
         "/api/providers" if get => { let p = s(&w.state(a), "provider"); answer(200, json!({ "providers": list(), "provider": if p.is_empty() { "host".to_string() } else { p } })) }
         "/api/providers/add" if post => match add_provider(&**hub, u, &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
         "/api/providers/update" if post => match update_provider(&**hub, u, &s(&b, "id"), &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
@@ -749,5 +927,23 @@ mod tests {
         // no usage → nothing noted
         assert_eq!(normalise(&Value::Null), None);
         assert_eq!(normalise(&json!({})), None);
+    }
+
+    fn prov(id: &str, nick: &str, owner: &str, models: &[&str]) -> Value { json!({ "id": id, "kind": "host-claude", "label": id, "nickname": nick, "owner": owner, "online": true, "capped": "", "models": models }) }
+
+    #[test]
+    fn a_model_routes_by_plain_id_or_provider_alias_and_is_listed_once() {
+        let offers = vec![prov("own", "Mine", "me", &["opus", "sonnet"]), prov("h:g/c", "Gee Node", "gee", &["opus", "fable"])];
+        assert_eq!(route_model(&offers, "opus").map(|x| (s(&x.0, "id"), x.1)), Some(("own".into(), "opus".into())));
+        assert_eq!(route_model(&offers, "fable").map(|x| s(&x.0, "id")), Some("h:g/c".into()));
+        assert_eq!(route_model(&offers, "gee-node/opus").map(|x| (s(&x.0, "id"), x.1)), Some(("h:g/c".into(), "opus".into())));
+        assert_eq!(route_model(&offers, "mine/sonnet").map(|x| s(&x.0, "id")), Some("own".into()));
+        assert!(route_model(&offers, "mine/fable").is_none() && route_model(&offers, "nope").is_none());
+        let l = list_models(&offers); let ids: Vec<&str> = l.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(ids, vec!["opus", "sonnet", "fable", "mine/opus", "gee-node/opus"]);
+        assert_eq!(l[2].1, "h:g/c"); // owned_by = the provider's label
+        // an offline provider is passed over for one that is up
+        let mut o2 = offers.clone(); o2[0]["online"] = json!(false);
+        assert_eq!(route_model(&o2, "opus").map(|x| s(&x.0, "id")), Some("h:g/c".into()));
     }
 }
