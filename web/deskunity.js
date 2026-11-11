@@ -1,6 +1,7 @@
 // Desktop Unity on the website: the same Unity as in the desktop app, standing on the bottom of the page head to toe,
 // doing what she is told (the team chat's @unity orders and Settings → App). A see-through layer that never takes a
-// click. Her looks are filmed on a PC's GPU by the desktop app; here she wears the look built into the site.
+// click. A new look is filmed by the image engine on the AI host (the hub asks it); until one is ready she wears the
+// look built into the site.
 'use strict';
 (() => {
   const KEY = 'vrDeskUnityOn';
@@ -9,6 +10,30 @@
   let layer = null, her = null, x = 0, y = 0, facing = -1, clip = '', moving = null, until = 0, lastOrder = Date.now(), sitting = false, last = 0, running = false;
   const W = () => (layer ? layer.clientWidth : innerWidth), H = () => (layer ? layer.clientHeight : innerHeight);
   const isOn = () => localStorage.getItem(KEY) !== 'false';
+  const BUILTIN = { ...CLIPS };
+  let own = 0, poll = 0, info = { busy: false, step: '' };
+  const hub = (p, o) => (typeof window.api === 'function' ? window.api(p, o) : fetch(p, o));
+  // her own look (filmed on the AI host): its clips replace the built-in ones
+  async function loadOwn() {
+    try {
+      const st = await (await hub('/api/assistant/look')).json();
+      info = { busy: !!st.busy, step: (st.status && st.status.step) || '', look: (st.status && st.status.look) || '' };
+      if (st.busy) watch();
+      if (!st.clips || st.clips.length < 5 || st.stamp === own) return;
+      const got = {};
+      for (const n of st.clips) { const r = await hub('/api/assistant/look-clip?name=' + n + '&t=' + st.stamp); if (!r.ok) return; got[n] = URL.createObjectURL(await r.blob()); }
+      for (const [k, v] of Object.entries(got)) { if (CLIPS[k] !== BUILTIN[k]) URL.revokeObjectURL(CLIPS[k]); CLIPS[k] = v; }
+      own = st.stamp;
+      if (her) { const was = clip; clip = ''; play(was || 'idle'); }
+    } catch {}
+  }
+  function watch() { if (poll) return; poll = setInterval(async () => { await loadOwn(); if (!info.busy) { clearInterval(poll); poll = 0; } }, 10000); }
+  async function newLook(look) {
+    const r = await hub('/api/assistant/look', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ look }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'failed');
+    info = { busy: true, step: 'starting', look }; watch(); return true;
+  }
 
   function build() {
     if (layer) return;
@@ -23,6 +48,7 @@
     document.body.appendChild(layer);
     x = W() * 0.8;
     play('idle');
+    loadOwn();
   }
   function play(name) {
     if (clip === name) return;
@@ -77,7 +103,7 @@
     if (a === 'show') { setOn(true); return true; }
     if (a === 'hide') { setOn(false); return true; }
     if (a === 'do') { a = quickMove(o.look) || ''; if (!a) return false; if (a === 'hide') { setOn(false); return true; } }
-    if (a === 'outfit') return false; // new looks are filmed by the desktop app on a PC's GPU
+    if (a === 'outfit') { if (o.look) newLook(String(o.look)).catch(() => {}); return true; }
     if (!isOn()) return false;
     build(); layer.hidden = false; start();
     lastOrder = Date.now(); until = 0;
@@ -101,5 +127,5 @@
     if (on) { build(); layer.hidden = false; start(); } else if (layer) layer.hidden = true;
   }
   addEventListener('resize', draw);
-  window.webUnity = { order, setOn, isOn, quickMove };
+  window.webUnity = { order, setOn, isOn, quickMove, newLook, status: () => info, refresh: loadOwn };
 })();

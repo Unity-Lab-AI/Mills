@@ -111,6 +111,30 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             answer(200, json!({ "ok": true }))
         }
         "/api/assistant/client" if post => { let k = u.learn_client(a, &r.json()["client"], &client_ip(&**hub, r)).await; answer(200, json!({ "ok": true, "tz": k["tz"], "place": s(&k, "place") })) }
+        // Desktop Unity on the website: a new look is filmed by the image engine on the AI host (one at a time, a newer
+        // order stops the one being filmed), then her page fetches the clips from here
+        "/api/assistant/look" if post => {
+            let look: String = s(&r.json(), "look").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string();
+            if look.is_empty() { return Some(answer(400, json!({ "error": "What should she look like?" }))); }
+            if !u.ensure_image(hub).await { return Some(answer(503, json!({ "error": "The image engine on the AI host is not starting." }))); }
+            match u.engine_json(hub, &format!("{}/companion/look", u.image_url), "POST", json!({ "user": un, "look": look }), 30_000).await {
+                Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
+                Ok((_, v)) => answer(502, json!({ "error": format!("Image engine: {}", s(&v, "error")) })),
+                Err(e) => answer(502, json!({ "error": format!("Image engine: {e}") })),
+            }
+        }
+        "/api/assistant/look" if get => match u.engine_json(hub, &format!("{}/companion/status?user={un}", u.image_url), "GET", Value::Null, 15_000).await {
+            Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
+            _ => answer(200, json!({ "ok": false, "clips": [], "busy": false })),
+        },
+        "/api/assistant/look-clip" if get => {
+            let name = r.param("name").unwrap_or_default();
+            if !["idle", "walk", "sit", "wave", "dance"].contains(&name.as_str()) { return Some(answer(404, json!({ "error": "No such clip." }))); }
+            match u.engine(hub, &format!("{}/companion/clip?user={un}&name={name}", u.image_url), "GET", vec![], 60_000).await {
+                Ok((200, src)) => { let b = src.all().await; hyper::Response::builder().status(200).header("content-type", "image/webp").header("cache-control", "private, max-age=600").body(pgm_net_internal::http::full(b)).expect("response") }
+                _ => answer(404, json!({ "error": "No clip yet." })),
+            }
+        }
         "/api/assistant/image" if get => match u.picture_file(un, &r.param("ref").unwrap_or_default()).and_then(|f| std::fs::read(f).ok()) {
             Some(buf) => hyper::Response::builder().status(200).header("content-type", if buf.starts_with(b"GIF8") { "image/gif" } else if buf.starts_with(&[0xFF, 0xD8, 0xFF]) { "image/jpeg" } else if buf.len() > 12 && &buf[8..12] == b"WEBP" { "image/webp" } else { "image/png" }).header("cache-control", "private, max-age=86400").body(pgm_net_internal::http::full(buf)).expect("response"),
             None => answer(404, json!({ "error": "No such picture." })),
