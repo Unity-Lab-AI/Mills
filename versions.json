@@ -1,12 +1,12 @@
 {
-  "project": "5.54.5",
+  "project": "5.55.0",
   "modules": {
     "bridge/ai-node.js": "3.4.1",
     "bridge/ai-nodes-front.js": "1.0.0",
     "bridge/ai-nodes.js": "2.7.1",
     "bridge/archive.js": "1.0.0",
     "bridge/assistant-tools-mcp.js": "1.0.0",
-    "bridge/assistant.js": "1.4.6",
+    "bridge/assistant.js": "1.4.7",
     "bridge/board-mcp.js": "1.2.0",
     "bridge/board.js": "1.0.0",
     "bridge/calls.js": "1.0.0",
@@ -54,7 +54,7 @@
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.2.0",
     "web/hyperwork.js": "1.0.0",
-    "web/index.html": "1.42.0",
+    "web/index.html": "1.43.0",
     "web/library.js": "1.2.0",
     "web/localai.js": "1.0.0",
     "web/machines.js": "1.0.0",
@@ -66,7 +66,8 @@
     "web/profile.js": "1.1.0",
     "web/queue.js": "1.0.0",
     "web/sessions.js": "1.2.0",
-    "web/sw.js": "1.0.9",
-    "web/tools.js": "1.0.0"
+    "web/sw.js": "1.0.10",
+    "web/tools.js": "1.0.0",
+    "web/deskunity.js": "1.0.0"
   }
 }

@@ -302,7 +302,19 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   // A message that asks for a picture (any wording, including one-word asks) and whether it is about her.
   const PIC_WORDS = /\b(pics?|pictures?|photos?|selfies?|images?|snaps?|nudes?|draw|paint|render|show me|send me|let me see|titties|tits|boobs|ass|booty|body)\b/i;
   const wantsPicture = (t) => PIC_WORDS.test(String(t || ''));
-  const aboutHer = (t) => !/(of|draw|paint|render|make)\s+(a|an|the|some|my|this|that|his|her)/i.test(String(t || '')) || /(you|your|yourself|selfie)/i.test(String(t || ''));
+  const aboutHer = (t) => !/\b(of|draw|paint|render|make)\s+(a|an|the|some|my|this|that|his|her)\b/i.test(String(t || '')) || /\b(you|your|yourself|selfie)\b/i.test(String(t || ''));
+  // For a picture of her: what the person told her to wear ('' when they named none) and the moment from her scene
+  // without any looks or clothes of her own. One short call to her brain; null when it does not answer.
+  async function dress(asked, scene) {
+    const ask = `Two separate jobs. Answer with JSON only: {"names_clothing": true or false, "wear": "...", "moment": "..."}.\n\n1. Read ONLY this message from a person: "${asked}"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else "".\n\n2. Read this picture description: "${scene}"\nmoment: only the place, pose, action, expression, camera angle and light. Drop every word about her looks, body, hair, skin, makeup, tattoos, jewellery and clothes.`;
+    try {
+      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000), body: JSON.stringify({ model: LOCAL_MODEL, stream: false, think: false, format: 'json', messages: [{ role: 'user', content: ask }], options: { num_predict: 200, temperature: 0 } }) });
+      if (!r.ok) return null;
+      const j = JSON.parse(((await r.json()).message || {}).content || '');
+      const clean = (x) => String(x || '').replace(/[\u0000-\u001f]/g, '').slice(0, 400).trim().replace(/^[.,\s]+|[.,\s]+$/g, '');
+      return { wear: j.names_clothing === true || j.names_clothing === 'true' ? clean(j.wear) : '', moment: clean(j.moment) };
+    } catch { return null; }
+  }
   async function makeImage(ci, args) {
     if (!(await ensureImage())) return { ok: false, error: 'The camera app on the host is not starting (image engine down).' };
     const shape = String(args.shape || args.orientation || 'square').toLowerCase();
@@ -312,8 +324,14 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     for (const [w, p] of [["tits out","topless, bare breasts"],["titties out","topless, bare breasts"],["boobs out","topless, bare breasts"],["tits","breasts"],["titties","breasts"],["boobs","breasts"],["naked","nude"],["butt naked","fully nude"],["ass out","bare buttocks"],["booty","buttocks"],["nudes","nude photo"]]) scene = scene.replace(new RegExp('\\b' + w.replace(/ /g, '\\s+') + '\\b', 'gi'), p);
     // her: Agent Gen's way (the likeness and body, then the moment; clothes only if the moment names them)
     // no clothes named: fully nude (top and bottom); any clothes named: those, and nothing else is added
-    const bare = !/\b(wear|wearing|wears|dressed|dress|outfit|clothes|clothing|shirt|t-shirt|tee|top|blouse|hoodie|sweater|jacket|coat|skirt|jeans|pants|shorts|leggings|bikini|swimsuit|lingerie|bra|panties|thong|underwear|stockings|socks|boots|shoes|heels|uniform|suit|costume|robe|towel|apron|corset|bodysuit|onesie|pajamas|covered)\b/i.test(scene);
-    const prompt = args.selfie ? `photo of one 22 year old American woman alone, solo, ${bare ? 'fully nude, completely naked, topless, bottomless, ' : ''}${SELFIE_LOOK}, ${scene}, photorealistic, detailed face, natural light, sharp focus` : scene;
+    // her, whatever the brain flagged: a scene about her gets her likeness. What she wears comes from what the person
+    // asked (none named: nude), and her scene keeps only the moment, so nothing she imagines about herself gets in.
+    const selfie = args.selfie || /\b(selfie|unity|myself|herself)\b/i.test(scene);
+    let wear = '';
+    if (selfie) { const d = await dress(ci.asked || '', scene); if (d) { wear = d.wear; if (d.moment) scene = d.moment; } }
+    const bare = !wear;
+    if (wear) scene = `wearing ${wear}, ${scene}`;
+    const prompt = selfie ? `photo of one 22 year old American woman alone, solo, ${bare ? 'fully nude, completely naked, topless, bottomless, ' : ''}${SELFIE_LOOK}, ${scene}, photorealistic, detailed face, natural light, sharp focus` : scene;
     return render(ci, '/txt2img', { prompt, width, height, steps: 30, guidance: 7, negative: 'child, teen, underage, childlike, young girl, two people, multiple people, cropped body, out of frame, cropped feet, cut off legs, raised hand, holding object, extra fingers, missing fingers, fused fingers, mutated hands, deformed hands, black sclera, heavy makeup, white face paint, plastic skin' });
   }
   async function render(ci, route, body) {
@@ -641,6 +659,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   }
 
   async function runLocal(acct, text, ci, out, signal, opts = {}) {
+    if (!ci.asked) ci.asked = String(text || '').slice(0, 1000);
     const st = await ensureOllama();
     const model = st.model ? LOCAL_MODEL : FALLBACK_MODEL;
     if (!st.up || !model) throw new Error(st.up ? `The local brain (${LOCAL_MODEL}) is not loaded on the AI host yet.` : (VIA_NODE && aiNodes.reason()) || "Unity's brain (Ollama) is not running on the AI host.");

@@ -1632,6 +1632,7 @@
   </div>
 </div>
 
+<script src="deskunity.js"></script>
 <script src="md.js"></script>
 <script src="localai.js"></script>
 <script src="hyperwork.js"></script>
@@ -2050,7 +2051,7 @@ $('assistForm').addEventListener('submit', async (e) => {
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
         else if (ev.type === 'pc_tool' || ev.type === 'run_code') answerBrowserCall(ev);
-        else if (ev.type === 'companion') { if (NATIVE) NATIVE.call('companion', { action: String(ev.action || ''), amount: Number(ev.amount) || null, look: ev.look ? String(ev.look) : null }).catch(() => {}); }
+        else if (ev.type === 'companion') { companionOrder({ action: String(ev.action || ''), amount: Number(ev.amount) || null, look: ev.look ? String(ev.look) : null }); }
         else if (ev.type === 'final') { outcome = ['done', 'Done in ' + elapsed(t0u)]; if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
 [[image:${r}]]`).join('') + (ev.media || []).map((v) => `
 [[youtube:${v}]]`).join(''));
@@ -4264,20 +4265,39 @@ function ytPlayer(id, autoplay = true) { // a YouTube video, played right here (
 // inside the desktop app, a fresh one for this person moves their little Unity (once per message).
 const COMPANION_MARK = /\[\[companion:([a-z_]+):([\d.]+):([a-z0-9-]+)(?::([^\]]*))?\]\]/g;
 const companionDone = new Set();
+// an order for Desktop Unity: the desktop app's own window when inside it, else her on this page (deskunity.js)
+function companionOrder(o) {
+  if (NATIVE) return NATIVE.call('companion', o).catch(() => {});
+  if (window.webUnity) window.webUnity.order(o);
+}
 function companionFrom(m, rec) {
-  if (!NATIVE || !me || !rec || !rec.text || Date.now() - new Date(m.ts).getTime() > 120000) return;
+  if (!me || !rec || !rec.text || Date.now() - new Date(m.ts).getTime() > 120000) return;
   for (const x of String(rec.text).matchAll(COMPANION_MARK)) {
     const key = (m.id || m.ts) + x[0];
     if (x[3] !== me.username || companionDone.has(key)) continue;
     companionDone.add(key);
-    NATIVE.call('companion', { action: x[1], amount: Number(x[2]) || null, look: x[4] ? decodeURIComponent(x[4]) : null }).catch(() => {});
+    companionOrder({ action: x[1], amount: Number(x[2]) || null, look: x[4] ? decodeURIComponent(x[4]) : null });
   }
 }
 // Desktop Unity's settings (Settings → App): on / off, her look, her moves; only inside the desktop app
 function deskUnitySetup() {
-  const box = document.getElementById('sgDeskUnity'); if (!box || !NATIVE || box.dataset.ready) return;
+  const box = document.getElementById('sgDeskUnity'); if (!box || box.dataset.ready) return;
   box.dataset.ready = '1'; box.hidden = false;
   const state = document.getElementById('duState');
+  // on the website: the section is there, but she lives in the desktop app (Windows / Linux), so its controls wait for it
+  if (!NATIVE) {
+    // on the website she stands on the bottom of this page: on / off and "tell her" work here; new looks are filmed by
+    // the desktop app on a PC's GPU, so "Change her look" here goes to Unity in the team chat as an order
+    const W = window.webUnity; if (!W) return;
+    const show = () => { state.textContent = (W.isOn() ? 'on' : 'off') + ' · on this page'; };
+    W.setOn(W.isOn()); show();
+    document.getElementById('duOn').onclick = () => { W.setOn(true); show(); };
+    document.getElementById('duOff').onclick = () => { W.setOn(false); show(); };
+    document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; state.textContent = 'A new look is filmed by the desktop app on a PC: open the VibeRoller app there, or tell @unity in the team chat and your app changes her.'; };
+    const doWeb = () => { const el = document.getElementById('duDo'); const t = el.value.trim(); if (!t) return; if (W.order({ action: 'do', look: t })) { el.value = ''; show(); } else state.textContent = 'On this page she walks, sits, waves, dances, turns, comes here, stops or hides; anything else is filmed by the desktop app.'; };
+    document.getElementById('duDoGo').onclick = doWeb; document.getElementById('duDo').onkeydown = (e) => { if (e.key === 'Enter') doWeb(); };
+    return;
+  }
   const refresh = () => NATIVE.call('companion_status').then((s) => { const st = s.status || {}; state.textContent = (s.on ? 'on' : 'off') + (st.look ? ' · ' + st.look : ' · the built-in look') + (s.dressing ? ' · changing: ' + (st.step || 'starting') : ''); if (s.dressing) setTimeout(refresh, 5000); }).catch((e) => { state.textContent = String(e); });
   document.getElementById('duOn').onclick = () => NATIVE.call('companion_set', { on: true }).then(refresh, refresh);
   document.getElementById('duOff').onclick = () => NATIVE.call('companion_set', { on: false }).then(refresh, refresh);

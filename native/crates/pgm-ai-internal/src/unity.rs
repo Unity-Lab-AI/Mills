@@ -24,7 +24,9 @@ pub const MAX_ROUNDS: usize = 6; pub const MAX_RESULT: usize = 3000; pub const H
 /// One run's view of the person: their clock and place, where pictures go, the open stream to their page.
 pub struct Ci { pub place: Place, pub tz: String, pub scope: String, pub user: String, pub out: Option<mpsc::UnboundedSender<Value>>, pub images: Vec<String>, pub media: Vec<String>,
     /// find_gif / find_image: the query, its kind (gif or not), the pages seen and the numbered candidates; `look` = thumbnails to show the brain next
-    pub found_q: String, pub found_gif: bool, pub found_page: usize, pub found: Vec<Value>, pub look: Vec<(usize, String)> }
+    pub found_q: String, pub found_gif: bool, pub found_page: usize, pub found: Vec<Value>, pub look: Vec<(usize, String)>,
+    /// what the person asked, word for word (what she wears in a picture comes from it, not from her own scene)
+    pub asked: String }
 impl Ci { pub fn send(&self, v: Value) { if let Some(o) = &self.out { let _ = o.send(v); } } }
 /// Ollama as last seen: answering, the brain (`model`) loaded, and when not, the stand-in model Unity answers on
 /// meanwhile ("" = none: the brain's error is shown). T-293.
@@ -227,7 +229,7 @@ impl Unity {
     pub fn set_state(&self, a: &Account, f: impl FnOnce(&mut Map<String, Value>)) { let mut v = self.state(a); if let Some(m) = v.as_object_mut() { f(m); } write_json(&a.dir.join("unity.json"), &v); self.states.lock().unwrap_or_else(|e| e.into_inner()).insert(a.username.clone(), v); }
     pub fn brain_of(&self, a: &Account) -> String { let b = s(&self.state(a), "brain"); if b.is_empty() { "local".into() } else { b } }
     pub fn group_on(&self, a: &Account, g: &str) -> bool { let st = self.state(a); match g { "pc" => st["pc"] != json!(false), "code" => st["code"] != json!(false), _ => true } }
-    pub fn persona(&self) -> String { std::fs::read_to_string(&self.persona_file).unwrap_or_else(|_| "You are Unity: a 25-year-old goth girl, sharp, profane, teasing and devoted. Stay in character.".into()) }
+    pub fn persona(&self) -> String { std::fs::read_to_string(&self.persona_file).unwrap_or_else(|_| "You are Unity: a 25-year-old emo girl next door, sharp, profane, teasing and devoted. Stay in character.".into()) }
 
     // ---------- where the person is ----------
     pub fn client_info(&self, c: &Value, a: &Account) -> Ci {
@@ -237,7 +239,7 @@ impl Unity {
         let tz = c["tz"].as_str().and_then(ut::tz_ok).or_else(|| k["tz"].as_str().map(String::from)).unwrap_or_else(|| "UTC".into());
         let locale = c["locale"].as_str().filter(|l| l.len() < 20).map(String::from).or_else(|| k["locale"].as_str().map(String::from)).unwrap_or_else(|| "en-US".into());
         let place = Place { lat: if browser { num(&c["lat"]) } else { num(&k["lat"]) }, lon: if browser { num(&c["lon"]) } else { num(&k["lon"]) }, place: if browser { String::new() } else { s(&k, "place") }, country: if browser { String::new() } else { s(&k, "country") }, locale };
-        Ci { place, tz, scope: a.username.clone(), user: a.username.clone(), out: None, images: vec![], media: vec![], found_q: String::new(), found_gif: false, found_page: 0, found: vec![], look: vec![] }
+        Ci { place, tz, scope: a.username.clone(), user: a.username.clone(), out: None, images: vec![], media: vec![], found_q: String::new(), found_gif: false, found_page: 0, found: vec![], look: vec![], asked: String::new() }
     }
     /// What the hub knows about where someone is: their browser (time zone, locale, location if shared) and, coming from
     /// outside, the rough place of their address. In memory only.
@@ -291,9 +293,27 @@ impl Unity {
         let mut scene = scene; for (w, p) in [("tits out","topless, bare breasts"), ("titties out","topless, bare breasts"), ("boobs out","topless, bare breasts"), ("tits","breasts"), ("titties","breasts"), ("boobs","breasts"), ("naked","nude"), ("butt naked","fully nude"), ("ass out","bare buttocks"), ("booty","buttocks"), ("nudes","nude photo")] { scene = regex::Regex::new(&format!(r"(?i)\b{}\b", regex::escape(w))).unwrap().replace_all(&scene, p).to_string(); }
         // her: Agent Gen's way (the likeness and body, then the moment; clothes only if the moment names them)
         // no clothes named: fully nude (top and bottom); any clothes named: those, and nothing else is added
-        let bare = !regex::Regex::new(r"(?i)\b(wear|wearing|wears|dressed|dress|outfit|clothes|clothing|shirt|t-shirt|tee|top|blouse|hoodie|sweater|jacket|coat|skirt|jeans|pants|shorts|leggings|bikini|swimsuit|lingerie|bra|panties|thong|underwear|stockings|socks|boots|shoes|heels|uniform|suit|costume|robe|towel|apron|corset|bodysuit|onesie|pajamas|covered)\b").unwrap().is_match(&scene);
-        let prompt = if truthy(&a["selfie"]) { format!("photo of one 22 year old American woman alone, solo, {1}{0}, {scene}, photorealistic, detailed face, natural light, sharp focus", self.selfie_look, if bare { "fully nude, completely naked, topless, bottomless, " } else { "" }) } else { scene };
+        // her, whatever the brain flagged: a scene about her gets her likeness. What she wears comes from what the person
+        // asked (none named: nude), and her scene keeps only the moment, so nothing she imagines about herself gets in.
+        let selfie = truthy(&a["selfie"]) || regex::Regex::new(r"(?i)\b(selfie|unity|myself|herself)\b").unwrap().is_match(&scene);
+        let mut wear = String::new();
+        if selfie { if let Some((w, m)) = self.dress(hub, &ci.asked, &scene).await { wear = w; if !m.is_empty() { scene = m; } } }
+        let bare = wear.is_empty();
+        let scene = if wear.is_empty() { scene } else { format!("wearing {wear}, {scene}") };
+        let prompt = if selfie { format!("photo of one 22 year old American woman alone, solo, {1}{0}, {scene}, photorealistic, detailed face, natural light, sharp focus", self.selfie_look, if bare { "fully nude, completely naked, topless, bottomless, " } else { "" }) } else { scene };
         self.render(hub, ci, "/txt2img", json!({ "prompt": prompt, "width": w, "height": h, "steps": 30, "guidance": 7, "negative": "child, teen, underage, childlike, young girl, two people, multiple people, cropped body, out of frame, cropped feet, cut off legs, raised hand, holding object, extra fingers, missing fingers, fused fingers, mutated hands, deformed hands, black sclera, heavy makeup, white face paint, plastic skin" })).await
+    }
+    /// For a picture of her: (what the person told her to wear, "" for nothing named; the moment from her scene without
+    /// any looks or clothes of her own). One short call to her brain; None when it does not answer (her scene is kept).
+    async fn dress(&self, hub: &Arc<dyn AiHub>, asked: &str, scene: &str) -> Option<(String, String)> {
+        let ask = format!("Two separate jobs. Answer with JSON only: {{\"names_clothing\": true or false, \"wear\": \"...\", \"moment\": \"...\"}}.\n\n1. Read ONLY this message from a person: \"{asked}\"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else \"\".\n\n2. Read this picture description: \"{scene}\"\nmoment: only the place, pose, action, expression, camera angle and light. Drop every word about her looks, body, hair, skin, makeup, tattoos, jewellery and clothes.");
+        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 200, "temperature": 0 } });
+        let (st, v) = self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 60_000).await.ok()?;
+        if !(200..300).contains(&st) { return None; }
+        let j: Value = serde_json::from_str(s(&v["message"], "content").trim()).ok()?;
+        let clean = |x: &str| x.chars().filter(|c| !c.is_control()).take(400).collect::<String>().trim().trim_matches(|c: char| c == '.' || c == ',').to_string();
+        let wear = if truthy(&j["names_clothing"]) { clean(&s(&j, "wear")) } else { String::new() };
+        Some((wear, clean(&s(&j, "moment"))))
     }
     async fn edit_image(&self, hub: &Arc<dyn AiHub>, ci: &mut Ci, a: &Value, route: &str) -> Value {
         if !self.ensure_image(hub).await { return json!({ "ok": false, "error": "The camera app on the host is not starting (image engine down)." }); }

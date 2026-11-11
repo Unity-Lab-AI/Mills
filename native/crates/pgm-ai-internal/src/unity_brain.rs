@@ -147,6 +147,7 @@ pub fn ollama_usage(ev: &Value) -> Option<pgm_context_internal::ledger::Usage> {
 /// One answer with the local brain.
 pub async fn run_local(hub: &Arc<dyn AiHub>, a: &Account, text: &str, ci: &mut Ci, cancel: &crate::openai::Cancel, opts: Opts) -> Result<String, String> {
     let u = hub.unity();
+    if ci.asked.is_empty() { ci.asked = text.chars().take(1000).collect(); }
     let st = u.ensure_ollama(hub).await;
     // the brain, else the configured fallback, else what the host's Ollama has (T-293: she answers rather than glitches)
     let model = if st.model { u.local_model.clone() } else if !u.fallback.is_empty() { u.fallback.clone() } else { st.standin.clone() };
