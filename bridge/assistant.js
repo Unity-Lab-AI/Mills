@@ -875,6 +875,31 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         const k = await learnClient(acct, client, clientIp(req));
         send(res, 200, { ok: true, tz: k.tz, place: k.place || '' }); return true;
       }
+      // Desktop Unity on the website: a new look is filmed by the image engine (one at a time, a newer order stops the
+      // one being filmed), then her page fetches the clips from here
+      if (p === '/api/assistant/look' && req.method === 'POST') {
+        const look = String((await readBody(req)).look || '').replace(/[\u0000-\u001f]/g, '').slice(0, 300).trim();
+        if (!look) { send(res, 400, { error: 'What should she look like?' }); return true; }
+        if (!(await ensureImage())) { send(res, 503, { error: 'The image engine on the AI host is not starting.' }); return true; }
+        try { const r = await fetch(IMAGE_URL + '/companion/look', { method: 'POST', body: JSON.stringify({ user: acct.username, look }), signal: AbortSignal.timeout(30000) }); const j = await r.json().catch(() => ({})); send(res, r.ok ? 200 : 502, r.ok ? j : { error: 'Image engine: ' + (j.error || r.status) }); }
+        catch (e) { send(res, 502, { error: 'Image engine: ' + e.message }); }
+        return true;
+      }
+      if (p === '/api/assistant/look' && req.method === 'GET') {
+        try { const r = await fetch(IMAGE_URL + '/companion/status?user=' + encodeURIComponent(acct.username), { signal: AbortSignal.timeout(15000) }); send(res, 200, r.ok ? await r.json() : { ok: false, clips: [], busy: false }); }
+        catch { send(res, 200, { ok: false, clips: [], busy: false }); }
+        return true;
+      }
+      if (p === '/api/assistant/look-clip' && req.method === 'GET') {
+        const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
+        if (!['idle', 'walk', 'sit', 'wave', 'dance'].includes(name)) { send(res, 404, { error: 'No such clip.' }); return true; }
+        try {
+          const r = await fetch(IMAGE_URL + '/companion/clip?user=' + encodeURIComponent(acct.username) + '&name=' + name, { signal: AbortSignal.timeout(60000) });
+          if (!r.ok) { send(res, 404, { error: 'No clip yet.' }); return true; }
+          const b = Buffer.from(await r.arrayBuffer()); res.writeHead(200, { 'Content-Type': 'image/webp', 'Content-Length': b.length, 'Cache-Control': 'private, max-age=600' }); res.end(b);
+        } catch { send(res, 404, { error: 'No clip yet.' }); }
+        return true;
+      }
       if (p === '/api/assistant/image' && req.method === 'GET') { // ?ref=<scope>/<id>: room pictures for everyone, private ones for their owner
         const ref = new URL(req.url, 'http://x').searchParams.get('ref') || '';
         const [scope, id] = ref.split('/');

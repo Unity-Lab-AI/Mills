@@ -4284,17 +4284,17 @@ function deskUnitySetup() {
   const box = document.getElementById('sgDeskUnity'); if (!box || box.dataset.ready) return;
   box.dataset.ready = '1'; box.hidden = false;
   const state = document.getElementById('duState');
-  // on the website: the section is there, but she lives in the desktop app (Windows / Linux), so its controls wait for it
   if (!NATIVE) {
-    // on the website she stands on the bottom of this page: on / off and "tell her" work here; new looks are filmed by
-    // the desktop app on a PC's GPU, so "Change her look" here goes to Unity in the team chat as an order
+    // on the website she stands on the bottom of this page: on / off, her look (filmed by the image engine on the AI
+    // host, a few minutes) and her moves work here
     const W = window.webUnity; if (!W) return;
-    const show = () => { state.textContent = (W.isOn() ? 'on' : 'off') + ' · on this page'; };
-    W.setOn(W.isOn()); show();
+    let timer = 0;
+    const show = () => { const i = W.status(); state.textContent = (W.isOn() ? 'on' : 'off') + ' · on this page' + (i.look ? ' · ' + i.look.slice(0, 80) : '') + (i.busy ? ' · changing: ' + (i.step || 'starting') : ''); if (i.busy && !timer) timer = setTimeout(() => { timer = 0; W.refresh().then(show); }, 10000); };
+    W.setOn(W.isOn()); W.refresh().then(show); show();
     document.getElementById('duOn').onclick = () => { W.setOn(true); show(); };
     document.getElementById('duOff').onclick = () => { W.setOn(false); show(); };
-    document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; state.textContent = 'A new look is filmed by the desktop app on a PC: open the VibeRoller app there, or tell @unity in the team chat and your app changes her.'; };
-    const doWeb = () => { const el = document.getElementById('duDo'); const t = el.value.trim(); if (!t) return; if (W.order({ action: 'do', look: t })) { el.value = ''; show(); } else state.textContent = 'On this page she walks, sits, waves, dances, turns, comes here, stops or hides; anything else is filmed by the desktop app.'; };
+    document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; state.textContent = 'starting her new look…'; W.newLook(look).then(show, (e) => { state.textContent = String(e.message || e); }); };
+    const doWeb = () => { const el = document.getElementById('duDo'); const t = el.value.trim(); if (!t) return; if (W.order({ action: 'do', look: t })) { el.value = ''; show(); } else state.textContent = 'On this page she walks, sits, waves, dances, turns, comes here, stops or hides; a new look goes in "How she looks".'; };
     document.getElementById('duDoGo').onclick = doWeb; document.getElementById('duDo').onkeydown = (e) => { if (e.key === 'Enter') doWeb(); };
     return;
   }

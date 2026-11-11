@@ -7,6 +7,16 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.56.0 — 2026-11-10
+
+MINOR: her new looks on the website too.
+
+### Added
+- **New looks for Desktop Unity on the website** (asked: "get to it"hub filming on someone's PC for it; that's a bigger job."): on the website, "Change her look" in Settings → App and @unity look orders in the team chat are filmed by the image engine on the AI host (the same filming as the desktop app: draw her, film her moves, cut them out), one look at a time, a newer order stopping the one being filmed and the same order from another tab not restarting it; her page swaps to the new clips once they are all there and shows the step meanwhile. New hub routes POST / GET `/api/assistant/look` and GET `/api/assistant/look-clip` (both hubs: `bridge/assistant.js` 1.5.0, native pgm-ai-internal); the image engine (`bridge/image-engine.py`) films into a folder per person (`~/.viberoller/companion-web`); `web/deskunity.js` 1.1.0, `web/index.html` 1.44.0.
+
+### Fixed
+- **A look order keeps her herself unless it makes her something else**: "put on a red dress" drew some other woman in a red dress; now her brain reads the order first: when it turns her into something else (a gorilla, a robot, a celebrity, an elf) the words are the picture, else she is herself (her face and hair) with the changes, dressed in what the order names or nude when it names none. Windows and Linux app: vr-desktop rebuilt (companion-look.py).
+
 ## 5.55.0 — 2026-11-10
 
 MINOR: Desktop Unity on the website too; she wears what she is told, nude otherwise, and her desktop self takes the order.
