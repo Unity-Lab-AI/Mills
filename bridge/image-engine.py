@@ -23,7 +23,11 @@ import io
 import json
 import os
 import random
+import re
+import shutil
 import sys
+import urllib.parse
+import urllib.request
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -650,6 +654,78 @@ def unload():
     return had
 
 
+# --------------------------------------------------------------------------- Desktop Unity's looks for the website
+# The desktop app films her looks itself; for her on the website the hub asks this engine: the same scripts
+# (companion-look.py: draw her, film her moves, cut them out) run here, one look at a time (a newer one stops the
+# one being filmed), into a folder per person; the hub then fetches the clips.
+import subprocess
+_COMP_SRC = os.environ.get("MILLS_COMPANION_SRC") or os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "native", "crates", "vr-desktop"))
+_COMP_OUT = os.environ.get("MILLS_COMPANION_OUT") or os.path.join(os.path.expanduser("~"), ".viberoller", "companion-web")
+_comp = {"proc": None, "user": ""}
+_COMP_CLIPS = ("idle", "walk", "sit", "wave", "dance")
+
+
+def _comp_user(u):
+    u = re.sub(r"[^a-z0-9-]", "", str(u or "").lower())[:40]
+    if not u:
+        raise ValueError("no user")
+    return u
+
+
+def comp_look(req):
+    user, look = _comp_user(req.get("user")), " ".join(str(req.get("look") or "").split())[:300]
+    if not look:
+        raise ValueError("what should she look like?")
+    p = _comp["proc"]
+    if p and p.poll() is None and _comp["user"] == user and _comp.get("look") == look:  # the same order again (another tab)
+        return {"ok": True, "user": user, "look": look, "already": True}
+    if p and p.poll() is None:  # an order always wins: the look being filmed stops
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=0x08000000)
+            else:
+                p.kill()
+        except Exception:
+            pass
+        try:
+            urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:5127/abort", data=b"{}", method="POST"), timeout=5).read()
+        except Exception:
+            pass
+    out = os.path.join(_COMP_OUT, user)
+    os.makedirs(out, exist_ok=True)
+    base = os.path.join(out, "base.png")
+    if not os.path.exists(base):
+        shutil.copyfile(os.path.join(_COMP_SRC, "ui", "companion", "base.png"), base)
+    for f in ("companion-look.py", "companion-clips.py"):
+        shutil.copyfile(os.path.join(_COMP_SRC, f), os.path.join(out, f))
+    log = open(os.path.join(out, "look.log"), "w")
+    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+    _comp["proc"] = subprocess.Popen([sys.executable, os.path.join(out, "companion-look.py"), "--look", look, "--base", base, "--out", out],
+                                     cwd=out, stdout=subprocess.DEVNULL, stderr=log, **kw)
+    _comp["user"], _comp["look"] = user, look
+    _log("companion look for %s: %s" % (user, look[:80]))
+    return {"ok": True, "user": user, "look": look}
+
+
+def comp_status(user):
+    out = os.path.join(_COMP_OUT, user)
+    st = {}
+    try:
+        st = json.load(open(os.path.join(out, "status.json")))
+    except Exception:
+        pass
+    p = _comp["proc"]
+    busy = bool(p and p.poll() is None and _comp["user"] == user)
+    err = ""
+    try:
+        err = "\n".join(open(os.path.join(out, "look.log")).read().strip().splitlines()[-3:])
+    except Exception:
+        pass
+    clips = [n for n in _COMP_CLIPS if os.path.exists(os.path.join(out, n + ".webp"))]
+    stamp = max([os.path.getmtime(os.path.join(out, n + ".webp")) for n in clips] or [0])
+    return {"ok": True, "busy": busy, "status": st, "clips": clips, "stamp": int(stamp), "log": "" if busy else err}
+
+
 # --------------------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     server_version = "Mills-image/1.0"
@@ -666,6 +742,28 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        path, _, qs = self.path.partition("?")
+        if path in ("/companion/status", "/companion/clip"):
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(qs).items()}
+            try:
+                user = _comp_user(q.get("user"))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 422)
+            if path == "/companion/status":
+                return self._json(comp_status(user))
+            name = q.get("name", "")
+            if name not in _COMP_CLIPS:
+                return self._json({"error": "no such clip"}, 404)
+            f = os.path.join(_COMP_OUT, user, name + ".webp")
+            if not os.path.exists(f):
+                return self._json({"error": "no clip yet"}, 404)
+            body = open(f, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/webp")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.split("?")[0] == "/health":
             return self._json({"ok": True, "loaded": _state["t2i"] is not None, "device": _state["device"] or DEVICE_ARG,
                                "checkpoint": os.path.basename(CKPT), "checkpoint_present": os.path.exists(CKPT),
@@ -682,6 +780,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/unload":
             with _lock:
                 return self._json({"ok": True, "unloaded": unload()})
+        if path == "/companion/look":
+            try:
+                return self._json(comp_look(req))
+            except (ValueError, OSError) as e:
+                return self._json({"error": str(e)}, 422)
         if path == "/shutdown":
             self._json({"ok": True})
             threading.Timer(0.3, lambda: os._exit(0)).start()

@@ -88,18 +88,57 @@ def ensure_video():
     raise SystemExit("the video engine did not start")
 
 
+SELF = ("emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, "
+        "naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, "
+        "toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones")
+SELF_FACE = ("emo hairstyle, long straight jet black hair with hot pink streaks and side-swept bangs, bright blue eyes, "
+             "naturally beautiful with no makeup, fair skin, light freckles, slim figure")
+
+
+def read_order(look):
+    """Her brain reads the order: does it make her something else (a gorilla, another person, a character), or is it her
+    with changes (clothes, hair, style)? And which clothes does it name? None when the brain does not answer."""
+    ask = ('Someone told Unity, a young woman, how to look: "%s"\n\nAnswer with JSON only: {"subject": "...", "names_clothing": true or false, "changes": "..."}.\n'
+           "subject: what the picture shows after the change, in one to three words: \"woman\" when she stays a woman (clothes, hair, makeup, colours, pose or mood change nothing about that), else what she becomes (\"gorilla\", \"robot\", \"Taylor Swift\", \"elf\"...).\n"
+           "names_clothing: do the words name a garment or outfit? Nudity or body parts are not clothing: false.\n"
+           "changes: the changes in the given words.") % look
+    try:
+        body = {"model": os.environ.get("UNITY_BRAIN", "unity-brain"), "stream": False, "think": False, "format": "json", "keep_alive": 0,
+                "messages": [{"role": "user", "content": ask}], "options": {"num_predict": 200, "temperature": 0}}
+        req = urllib.request.Request(os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.loads(json.loads(r.read())["message"]["content"])
+    except Exception:
+        return None
+
+
+def look_prompt():
+    # her own fresh look (the app's start) or an order that names her: her likeness
+    if LOOK.startswith("emo hairstyle") or LOOK.lower().startswith("herself"):
+        return "photo of one 22 year old American woman alone, solo, fully nude, completely naked, topless, bottomless, " + SELF
+    o = read_order(LOOK)
+    if o and "woman" not in str(o.get("subject") or "woman").lower():
+        return LOOK  # she becomes something else: the words are the picture
+    changes = " ".join(str((o or {}).get("changes") or LOOK).split())[:300]
+    dressed = (o.get("names_clothing") in (True, "true")) if o else not BARE
+    # the changes first, so they win over her usual look (pink hair over her black hair); dressed, only her face and hair
+    # (her body words drew her in underwear instead of the dress)
+    if dressed:
+        wear = changes if changes.lower().startswith(("wearing", "in ", "dressed")) else "wearing " + changes
+        return "photo of one 22 year old American woman alone, solo, " + wear + ", " + SELF_FACE
+    return "photo of one 22 year old American woman alone, solo, " + changes + ", fully nude, completely naked, topless, bottomless, " + SELF
+
+
 if a.still:
     png, ty = open(a.still, "rb").read(), "image/png"
 else:
     say("drawing the new look")
     base = base64.b64encode(open(a.base, "rb").read()).decode()
-    # whatever it is told to be: the words are the picture
     png, ty = post(a.image + "/txt2img", {
         "width": 512, "height": 1024, "seed": int(time.time()) % 100000,
-        # Agent Gen's way: a person and their body, then the look; clothes only if the look names them
+        # Agent Gen's way: her likeness and body, then the changes; clothes only if the order names them
         "steps": 30, "guidance": 7,
-        "prompt": ("full body photo head to toe, feet visible, %s, " + ("fully nude, completely naked, topless, bottomless, " if BARE else "") + "standing facing the camera, plain light grey studio background, photorealistic, detailed face, natural light, sharp focus") % (
-            LOOK if not LOOK.lower().startswith("herself") and not LOOK.startswith("emo hairstyle") else "photo of a 22 year old American woman, " + LOOK.split(":", 1)[-1]),
+        "prompt": "full body photo head to toe, feet visible, %s, standing facing the camera, plain light grey studio background, photorealistic, detailed face, natural light, sharp focus" % look_prompt(),
         "negative": "child, teen, underage, childlike, young girl, two people, multiple people, cropped body, out of frame, cropped feet, cut off legs, raised hand, holding object, extra fingers, missing fingers, fused fingers, mutated hands, deformed hands, black sclera, heavy makeup, white face paint, plastic skin",
     }, 300)
     if "image" not in ty:
