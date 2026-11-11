@@ -311,7 +311,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   async function outfitPhoto(wear) {
     const ask = `A picture engine that has never heard of it must draw a woman wearing: "${wear}".\nAnswer with JSON only: {"photo": "..."}. photo: only the outfit, in one short phrase: its colours, material, shape and what it covers on her body.`;
     try {
-      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000), body: JSON.stringify({ model: LOCAL_MODEL, stream: false, think: false, format: 'json', messages: [{ role: 'user', content: ask }], options: { num_predict: 120, temperature: 0 } }) });
+      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000), body: JSON.stringify({ model: LOCAL_MODEL, stream: false, think: false, format: 'json', keep_alive: brainKeepAlive(A.brainKeepAlive), messages: [{ role: 'user', content: ask }], options: { num_predict: 120, temperature: 0 } }) });
       if (!r.ok) return '';
       return String(JSON.parse(((await r.json()).message || {}).content || '{}').photo || '').replace(/[\u0000-\u001f]/g, '').slice(0, 300).trim().replace(/^[.,\s]+|[.,\s]+$/g, '');
     } catch { return ''; }
@@ -319,7 +319,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   async function dress(asked, scene) {
     const ask = `Two separate jobs. Answer with JSON only: {"names_clothing": true or false, "wear": "...", "moment": "..."}.\n\n1. Read ONLY this message from a person: "${asked}"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else "".\n\n2. Read this picture description: "${scene}"\nmoment: only the place, pose, action, expression, camera angle and light, in a few words.`;
     try {
-      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000), body: JSON.stringify({ model: LOCAL_MODEL, stream: false, think: false, format: 'json', messages: [{ role: 'user', content: ask }], options: { num_predict: 200, temperature: 0 } }) });
+      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000), body: JSON.stringify({ model: LOCAL_MODEL, stream: false, think: false, format: 'json', keep_alive: brainKeepAlive(A.brainKeepAlive), messages: [{ role: 'user', content: ask }], options: { num_predict: 200, temperature: 0 } }) });
       if (!r.ok) return null;
       const j = JSON.parse(((await r.json()).message || {}).content || '');
       const clean = (x) => String(x || '').replace(/[\u0000-\u001f]/g, '').slice(0, 400).trim().replace(/^[.,\s]+|[.,\s]+$/g, '');
