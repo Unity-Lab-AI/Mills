@@ -36,6 +36,7 @@ pub mod ai_peer;
 pub mod enhance;
 pub mod fj;
 pub mod gitpanel;
+pub mod gateway;
 pub mod harness;
 pub mod host;
 pub mod hub;

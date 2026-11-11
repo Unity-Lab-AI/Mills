@@ -474,7 +474,7 @@ fn tools_reply(an: ToolAnswer, model: String, cid: &str, created: u64, stream: b
     let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n")));
     sse_answer(rx)
 }
-fn self_http(hub: &dyn AiHub) -> &reqwest::Client { &hub.api().http }
+pub(crate) fn self_http(hub: &dyn AiHub) -> &reqwest::Client { &hub.api().http }
 async fn next_or_cancel(src: &mut Src, cancel: &Cancel) -> Result<Option<Vec<u8>>, ApiErr> {
     if cancel.is() { return Err(err(502, "cancelled")); }
     tokio::select! { _ = cancel.woke.notified() => Err(err(502, "cancelled")), c = src.next() => Ok(c) }
@@ -535,7 +535,7 @@ async fn complete_cli(hub: &Arc<dyn AiHub>, p: &Value, model: &str, system: &str
 }
 
 // ---------- the API's answers ----------
-fn cors(mut r: hyper::Response<pgm_net_internal::http::Body>) -> Resp {
+pub(crate) fn cors(mut r: hyper::Response<pgm_net_internal::http::Body>) -> Resp {
     let h = r.headers_mut();
     h.insert("access-control-allow-origin", hyper::header::HeaderValue::from_static("*"));
     h.insert("access-control-allow-headers", hyper::header::HeaderValue::from_static("Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta"));
@@ -543,7 +543,7 @@ fn cors(mut r: hyper::Response<pgm_net_internal::http::Body>) -> Resp {
 }
 fn jout(status: u16, v: Value) -> Resp { cors(pgm_net_internal::http::json(status, &v)) }
 fn oa_error(status: u16, m: &str, t: &str) -> Resp { jout(status, json!({ "error": { "message": m, "type": t, "code": Value::Null } })) }
-fn ant_error(status: u16, m: &str, t: &str) -> Resp {
+pub(crate) fn ant_error(status: u16, m: &str, t: &str) -> Resp {
     let t = match t { "service_unavailable" => "overloaded_error", "rate_limit_error" | "authentication_error" | "invalid_request_error" | "not_found_error" => t, _ => "api_error" };
     jout(status, json!({ "type": "error", "error": { "type": t, "message": m } }))
 }
@@ -567,12 +567,12 @@ fn from_anthropic(b: &Value) -> (String, Vec<(String, String)>) {
     (system, msgs)
 }
 /// Marks a person's answer as running until dropped; the caller hanging up cancels it.
-struct Running { hub: Arc<dyn AiHub>, slot: u64, cancel: Arc<Cancel> }
+pub(crate) struct Running { hub: Arc<dyn AiHub>, slot: u64, pub(crate) cancel: Arc<Cancel> }
 impl Drop for Running { fn drop(&mut self) { self.cancel.fire(); self.hub.api().running.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.slot); self.hub.work().busy_changed.notify_one(); } }
 /// How many answers one key may have going at once: its own `maxConcurrent`, else config `api.maxConcurrent`, else 8.
-fn max_concurrent(hub: &dyn AiHub, key: &KeyCtx) -> usize { key.max.or_else(|| hub.cfg().get("api").and_then(|a| a["maxConcurrent"].as_u64()).filter(|n| *n > 0)).unwrap_or(8).min(64) as usize }
+pub(crate) fn max_concurrent(hub: &dyn AiHub, key: &KeyCtx) -> usize { key.max.or_else(|| hub.cfg().get("api").and_then(|a| a["maxConcurrent"].as_u64()).filter(|n| *n > 0)).unwrap_or(8).min(64) as usize }
 /// A slot for one more answer of that key (None: it is at its limit).
-fn start_running(hub: &Arc<dyn AiHub>, user: &str, key: &KeyCtx) -> Option<Running> {
+pub(crate) fn start_running(hub: &Arc<dyn AiHub>, user: &str, key: &KeyCtx) -> Option<Running> {
     let max = max_concurrent(&**hub, key);
     let api = hub.api();
     let mut r = api.running.lock().unwrap_or_else(|e| e.into_inner());
@@ -583,14 +583,14 @@ fn start_running(hub: &Arc<dyn AiHub>, user: &str, key: &KeyCtx) -> Option<Runni
     Some(Running { hub: hub.clone(), slot, cancel: c })
 }
 /// 429 with `retry-after`, in the shape the caller speaks.
-fn too_many(anthropic: bool, key: &KeyCtx, max: usize) -> Resp {
+pub(crate) fn too_many(anthropic: bool, key: &KeyCtx, max: usize) -> Resp {
     let m = format!("Too many requests at once on this key (the limit is {max}{}); wait for one to finish and try again.", if key.named { format!(" for key \"{}\"", key.label) } else { String::new() });
     let mut r = if anthropic { ant_error(429, &m, "rate_limit_error") } else { oa_error(429, &m, "rate_limit_error") };
     r.headers_mut().insert("retry-after", hyper::header::HeaderValue::from_static("1"));
     r
 }
 /// Counts a call on its key; the first call of a day goes to the security log (key id and prefix, never the secret).
-fn count_use(hub: &dyn AiHub, u: &str, key: &KeyCtx) {
+pub(crate) fn count_use(hub: &dyn AiHub, u: &str, key: &KeyCtx) {
     let api = hub.api(); let now = pgm_core_internal::time::iso_now();
     let mut first_today = false; let mut prefix = String::new();
     api.edit(u, |rec| {
@@ -599,6 +599,14 @@ fn count_use(hub: &dyn AiHub, u: &str, key: &KeyCtx) {
         else if let Some(k) = rec["keys"].as_array_mut().and_then(|a| a.iter_mut().find(|k| k["id"] == json!(key.id))) { bump(k, &mut first_today, &mut prefix); }
     });
     if first_today { pgm_core_internal::audit::record(u, "apikey.use", &key.id, json!({ "prefix": prefix, "label": key.label }), ""); }
+}
+/// Adds an answer's tokens to its key's counters (`tokensIn`: everything read, cache included; `tokensOut`).
+pub(crate) fn count_tokens(hub: &dyn AiHub, u: &str, key: &KeyCtx, input: u64, output: u64) {
+    hub.api().edit(u, |rec| {
+        let add = |k: &mut Value| { k["tokensIn"] = json!(k["tokensIn"].as_u64().unwrap_or(0) + input); k["tokensOut"] = json!(k["tokensOut"].as_u64().unwrap_or(0) + output); };
+        if !key.named { add(rec); }
+        else if let Some(k) = rec["keys"].as_array_mut().and_then(|a| a.iter_mut().find(|k| k["id"] == json!(key.id))) { add(k); }
+    });
 }
 fn total(u: &Value) -> Value { let mut v = u.clone(); v["total_tokens"] = json!(u["prompt_tokens"].as_u64().unwrap_or(0) + u["completion_tokens"].as_u64().unwrap_or(0)); v }
 
@@ -705,7 +713,7 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
         ("POST", "/v1/messages/count_tokens") => {
             let Some(b) = body else { return ant_error(400, "Body is not JSON.", "invalid_request_error") };
             let (system, msgs) = from_anthropic(&b);
-            let chars = js_len(&system) + msgs.iter().map(|m| js_len(&m.1)).sum::<usize>();
+            let chars = js_len(&system) + msgs.iter().map(|m| js_len(&m.1)).sum::<usize>() + crate::gateway::tools_chars(&b); // a rough count: the tool definitions count too
             jout(200, json!({ "input_tokens": chars.div_ceil(4).max(1) }))
         }
         ("POST", "/v1/messages") => {
@@ -713,6 +721,9 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
             let (system, msgs) = from_anthropic(&b);
             if msgs.is_empty() { return ant_error(400, "messages: at least one user or assistant message is required.", "invalid_request_error"); }
             let (prov, model) = match chosen { Ok(x) => x, Err(e) => return e };
+            // an Anthropic-speaking provider (API key, a host's Claude login) gets the request raw (G2, gateway.rs); the text
+            // path below stays for the others until cross-format arrives (G3)
+            if crate::gateway::speaks_anthropic(&prov) { return crate::gateway::messages(hub, r, &user, &key, &prov, &model, b).await; }
             let Some(run) = start_running(hub, &user, &key) else { return too_many(true, &key, max_concurrent(&**hub, &key)) };
             let max = b["max_tokens"].as_f64().filter(|n| *n > 0.0).map(|n| (n.round() as u64).min(128000));
             count_use(&**hub, &user, &key);
