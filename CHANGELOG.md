@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.57.3 — 2026-11-10
+
+PATCH: two people changing her look at once.
+
+### Fixed
+- **One person's look order never stops another's** (asked: "i aksed it for a red dress while sponges was generating how does it handle both"): a red dress ordered while Sponge's look was on its last clip stopped his, and his look was lost. The image engine now films one look at a time and keeps a line: your own newer order replaces yours, someone else's waits its turn (its page says so) and starts when the one being filmed ends; the same order again (another tab) changes nothing.
+- **Her look is filmed once, not twice**: the desktop app ignores an order for the look it is already filming (her reply and the hub both ordered it), and the website does not film a chat order while that person's desktop app is open (the app says so to the hub every minute, new POST `/api/assistant/desk-alive`; GET `/api/assistant/look` answers `deskApp`), since the app films it on its own PC. Both hubs (`bridge/assistant.js` 1.6.1, native pgm-ai-internal), `bridge/image-engine.py`, `web/deskunity.js` 1.2.1, `web/index.html` 1.45.1. Windows and Linux app: vr-desktop rebuilt.
+
 ## 5.57.2 — 2026-11-10
 
 PATCH: the full regression run, and what it found.

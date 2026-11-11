@@ -307,6 +307,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   // without any looks or clothes of her own. One short call to her brain; null when it does not answer.
   // How an outfit looks in a photo (colours, material, shape, what it covers), for a picture engine that does not know
   // the outfit's name; '' when the brain does not answer.
+  const deskAlive = new Map(); // when each person's desktop app last said it is open
   async function outfitPhoto(wear) {
     const ask = `A picture engine that has never heard of it must draw a woman wearing: "${wear}".\nAnswer with JSON only: {"photo": "..."}. photo: only the outfit, in one short phrase: its colours, material, shape and what it covers on her body.`;
     try {
@@ -900,9 +901,10 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         catch (e) { send(res, 502, { error: 'Image engine: ' + e.message }); }
         return true;
       }
+      if (p === '/api/assistant/desk-alive' && req.method === 'POST') { deskAlive.set(acct.username, Date.now()); send(res, 200, { ok: true }); return true; }
       if (p === '/api/assistant/outfit-forget' && req.method === 'POST') { const s = store(acct); delete s.outfit; save(s); send(res, 200, { ok: true }); return true; }
       if (p === '/api/assistant/look' && req.method === 'GET') {
-        try { const r = await fetch(IMAGE_URL + '/companion/status?user=' + encodeURIComponent(acct.username), { signal: AbortSignal.timeout(15000) }); send(res, 200, r.ok ? await r.json() : { ok: false, clips: [], busy: false }); }
+        try { const r = await fetch(IMAGE_URL + '/companion/status?user=' + encodeURIComponent(acct.username), { signal: AbortSignal.timeout(15000) }); const deskApp = Date.now() - (deskAlive.get(acct.username) || 0) < 150000; send(res, 200, { ...(r.ok ? await r.json() : { ok: false, clips: [], busy: false }), deskApp }); }
         catch { send(res, 200, { ok: false, clips: [], busy: false }); }
         return true;
       }
