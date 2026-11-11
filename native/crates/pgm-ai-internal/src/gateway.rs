@@ -352,6 +352,7 @@ async fn forward(hub: Arc<dyn AiHub>, user: String, key: openai::KeyCtx, kind: S
 pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, prov: &Value, model: &str, b: Value) -> Resp {
     let p = full_provider(hub, user, prov);
     let kind = s(&p, "kind");
+    if let Some(m) = crate::toolconv::check_tools(&b) { return err_resp(Fmt::Oa, 400, &m); } // a malformed tools field is refused here, as it always was
     if let Some(e) = preflight(hub, &p, Fmt::Oa) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
     openai::count_use(&**hub, user, key);
