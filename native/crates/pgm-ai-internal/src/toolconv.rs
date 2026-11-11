@@ -39,7 +39,7 @@ pub fn clean_messages(b: &Value) -> Vec<Value> {
 }
 
 /// The arguments of a call as an object: OpenAI carries them as a JSON string.
-fn args_obj(v: &Value) -> Value {
+pub(crate) fn args_obj(v: &Value) -> Value {
     match v {
         Value::String(t) => serde_json::from_str::<Value>(t).ok().filter(|x| x.is_object()).unwrap_or_else(|| json!({})),
         o if o.is_object() => o.clone(),
@@ -73,17 +73,25 @@ pub fn to_anthropic(b: &Value) -> (String, Vec<Value>, Vec<Value>, Option<Value>
             _ => {}
         }
     }
-    let tools: Vec<Value> = b["tools"].as_array().map(|a| a.iter().map(|t| {
+    (system.join("\n\n"), out, tools_to_anthropic(b), choice_to_anthropic(b))
+}
+
+/// The `tools` of an OpenAI chat request as Anthropic tool definitions.
+pub fn tools_to_anthropic(b: &Value) -> Vec<Value> {
+    b["tools"].as_array().map(|a| a.iter().map(|t| {
         let f = &t["function"];
         let schema = if f["parameters"].is_object() { f["parameters"].clone() } else { json!({ "type": "object", "properties": {} }) };
         json!({ "name": st(&f["name"]), "description": st(&f["description"]), "input_schema": schema })
-    }).collect()).unwrap_or_default();
+    }).collect()).unwrap_or_default()
+}
+/// The `tool_choice` of an OpenAI chat request as Anthropic's (None: not said, or no tools to choose from).
+pub fn choice_to_anthropic(b: &Value) -> Option<Value> {
     let choice = match &b["tool_choice"] {
         Value::String(c) => match c.as_str() { "none" => Some(json!({ "type": "none" })), "required" => Some(json!({ "type": "any" })), "auto" => Some(json!({ "type": "auto" })), _ => None },
         o if o.is_object() && !st(&o["function"]["name"]).is_empty() => Some(json!({ "type": "tool", "name": st(&o["function"]["name"]) })),
         _ => None,
     };
-    (system.join("\n\n"), out, tools, if b["tools"].as_array().map(|t| t.is_empty()).unwrap_or(true) { None } else { choice })
+    if b["tools"].as_array().map(|t| t.is_empty()).unwrap_or(true) { None } else { choice }
 }
 
 /// An Anthropic answer as (text, OpenAI tool_calls, finish_reason).

@@ -542,7 +542,7 @@ pub(crate) fn cors(mut r: hyper::Response<pgm_net_internal::http::Body>) -> Resp
     r
 }
 fn jout(status: u16, v: Value) -> Resp { cors(pgm_net_internal::http::json(status, &v)) }
-fn oa_error(status: u16, m: &str, t: &str) -> Resp { jout(status, json!({ "error": { "message": m, "type": t, "code": Value::Null } })) }
+pub(crate) fn oa_error(status: u16, m: &str, t: &str) -> Resp { jout(status, json!({ "error": { "message": m, "type": t, "code": Value::Null } })) }
 pub(crate) fn ant_error(status: u16, m: &str, t: &str) -> Resp {
     let t = match t { "service_unavailable" => "overloaded_error", "rate_limit_error" | "authentication_error" | "invalid_request_error" | "not_found_error" => t, _ => "api_error" };
     jout(status, json!({ "type": "error", "error": { "type": t, "message": m } }))
@@ -722,8 +722,9 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
             if msgs.is_empty() { return ant_error(400, "messages: at least one user or assistant message is required.", "invalid_request_error"); }
             let (prov, model) = match chosen { Ok(x) => x, Err(e) => return e };
             // an Anthropic-speaking provider (API key, a host's Claude login) gets the request raw (G2, gateway.rs); the text
-            // path below stays for the others until cross-format arrives (G3)
+            // path below stays for the ones that speak neither; an OpenAI-speaking one gets it translated (G3)
             if crate::gateway::speaks_anthropic(&prov) { return crate::gateway::messages(hub, r, &user, &key, &prov, &model, b).await; }
+            if crate::gateway::speaks_openai(&prov) { return crate::gateway::messages_via_openai(hub, &user, &key, &prov, &model, b).await; }
             let Some(run) = start_running(hub, &user, &key) else { return too_many(true, &key, max_concurrent(&**hub, &key)) };
             let max = b["max_tokens"].as_f64().filter(|n| *n > 0.0).map(|n| (n.round() as u64).min(128000));
             count_use(&**hub, &user, &key);
@@ -763,6 +764,10 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
             let msgs: Vec<(String, String)> = b["messages"].as_array().map(|a| a.iter().filter(|m| m["role"].is_string()).map(|m| (s(m, "role"), content_text(&m["content"]))).collect()).unwrap_or_default();
             if msgs.is_empty() { return oa_error(400, "\"messages\" is required.", "invalid_request_error"); }
             let (prov, model) = match chosen { Ok(x) => x, Err(e) => return e };
+            // G3 (gateway.rs): an OpenAI-speaking provider gets the request raw; an Anthropic one gets it translated (always for
+            // an API key, for a Claude login when it carries tools or images: a plain text one keeps the path below)
+            if crate::gateway::speaks_openai(&prov) { return crate::gateway::chat_raw(hub, &user, &key, &prov, &model, b).await; }
+            if crate::gateway::speaks_anthropic(&prov) && (prov["kind"] == json!("anthropic") || crate::xlate::needs_rich(&b)) { return crate::gateway::chat_via_anthropic(hub, r, &user, &key, &prov, &model, b).await; }
             let Some(run) = start_running(hub, &user, &key) else { return too_many(false, &key, max_concurrent(&**hub, &key)) };
             let system = msgs.iter().filter(|m| m.0 == "system").map(|m| m.1.clone()).collect::<Vec<_>>().join("\n\n");
             let max = b["max_tokens"].as_u64();

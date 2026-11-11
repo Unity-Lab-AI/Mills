@@ -132,6 +132,13 @@ function fakeAnthropic(req, res, body, via) {
   if (body.includes('R575-LIMIT')) return jr(429, { type: 'error', error: { type: 'rate_limit_error', message: 'Number of request tokens has exceeded your per-minute rate limit' } }, { 'retry-after': '7', 'anthropic-ratelimit-unified-5h-status': 'rejected' });
   const ev = (t, o) => `event: ${t}\ndata: ${JSON.stringify({ type: t, ...o })}\n\n`;
   const start = ev('message_start', { message: { id: 'msg_r575', type: 'message', role: 'assistant', model: b.model, content: [], stop_reason: null, usage: { input_tokens: 21, cache_read_input_tokens: 5, cache_creation_input_tokens: 2, output_tokens: 1 } } });
+  const textStop = /R580-TEXT-(\w+)/.exec(body); // R583: a plain text answer that stops for the reason named in the request
+  if (textStop) {
+    const parts = [start, ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }), ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'Hello ' } }), ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'wörld' } }),
+      ev('content_block_stop', { index: 0 }), ev('message_delta', { delta: { stop_reason: textStop[1], stop_sequence: null }, usage: { output_tokens: 5 } }), ev('message_stop', {})];
+    if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(parts.join('')); }
+    return jr(200, { id: 'msg_r580', type: 'message', role: 'assistant', model: b.model, content: [{ type: 'text', text: 'Hello wörld' }], stop_reason: textStop[1], stop_sequence: null, usage: { input_tokens: 6, output_tokens: 5 } });
+  }
   if (b.stream && body.includes('R575-HANG')) {
     fakeAnt.hangOpened++; res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rid }); res.write(start);
     const iv = setInterval(() => res.write(ev('ping', {})), 100); res.on('close', () => { clearInterval(iv); fakeAnt.hangClosed++; }); return;
@@ -145,6 +152,43 @@ function fakeAnthropic(req, res, body, via) {
   }
   const msg = { id: 'msg_r575', type: 'message', role: 'assistant', model: b.model, content: [{ type: 'text', text: 'checking' }, { type: 'tool_use', id: 'toolu_r575', name: 'get_weather', input: { city: 'Zürich' } }], stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 9, output_tokens: 4, cache_read_input_tokens: 3 } };
   fakeAnt.json = JSON.stringify(msg); res.writeHead(200, { 'Content-Type': 'application/json', ...rid }); res.end(fakeAnt.json);
+}
+
+// R580-R585 (T-369, G3): a fake OpenAI-compatible endpoint (the person's "openai" provider at /oai, its bearer k-r580) that records
+// the request as it arrived and answers like OpenAI: a streamed answer with a tool call (incremental arguments, a usage chunk only
+// when stream_options.include_usage asks for it), a whole JSON one with usage and cached tokens, the final text after a tool message,
+// OpenAI's errors (a 429 with retry-after, a 400 for stream_options on an endpoint that does not know it), a stream that never ends,
+// and an endpoint that answers JSON to a streaming request
+const fakeOa = { calls: [], stream: '', json: '', hangClosed: 0, hangOpened: 0 };
+const R580_KEY = 'k-r580';
+function fakeOpenAI(req, res, body) {
+  const b = JSON.parse(body || '{}'), h = req.headers, rid = { 'x-request-id': 'req_r580', 'x-ratelimit-remaining-requests': '77', 'x-internal-note': 'must-not-pass' };
+  if (/^m-r580/.test(String(b.model || '')) && h.authorization !== 'Bearer ' + R580_KEY) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'Incorrect API key provided', type: 'invalid_request_error', code: 'invalid_api_key' } })); }
+  fakeOa.calls.push({ headers: h, body: b, url: req.url });
+  const jr = (st, o, extra = {}) => { res.writeHead(st, { 'Content-Type': 'application/json', ...extra }); res.end(JSON.stringify(o)); };
+  if (body.includes('R580-LIMIT')) return jr(429, { error: { message: 'Rate limit reached for requests (r580)', type: 'requests', code: 'rate_limit_exceeded' } }, { 'retry-after': '5', ...rid });
+  if (body.includes('R580-NOSO') && b.stream_options) return jr(400, { error: { message: 'Unrecognized request argument supplied: stream_options', type: 'invalid_request_error', param: null, code: null } });
+  const ck = (delta, finish = null) => 'data: ' + JSON.stringify({ id: 'chatcmpl-r580', object: 'chat.completion.chunk', created: 1, model: b.model, choices: [{ index: 0, delta, finish_reason: finish }] }) + '\n\n';
+  if (b.stream && body.includes('R580-HANG')) {
+    fakeOa.hangOpened++; res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rid }); res.write(ck({ role: 'assistant', content: '' }));
+    const iv = setInterval(() => res.write(': ping\n\n'), 100); res.on('close', () => { clearInterval(iv); fakeOa.hangClosed++; }); return;
+  }
+  const lm = (b.messages || [])[(b.messages || []).length - 1] || {}, usage = { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 };
+  if (lm.role === 'tool') { // the tool result round trip: the final text
+    const text = 'R580 final: ' + String(lm.content);
+    if (b.stream) { const parts = [ck({ role: 'assistant', content: '' }), ck({ content: 'R580 final: ' }), ck({ content: String(lm.content) }), ck({}, 'stop'), ...(b.stream_options && b.stream_options.include_usage ? ['data: ' + JSON.stringify({ id: 'chatcmpl-r580', object: 'chat.completion.chunk', created: 1, model: b.model, choices: [], usage: { prompt_tokens: 50, completion_tokens: 6, total_tokens: 56 } }) + '\n\n'] : []), 'data: [DONE]\n\n']; res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(parts.join('')); }
+    return jr(200, { id: 'chatcmpl-r580', object: 'chat.completion', created: 1, model: b.model, choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }], usage: { prompt_tokens: 50, completion_tokens: 6, total_tokens: 56 } });
+  }
+  const msg = { role: 'assistant', content: 'Let me check', tool_calls: [{ id: 'call_r580', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Zürich"}' } }] };
+  const whole = { id: 'chatcmpl-r580', object: 'chat.completion', created: 1, model: b.model, choices: [{ index: 0, message: msg, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38, prompt_tokens_details: { cached_tokens: 10 } } };
+  if (b.stream && !body.includes('R580-JSONSTREAM')) {
+    const parts = [ck({ role: 'assistant', content: '' }), ck({ content: 'Let me ' }), ck({ content: 'check ' }),
+      ck({ tool_calls: [{ index: 0, id: 'call_r580', type: 'function', function: { name: 'get_weather', arguments: '' } }] }), ck({ tool_calls: [{ index: 0, function: { arguments: '{"city":' } }] }), ck({ tool_calls: [{ index: 0, function: { arguments: '"Zürich"}' } }] }), ck({}, 'tool_calls'),
+      ...(b.stream_options && b.stream_options.include_usage ? ['data: ' + JSON.stringify({ id: 'chatcmpl-r580', object: 'chat.completion.chunk', created: 1, model: b.model, choices: [], usage }) + '\n\n'] : []), 'data: [DONE]\n\n'];
+    fakeOa.stream = parts.join(''); res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rid });
+    let i = 0; const next = () => { if (i < parts.length) { res.write(parts[i++]); setTimeout(next, 15); } else res.end(); }; return next();
+  }
+  fakeOa.json = JSON.stringify(whole); res.writeHead(200, { 'Content-Type': 'application/json', ...rid }); res.end(fakeOa.json);
 }
 
 let RUST_BACK = 0;
@@ -278,6 +322,7 @@ function startFakeOllama() {
         return res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: b.model, usage: { input_tokens: 2, output_tokens: 3 } } }) + '\n\n');
       }
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
+      if ((req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') && body.includes('R580')) return fakeOpenAI(req, res, body); // R580-R585 (G3)
       if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
@@ -831,6 +876,7 @@ async function run() {
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   if (process.argv.includes('--only-r575') && RUST_HUB) await r575Check(); // development: just R575 to R579 (with --stop-after R579)
+  if (process.argv.includes('--only-r580') && RUST_HUB) await r580Check(); // development: just R580 to R585 (with --stop-after R585)
   if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
@@ -3032,6 +3078,7 @@ async function run() {
 
     if (RUST_HUB) await r560Check(); else skip('R560', 'the API gateway keys, routing and concurrency (T-369)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r575Check(); else skip('R575', 'the API gateway passes Anthropic requests through raw (T-369, G2)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r580Check(); else skip('R580', 'the API gateway passes OpenAI requests through raw and translates between the formats (T-369, G3)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
     const asrc551 = fs.readFileSync(path.join(BRIDGE, 'assistant.js'), 'utf8'), eng551 = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
@@ -7406,6 +7453,180 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       `relay ${rw.status} body==${same(cr.body, richR)} auth ${cr.headers && cr.headers.authorization}; stream ${rs.status} ${rs.text === fakeAnt.stream}; sub ${sub.status} ${sub.text.slice(0, 120)}; sub2 ${sub2.status}; limit ${rlim.status} ${rlim.retry}; apiSub ${apiSub.status}`);
 
     for (const k of [kA, kRelay, kU, kOne]) await call('/api/apikey/revoke', A, { id: k.id });
+    await call('/api/providers/remove', A, { id: pAnt.id }); await call('/api/providers/remove', A, { id: pOai.id });
+  }
+
+  // R580-R585 (T-369, G3 of the API gateway): POST /v1/chat/completions to an OpenAI-speaking provider goes through raw, and a request in
+  // one format to a provider that speaks the other is translated, streaming and tools included. A fake OpenAI endpoint (fakeOpenAI) and
+  // G2's fake Anthropic upstream record what arrives and answer with tool calls (streamed and whole), their own errors and a stream
+  // that never ends.
+  async function r580Check() {
+    const http = require('http'), assert = require('assert');
+    const same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json, retry: r.headers.get('retry-after'), ct: r.headers.get('content-type') || '', h: r.headers }; };
+    const lastOa = () => fakeOa.calls[fakeOa.calls.length - 1] || {}, lastAnt = () => fakeAnt.calls[fakeAnt.calls.length - 1] || {};
+    const keysFile = () => ((JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-admin'] || {});
+    const keyRec = (id) => (keysFile().keys || []).find((k) => k.id === id) || {};
+    const by = async (kind) => ((((await call('/api/usage', A)).data || {}).answers || {}).by || {})[kind] || { turns: 0, input: 0, output: 0, cached: 0, written: 0 };
+    const mk = async (body) => (await call('/api/apikey/create', A, body)).data;
+    const datas = (text) => text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => { try { return JSON.parse(l.slice(6)); } catch { return { bad: l }; } }); // an OpenAI stream's chunks
+    const frames = (text) => text.split('\n\n').filter((f) => f.trim()).map((f) => { const m = /^event: (.+)\ndata: (.*)$/s.exec(f) || []; let d = {}; try { d = JSON.parse(m[2]); } catch {} return { ev: m[1], d }; }); // Anthropic's events
+    const th = (await call('/api/hosts/new', A, {})).data.host || {}, thCfg = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const pOai = (await call('/api/providers/add', A, { kind: 'openai', label: 'R580 Oai', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: R580_KEY, models: 'm-r580-a, m-r580-b' })).data.provider || {};
+    const pAnt = (await call('/api/providers/add', A, { kind: 'anthropic', label: 'R580 Anthropic', apiKey: R575_KEY, models: 'claude-r580-a' })).data.provider || {};
+    await call('/api/hosts/remove', A, { id: th.id });
+    const plist = (await call('/api/providers', A)).data.providers || [];
+    const hostLocal = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-openai') || {}, hostClaude = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-claude') || {};
+    const kX = await mk({ label: 'r580 all', providers: [pOai.id, pAnt.id, hostLocal.id] }), kRelay = await mk({ label: 'r580 relay', providers: [hostClaude.id], models: ['claude-haiku-5-5'] });
+    const richOa = { model: 'm-r580-a', temperature: 0.2, top_p: 0.9, max_tokens: 55, stop: ['END'], seed: 7, user: 'user-r580', parallel_tool_calls: false,
+      response_format: { type: 'json_schema', json_schema: { name: 'w', schema: { type: 'object' } } },
+      tools: [{ type: 'function', function: { name: 'get_weather', description: 'Weather of a city', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }, strict: true } }],
+      tool_choice: { type: 'function', function: { name: 'get_weather' } },
+      messages: [{ role: 'system', content: 'You are a weather bot R580-rich' }, { role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=', detail: 'low' } }] },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'call_prev', content: 'sunny' }, { role: 'user', content: 'and now? R580' }] };
+    const withMsg = (b, text) => ({ ...b, messages: [{ role: 'user', content: text }] });
+
+    // R580: the request arrives as it was sent (only the model is swapped for an alias), with the provider's own bearer; the answer comes back as sent
+    const n0 = fakeOa.calls.length;
+    const whole = await g('/v1/chat/completions', kX.key, richOa, { 'x-api-key': kX.key }), c1 = lastOa(), j1 = fakeOa.json;
+    const alias = await g('/v1/chat/completions', kX.key, { ...richOa, model: 'r580-oai/m-r580-b' }), c2 = lastOa();
+    const st = await g('/v1/chat/completions', kX.key, { ...richOa, stream: true }), cs = lastOa(), s1 = fakeOa.stream;
+    const noUsage = await g('/v1/chat/completions', kX.key, { ...richOa, stream: true, stream_options: { include_usage: false } }), cn = lastOa();
+    const withUsage = await g('/v1/chat/completions', kX.key, { ...richOa, stream: true, stream_options: { include_usage: true } }), cu = lastOa();
+    const nOk = fakeOa.calls.length - n0;
+    const soRetry = await g('/v1/chat/completions', kX.key, { ...withMsg(richOa, 'R580-NOSO retry'), stream: true }), retried = fakeOa.calls.slice(-2);
+    const jsonStream = await g('/v1/chat/completions', kX.key, { ...withMsg(richOa, 'R580-JSONSTREAM'), stream: true }), jsChunks = datas(jsonStream.text);
+    const lim = await g('/v1/chat/completions', kX.key, withMsg(richOa, 'R580-LIMIT'));
+    check('R580', 'POST /v1/chat/completions to an OpenAI-compatible provider is forwarded as it is: tools, tool_choice, response_format, an image part, temperature, stop, seed, user and the rest arrive intact, only the model is swapped for a "<provider>/<model>" alias, the auth is the provider\'s own bearer (never the caller\'s key); the whole answer comes back as the upstream\'s JSON, a stream comes back byte for byte (with the upstream\'s request-id and rate-limit headers, not its internal ones), stream_options.include_usage is asked for unless the caller said false, an endpoint that refuses that option is asked again without it, an endpoint that answers JSON to a streaming request is streamed from it, and the provider\'s own 429 comes back with its status, body and retry-after',
+      whole.status === 200 && same(c1.body, richOa) && c1.headers.authorization === 'Bearer ' + R580_KEY && !c1.headers['x-api-key'] && !JSON.stringify(c1.headers).includes(kX.key) && whole.text === j1 && /application\/json/.test(whole.ct)
+      && alias.status === 200 && same(c2.body, { ...richOa, model: 'm-r580-b' })
+      && st.status === 200 && st.text === s1 && /^text\/event-stream/.test(st.ct) && same(cs.body, { ...richOa, stream: true, stream_options: { include_usage: true } }) && st.h.get('x-ratelimit-remaining-requests') === '77' && !st.h.get('x-internal-note')
+      && noUsage.status === 200 && same(cn.body.stream_options, { include_usage: false }) && !noUsage.text.includes('"usage"') && withUsage.status === 200 && same(cu.body.stream_options, { include_usage: true }) && nOk === 5
+      && soRetry.status === 200 && retried.length === 2 && !!retried[0].body.stream_options && !retried[1].body.stream_options && soRetry.text === fakeOa.stream
+      && jsonStream.status === 200 && /^text\/event-stream/.test(jsonStream.ct) && jsChunks.some((c) => (((c.choices || [])[0] || {}).delta || {}).tool_calls) && /data: \[DONE\]/.test(jsonStream.text) && jsChunks.some((c) => ((c.choices || [])[0] || {}).finish_reason === 'tool_calls')
+      && lim.status === 429 && lim.retry === '5' && lim.json && lim.json.error.type === 'requests' && /Rate limit reached for requests/.test(lim.json.error.message) && lim.h.get('x-ratelimit-remaining-requests') === '77' && !lim.h.get('x-internal-note'),
+      `nOk ${nOk} cu ${JSON.stringify(cu.body && cu.body.stream_options)} hdr ${st.h.get('x-request-id')}/${st.h.get('x-ratelimit-remaining-requests')}/${st.h.get('x-internal-note')} limhdr ${lim.h.get('x-request-id')}/${lim.h.get('x-internal-note')} so ${soRetry.text === fakeOa.stream} ${soRetry.text.length}/${fakeOa.stream.length} noUsage ${noUsage.text.includes('"usage"')} whole ${whole.text === j1} ${whole.ct}; whole ${whole.status} body==${same(c1.body, richOa)} auth ${c1.headers && c1.headers.authorization}; alias ${alias.status} ${c2.body && c2.body.model}; stream ${st.status} same ${st.text === s1} so ${JSON.stringify(cs.body && cs.body.stream_options)}; noUsage ${noUsage.status} ${JSON.stringify(cn.body && cn.body.stream_options)}; retry ${soRetry.status} ${retried.map((c) => JSON.stringify(c.body.stream_options)).join('/')}; jsonStream ${jsonStream.status} ${jsonStream.ct} ${jsonStream.text.slice(0, 100).replace(/\n/g, ' ')}; limit ${lim.status} ${lim.retry} ${lim.text.slice(0, 100)}`);
+
+    // R581: the usage is read from the stream and the body: the usage ledger and the key's own counters
+    const kU = await mk({ label: 'r580 usage', providers: [pOai.id] }), kUA = await mk({ label: 'r580 usage anthropic', providers: [pAnt.id] }), b0 = await by('openai'), x0 = await by('anthropic');
+    const u1 = await g('/v1/chat/completions', kU.key, { ...richOa, stream: true }), u2 = await g('/v1/chat/completions', kU.key, richOa);
+    const x1r = await g('/v1/chat/completions', kUA.key, { model: 'claude-r580-a', max_tokens: 20, stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'usage R580' }] }), x2r = await g('/v1/chat/completions', kUA.key, { model: 'claude-r580-a', max_tokens: 20, messages: [{ role: 'user', content: 'usage R580' }] });
+    const b1 = await by('openai'), x1 = await by('anthropic'), rec = keyRec(kU.id), recX = keyRec(kUA.id), listed = ((await call('/api/apikey', A)).data.keys || []).find((k) => k.id === kU.id) || {};
+    check('R581', 'usage lands where it belongs, raw and translated: for an OpenAI-compatible provider one streamed (usage chunk: 40 in, 12 out) and one whole answer (30 in with 10 cached, 8 out) add two turns to the person\'s answer ledger (input paid 40 + 20, output 20, cached 10) and to the key\'s own counters (calls 2, tokens in 70, tokens out 20); for an OpenAI request answered by an Anthropic provider the streamed (21 in, 5 cache read, 2 cache written, 17 out) and the whole answer (9 in, 3 cache read, 4 out) add two turns with those numbers and tokens in 40, out 21; the key list shows the calls',
+      u1.status === 200 && u2.status === 200 && b1.turns - b0.turns === 2 && b1.input - b0.input === 60 && b1.output - b0.output === 20 && b1.cached - b0.cached === 10 && b1.written - b0.written === 0
+      && rec.calls === 2 && rec.tokensIn === 70 && rec.tokensOut === 20 && listed.calls === 2
+      && x1r.status === 200 && x2r.status === 200 && x1.turns - x0.turns === 2 && x1.input - x0.input === 30 && x1.output - x0.output === 21 && x1.cached - x0.cached === 8 && x1.written - x0.written === 2 && recX.calls === 2 && recX.tokensIn === 40 && recX.tokensOut === 21,
+      `openai ledger +${b1.turns - b0.turns} turns in ${b1.input - b0.input} out ${b1.output - b0.output} cached ${b1.cached - b0.cached}; key ${JSON.stringify({ calls: rec.calls, in: rec.tokensIn, out: rec.tokensOut })}; anthropic ledger +${x1.turns - x0.turns} turns in ${x1.input - x0.input} out ${x1.output - x0.output} cached ${x1.cached - x0.cached} written ${x1.written - x0.written}; key ${JSON.stringify({ calls: recX.calls, in: recX.tokensIn, out: recX.tokensOut })}`);
+
+    // R582: the caller hanging up mid-stream frees the key's slot and closes the upstream, raw and translated
+    const kOne = await mk({ label: 'r580 one', providers: [pOai.id], maxConcurrent: 1 });
+    const open0 = fakeOa.hangOpened, closed0 = fakeOa.hangClosed;
+    const hangOn = (p, key, body, hs) => new Promise((resolve) => { const rq = http.request(H + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...hs } }, (res) => { res.once('data', (d) => resolve({ rq, res, first: d.toString() })); }); rq.on('error', () => {}); rq.end(JSON.stringify(body)); });
+    const hang = await hangOn('/v1/chat/completions', kOne.key, { ...withMsg(richOa, 'R580-HANG raw'), stream: true });
+    const busy = await g('/v1/chat/completions', kOne.key, withMsg(richOa, 'while one is open R580'));
+    const busyAnt = await g('/v1/messages', kOne.key, { model: 'm-r580-a', max_tokens: 9, messages: [{ role: 'user', content: 'while one is open R580' }] }, { 'anthropic-version': '2023-06-01' });
+    const openBefore = fakeOa.hangOpened - open0, closedBefore = fakeOa.hangClosed - closed0;
+    hang.rq.destroy();
+    for (let i = 0; i < 50 && !(fakeOa.hangClosed > closed0); i++) await sleep(100);
+    let freed = null; for (let i = 0; i < 50 && !freed; i++) { const r = await g('/v1/chat/completions', kOne.key, withMsg(richOa, 'after hang-up R580')); if (r.status === 200) freed = r; else await sleep(100); }
+    const hang2 = await hangOn('/v1/messages', kOne.key, { model: 'm-r580-a', max_tokens: 9, stream: true, messages: [{ role: 'user', content: 'R580-HANG translated' }] }, { 'anthropic-version': '2023-06-01' });
+    const closed1 = fakeOa.hangClosed; hang2.rq.destroy();
+    for (let i = 0; i < 50 && !(fakeOa.hangClosed > closed1); i++) await sleep(100);
+    let freed2 = null; for (let i = 0; i < 50 && !freed2; i++) { const r = await g('/v1/chat/completions', kOne.key, withMsg(richOa, 'after the second hang-up R580')); if (r.status === 200) freed2 = r; else await sleep(100); }
+    check('R582', 'the key\'s concurrency slot is held for the whole stream (a second request on a one-at-a-time key gets 429 with retry-after, in OpenAI\'s shape and in Anthropic\'s) and the caller hanging up mid-stream closes the upstream connection and frees the slot, for a raw OpenAI stream and for an Anthropic stream translated from an OpenAI one',
+      /chat\.completion\.chunk/.test(hang.first) && openBefore === 1 && closedBefore === 0 && busy.status === 429 && !!busy.retry && busy.json && busy.json.error.type === 'rate_limit_error' && busyAnt.status === 429 && !!busyAnt.retry && busyAnt.json && busyAnt.json.type === 'error' && busyAnt.json.error.type === 'rate_limit_error'
+      && closed1 - closed0 === 1 && !!freed &&/message_start/.test(hang2.first) && fakeOa.hangClosed - closed0 === 2 && !!freed2,
+      `first ${hang.first.slice(0, 40).replace(/\n/g, ' ')}; opened ${openBefore}; busy ${busy.status} ${busy.retry} ${busyAnt.status}; closed ${fakeOa.hangClosed - closed0}; after ${freed && freed.status}; second ${hang2.first.slice(0, 30).replace(/\n/g, ' ')} after ${freed2 && freed2.status}`);
+
+    // R583: an OpenAI request to an Anthropic-speaking provider is translated and streamed back as chat.completion.chunk events
+    const toAnt = { model: 'claude-r580-a', stream: true, stream_options: { include_usage: true }, max_tokens: 99, temperature: 0.2, stop: ['END'], tool_choice: 'required', parallel_tool_calls: false, user: 'u-r583', seed: 3,
+      tools: richOa.tools,
+      messages: [{ role: 'system', content: 'You are R583 sys' }, { role: 'user', content: [{ type: 'text', text: 'Weather? R583' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'call_prev', content: 'sunny' }, { role: 'user', content: 'and now?' }] };
+    const kAnt = await mk({ label: 'r580 anthropic', providers: [pAnt.id] });
+    const sA = await g('/v1/chat/completions', kAnt.key, toAnt), cA = lastAnt(), chunks = datas(sA.text);
+    const deltas = chunks.map((c) => ((c.choices || [])[0] || {}).delta || {}), calls = deltas.flatMap((d) => d.tool_calls || []);
+    const fins = chunks.map((c) => ((c.choices || [])[0] || {}).finish_reason).filter(Boolean), usageChunk = chunks.find((c) => c.usage) || {};
+    const sNo = await g('/v1/chat/completions', kAnt.key, { ...toAnt, stream_options: undefined });
+    const wA = await g('/v1/chat/completions', kAnt.key, { ...toAnt, stream: false, stream_options: undefined }), cW = lastAnt(), mW = ((wA.json || {}).choices || [])[0] || {};
+    const endT = await g('/v1/chat/completions', kAnt.key, { ...withMsg(toAnt, 'R580-TEXT-end_turn'), tools: undefined, tool_choice: undefined, stream: false }), maxT = await g('/v1/chat/completions', kAnt.key, { ...withMsg(toAnt, 'R580-TEXT-max_tokens'), tools: undefined, tool_choice: undefined, stream: true });
+    const sysOnly = await g('/v1/chat/completions', kAnt.key, { model: 'claude-r580-a', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'system', content: 'sys R583-plain' }, { role: 'user', content: 'R580-TEXT-end_turn' }] }), cP = lastAnt();
+    const rel = await g('/v1/chat/completions', kRelay.key, { model: 'claude-haiku-5-5', tools: toAnt.tools, messages: [{ role: 'system', content: 'You are R575 relay bot' }, { role: 'user', content: 'weather? R583' }] }), cRel = lastAnt();
+    const sub = await g('/v1/chat/completions', kRelay.key, { model: 'claude-haiku-5-5', tools: toAnt.tools, messages: [{ role: 'user', content: 'R575-SUB' }] });
+    check('R583', 'an OpenAI request to an Anthropic provider (an API key, a host\'s Claude login) arrives as Messages: the system message in system, the image as a base64 block, the assistant\'s tool_calls as tool_use and the tool message as tool_result in one user turn, the tools with their schemas, tool_choice required as any (parallel_tool_calls false as disable_parallel_tool_use), max_tokens, stop and temperature carried, user and seed dropped; the stream comes back as chat.completion.chunk events with the call in delta.tool_calls (id and name first, the arguments in the pieces they arrived in), one finish_reason tool_calls, the usage chunk only when asked (cache included) and [DONE]; the whole answer has message.tool_calls and its usage; end_turn is stop and max_tokens is length; the login is sent as it is (no Claude Code prompt) and its subscription refusal is a plain 403 in OpenAI\'s shape',
+      sA.status === 200 && /^text\/event-stream/.test(sA.ct) && cA.via === 'api' && cA.headers['x-api-key'] === R575_KEY && !cA.headers.authorization
+      && same(Object.keys(cA.body).sort(), ['max_tokens', 'messages', 'model', 'stop_sequences', 'stream', 'system', 'temperature', 'tool_choice', 'tools']) && cA.body.system === 'You are R583 sys' && cA.body.stream === true && cA.body.max_tokens === 99 && cA.body.temperature === 0.2 && same(cA.body.stop_sequences, ['END'])
+      && same(cA.body.messages[0].content[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }) && cA.body.messages[0].content[0].text === 'Weather? R583'
+      && same(cA.body.messages[1], { role: 'assistant', content: [{ type: 'tool_use', id: 'call_prev', name: 'get_weather', input: { city: 'Bern' } }] })
+      && same(cA.body.messages[2], { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_prev', content: 'sunny' }, { type: 'text', text: 'and now?' }] })
+      && cA.body.tools[0].name === 'get_weather' && cA.body.tools[0].input_schema.required[0] === 'city' && same(cA.body.tool_choice, { type: 'any', disable_parallel_tool_use: true })
+      && deltas[0].role === 'assistant' && same(calls[0], { index: 0, id: 'toolu_r575', type: 'function', function: { name: 'get_weather', arguments: '' } }) && same(calls.slice(1).map((c) => c.function.arguments), ['{"city":', '"Zürich"}']) && calls.every((c) => c.index === 0)
+      && same(fins, ['tool_calls']) && same(usageChunk.usage, { prompt_tokens: 28, completion_tokens: 17, total_tokens: 45, prompt_tokens_details: { cached_tokens: 5 } }) && sA.text.endsWith('data: [DONE]\n\n')
+      && sNo.status === 200 && !sNo.text.includes('"usage"') && datas(sNo.text).some((c) => ((c.choices || [])[0] || {}).finish_reason === 'tool_calls')
+      && wA.status === 200 && cW.body.stream === undefined && mW.finish_reason === 'tool_calls' && mW.message.content === 'checking' && mW.message.tool_calls[0].id === 'toolu_r575' && same(JSON.parse(mW.message.tool_calls[0].function.arguments), { city: 'Zürich' }) && wA.json.usage.prompt_tokens === 12 && wA.json.usage.completion_tokens === 4 && wA.json.object === 'chat.completion'
+      && endT.status === 200 && endT.json.choices[0].finish_reason === 'stop' && endT.json.choices[0].message.content === 'Hello wörld' && datas(maxT.text).filter((c) => (((c.choices || [])[0] || {}).delta || {}).content).map((c) => c.choices[0].delta.content).join('') === 'Hello wörld' && datas(maxT.text).some((c) => ((c.choices || [])[0] || {}).finish_reason === 'length')
+      && sysOnly.status === 200 && cP.body.system === 'sys R583-plain' && cP.body.max_tokens === 4096 && cP.body.tools === undefined && datas(sysOnly.text).some((c) => ((c.choices || [])[0] || {}).finish_reason === 'stop')
+      && rel.status === 200 && cRel.via === 'relay' && cRel.headers.authorization === 'Bearer fake-oauth-token' && cRel.body.system === 'You are R575 relay bot' && !JSON.stringify(cRel.body).includes('Claude Code') && (((rel.json || {}).choices || [])[0] || {}).finish_reason === 'tool_calls'
+      && sub.status === 403 && sub.json && sub.json.error.type === 'permission_error' && /Claude subscription login: it serves Claude Code; use Claude Code with this key, or pick a provider that has an API key/.test(sub.json.error.message),
+      `stream ${sA.status} ${sA.ct} body keys ${Object.keys(cA.body || {})} calls ${JSON.stringify(calls).slice(0, 300)} fins ${fins} usage ${JSON.stringify(usageChunk.usage)}; no-usage ${sNo.status}; whole ${wA.status} ${wA.text.slice(0, 200)}; end ${endT.status} ${endT.text.slice(0, 150)}; max ${maxT.text.slice(-200).replace(/\n/g, ' ')}; sys ${sysOnly.status} ${JSON.stringify(cP.body)}; relay ${rel.status} ${rel.text.slice(0, 120)} sys ${cRel.body && JSON.stringify(cRel.body.system)}; sub ${sub.status} ${sub.text.slice(0, 160)}`);
+
+    // R584: an Anthropic request to an OpenAI-speaking provider is translated and streamed back as Anthropic events
+    const toOa = { model: 'm-r580-a', max_tokens: 77, temperature: 0.5, stop_sequences: ['END'], stream: true, top_k: 4, metadata: { user_id: 'u-r585' }, thinking: { type: 'enabled', budget_tokens: 1024 },
+      system: [{ type: 'text', text: 'You are R580 sys', cache_control: { type: 'ephemeral' } }],
+      tools: [{ name: 'get_weather', description: 'Weather of a city', input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }, cache_control: { type: 'ephemeral' } }], tool_choice: { type: 'any', disable_parallel_tool_use: true },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580', cache_control: { type: 'ephemeral' } }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 'hm', signature: 'sig' }, { type: 'tool_use', id: 'toolu_prev', name: 'get_weather', input: { city: 'Bern' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_prev', content: [{ type: 'text', text: 'sunny' }] }, { type: 'text', text: 'and now?' }] }] };
+    const av = { 'anthropic-version': '2023-06-01', 'anthropic-beta': 'interleaved-thinking-2025-05-14' };
+    const kOa = await mk({ label: 'r580 to openai', providers: [pOai.id] }), o0 = await by('openai');
+    const sO = await g('/v1/messages', kOa.key, toOa, av), cO = lastOa(), fr = frames(sO.text);
+    const sBody = fr.filter((f) => f.ev === 'content_block_delta' && f.d.delta.type === 'text_delta').map((f) => f.d.delta.text).join(''), argsJ = fr.filter((f) => f.ev === 'content_block_delta' && f.d.delta.type === 'input_json_delta');
+    const mDelta = (fr.find((f) => f.ev === 'message_delta') || { d: {} }).d, tStart = fr.find((f) => f.ev === 'content_block_start' && f.d.content_block.type === 'tool_use') || { d: {} };
+    const wO = await g('/v1/messages', kOa.key, { ...toOa, stream: false }, av), cWO = lastOa();
+    const trip = { ...toOa, stream: false, messages: [toOa.messages[0], { role: 'assistant', content: [{ type: 'tool_use', id: 'call_r580', name: 'get_weather', input: { city: 'Zürich' } }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_r580', content: 'forty-two' }] }], tool_choice: { type: 'auto' } };
+    const tW = await g('/v1/messages', kOa.key, trip, av), cT = lastOa(), tS = await g('/v1/messages', kOa.key, { ...trip, stream: true }, av), tFr = frames(tS.text);
+    const hl = await g('/v1/messages', kX.key, { model: 'tiny-local', max_tokens: 30, messages: [{ role: 'user', content: 'host local R580' }] }, av), cHl = lastOa();
+    const hlRaw = await g('/v1/chat/completions', kX.key, { model: 'tiny-local', stream: true, messages: [{ role: 'user', content: 'host local raw R580' }] }), cHr = lastOa();
+    const o1 = await by('openai'), recO = keyRec(kOa.id);
+    check('R584','an Anthropic request to an OpenAI-compatible provider (an endpoint, a host\'s server) arrives as chat completions: the system array as a system message, the image as an image_url data URL, the assistant\'s tool_use as tool_calls with the arguments as JSON text, the tool_result as a tool message and the text after it as the user turn, tools as functions, tool_choice any as required (disable_parallel_tool_use as parallel_tool_calls false), max_tokens, stop_sequences and temperature carried, stream_options.include_usage asked, thinking, thinking blocks, cache_control, top_k and metadata dropped, the provider\'s own bearer; the stream comes back as Anthropic events (message_start, a text block, a tool_use block with the arguments as input_json_delta pieces, message_delta with stop_reason tool_use and the usage, message_stop; event names as the data types), the whole answer as a message with a tool_use block and its usage, and a tool_result turn round-trips to the final text with stop_reason end_turn, whole and streamed; the usage counts in the ledger and the key; a host\'s server answers both ways',
+      sO.status === 200 && /^text\/event-stream/.test(sO.ct) && cO.headers.authorization === 'Bearer ' + R580_KEY && !cO.headers['x-api-key'] && !cO.headers['anthropic-beta']
+      && cO.body.model === 'm-r580-a' && cO.body.stream === true && same(cO.body.stream_options, { include_usage: true }) && cO.body.max_tokens === 77 && cO.body.temperature === 0.5 && same(cO.body.stop, ['END']) && cO.body.tool_choice === 'required' && cO.body.parallel_tool_calls === false
+      && !/cache_control|thinking|top_k|metadata/.test(JSON.stringify(cO.body))
+      && same(cO.body.messages, [{ role: 'system', content: 'You are R580 sys' }, { role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'toolu_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'toolu_prev', content: 'sunny' }, { role: 'user', content: 'and now?' }])
+      && same(cO.body.tools, [{ type: 'function', function: { name: 'get_weather', description: 'Weather of a city', parameters: toOa.tools[0].input_schema } }])
+      && same(fr.map((f) => f.ev), ['message_start', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop']) && fr.every((f) => f.d.type === f.ev)
+      && /^msg_/.test(fr[0].d.message.id) && fr[0].d.message.model === 'm-r580-a' && sBody === 'Let me check ' && tStart.d.content_block.id === 'call_r580' && tStart.d.content_block.name === 'get_weather' && tStart.d.index === 1
+      && same(argsJ.map((f) => f.d.delta.partial_json), ['{"city":', '"Zürich"}']) && mDelta.delta.stop_reason === 'tool_use' && same(mDelta.usage, { input_tokens: 40, output_tokens: 12, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+      && wO.status === 200 && cWO.body.stream === undefined && cWO.body.stream_options === undefined && wO.json.type === 'message' && wO.json.role === 'assistant' && wO.json.stop_reason === 'tool_use' && same(wO.json.content, [{ type: 'text', text: 'Let me check' }, { type: 'tool_use', id: 'call_r580', name: 'get_weather', input: { city: 'Zürich' } }]) && same(wO.json.usage, { input_tokens: 20, output_tokens: 8, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 })
+      && tW.status === 200 && cT.body.messages[cT.body.messages.length - 1].role === 'tool' && cT.body.messages[cT.body.messages.length - 1].tool_call_id === 'call_r580' && cT.body.tool_choice === 'auto' && tW.json.stop_reason === 'end_turn' && tW.json.content[0].text === 'R580 final: forty-two'
+      && tS.status === 200 && tFr.filter((f) => f.ev === 'content_block_delta').map((f) => f.d.delta.text).join('') === 'R580 final: forty-two' && (tFr.find((f) => f.ev === 'message_delta') || { d: { delta: {} } }).d.delta.stop_reason === 'end_turn'
+      && o1.turns - o0.turns === 4 && recO.calls === 4 && recO.tokensIn === 40 + 30 + 50 + 50 && recO.tokensOut === 12 + 8 + 6 + 6
+      && hl.status === 200 && hl.json.stop_reason === 'tool_use' && hl.json.content.some((c) => c.type === 'tool_use') && cHl.body.model === 'tiny-local' && cHl.url === '/oai/chat/completions' && hlRaw.status === 200 && hlRaw.text === fakeOa.stream && cHr.body.stream_options && cHr.body.stream_options.include_usage === true,
+      `stream ${sO.status} ${sO.ct} events ${fr.map((f) => f.ev)} text "${sBody}" args ${JSON.stringify(argsJ.map((f) => f.d.delta.partial_json))} delta ${JSON.stringify(mDelta).slice(0, 200)}; up ${JSON.stringify(cO.body || {}).slice(0, 700)}; whole ${wO.status} ${wO.text.slice(0, 250)}; trip ${tW.status} ${tW.text.slice(0, 150)} stream ${tS.status}; ledger +${o1.turns - o0.turns} key ${JSON.stringify({ calls: recO.calls, in: recO.tokensIn, out: recO.tokensOut })}; host ${hl.status} ${hl.text.slice(0, 120)} raw ${hlRaw.status} ${hlRaw.text === fakeOa.stream}`);
+
+    // R585: what cannot be carried is refused with a plain 400 naming it (nothing reaches the provider, nothing is counted), and the provider's errors come back in the caller's shape
+    const refCalls0 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, key: keyRec(kX.id).calls };
+    const doc = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, messages: [{ role: 'user', content: [{ type: 'text', text: 'R580' }, { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'd' } }] }] }, av);
+    const srv = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, tools: [{ type: 'web_search_20250305', name: 'web_search' }], messages: [{ role: 'user', content: 'R580' }] }, av);
+    const mcp = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, mcp_servers: [{ type: 'url', url: 'https://x.test', name: 'm' }], messages: [{ role: 'user', content: 'R580' }] }, av);
+    const audio = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: 'AA', format: 'wav' } }] }] });
+    const many = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', n: 2, messages: [{ role: 'user', content: 'x' }] });
+    const schema = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', response_format: { type: 'json_schema', json_schema: { name: 'x', schema: {} } }, messages: [{ role: 'user', content: 'x' }] });
+    const refCalls1 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, key: keyRec(kX.id).calls };
+    const e400 = (r, re) => r.status === 400 && r.json && r.json.error && r.json.error.type === 'invalid_request_error' && re.test(r.json.error.message);
+    const a400 = (r, re) => r.status === 400 && r.json && r.json.type === 'error' && r.json.error.type === 'invalid_request_error' && re.test(r.json.error.message);
+    const aLim = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', tools: richOa.tools, messages: [{ role: 'user', content: 'R575-LIMIT' }] });
+    const oLim = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, messages: [{ role: 'user', content: 'R580-LIMIT' }] }, av);
+    check('R585', 'what cannot be carried to the other format is refused with a plain 400 in the caller\'s shape that names it, before anything reaches the provider or is counted: a document block, a server tool (web search) and MCP servers to an OpenAI provider; audio input, n above 1 and response_format json_schema to an Anthropic one; and the provider\'s own errors come back in the caller\'s shape with their status and retry-after (Anthropic\'s 429 as an OpenAI error, OpenAI\'s 429 as an Anthropic error)',
+      a400(doc, /document/) && a400(srv, /web_search/) && a400(mcp, /mcp_servers/) && e400(audio, /Audio input/) && e400(many, /"n"/) && e400(schema, /json_schema/)
+      && refCalls1.oa === refCalls0.oa && refCalls1.ant === refCalls0.ant && refCalls1.key === refCalls0.key
+      && aLim.status === 429 && aLim.retry === '7' && aLim.json && aLim.json.error.type === 'rate_limit_error' && /per-minute rate limit/.test(aLim.json.error.message) && !aLim.h.get('anthropic-ratelimit-unified-5h-status')
+      && oLim.status === 429 && oLim.retry === '5' && oLim.json && oLim.json.type === 'error' && oLim.json.error.type === 'rate_limit_error' && /Rate limit reached for requests/.test(oLim.json.error.message),
+      `doc ${doc.status} ${doc.text.slice(0, 100)}; srv ${srv.status}; mcp ${mcp.status}; audio ${audio.status} ${audio.text.slice(0, 100)}; n ${many.status}; schema ${schema.status}; calls ${JSON.stringify(refCalls0)}→${JSON.stringify(refCalls1)}; aLim ${aLim.status} ${aLim.retry} ${aLim.text.slice(0, 120)}; oLim ${oLim.status} ${oLim.retry} ${oLim.text.slice(0, 120)}`);
+
+    for (const k of [kX, kRelay, kU, kUA, kOne, kAnt, kOa]) await call('/api/apikey/revoke', A, { id: k.id });
     await call('/api/providers/remove', A, { id: pAnt.id }); await call('/api/providers/remove', A, { id: pOai.id });
   }
 
