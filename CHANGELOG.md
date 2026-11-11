@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.57.2 — 2026-11-10
+
+PATCH: the full regression run, and what it found.
+
+### Fixed
+- **A machine name had slipped into this changelog** (R31, no local names in tracked files): the 5.56.2 and 5.56.3 entries named the host PC by its machine name; it now reads "the host PC" there (the only change to those entries).
+- **Regression checks follow what shipped**: R68 checks her picture prompt as it is now (one 22 year old American woman, her built-in likeness, fully nude when no clothes were named) and R546 counts Desktop Unity among the App settings groups, since it shows on the website too.
+
 ## 5.57.1 — 2026-11-10
 
 PATCH: the docs say what she does now.
@@ -37,14 +45,14 @@ PATCH: she wears what she is told, in her pictures and on the desktop, for any o
 PATCH: she is described only by what she is.
 
 ### Changed
-- **No more "no leather, no tattoos" in what her brain reads** (asked: "dont negative prompt the brain to drop them thats like telling it to use them"): the short call that reads what she wears now only says what to keep (place, pose, action, expression, camera angle, light), and her persona file (gee-pc, the live and dev hubs; host-local, not in git) only says what she looks like, with no list of looks she does not have and no "goth". Both hubs (`bridge/assistant.js` 1.5.2, native pgm-ai-internal).
+- **No more "no leather, no tattoos" in what her brain reads** (asked: "dont negative prompt the brain to drop them thats like telling it to use them"): the short call that reads what she wears now only says what to keep (place, pose, action, expression, camera angle, light), and her persona file (the host PC, the live and dev hubs; host-local, not in git) only says what she looks like, with no list of looks she does not have and no "goth". Both hubs (`bridge/assistant.js` 1.5.2, native pgm-ai-internal).
 
 ## 5.56.2 — 2026-11-10
 
 PATCH: the leather getup is gone for good.
 
 ### Removed
-- **Her old goth look in the hub config** (asked: "in vibe roller the images she made of her self to go along side the desktop Unity appearacence wasnt a nude and it was still the shit fucking leather getup. get rid of that shit! nuke it destroy it with prdjudice"): the hub config's `assistant.selfieLook` (piercings, tattoos, black leather jacket over a pink bra, fishnets) overrode her likeness in every picture of her. It is deleted from `bridge/config.json` and from the host-local configs (gee-pc, the live and dev hubs), and the setting itself is gone from both hubs: her likeness in pictures is always the built-in one (the emo girl next door, nude unless told what to wear), so no config can bring the getup back. `bridge/assistant.js` 1.5.1, native pgm-ai-internal.
+- **Her old goth look in the hub config** (asked: "in vibe roller the images she made of her self to go along side the desktop Unity appearacence wasnt a nude and it was still the shit fucking leather getup. get rid of that shit! nuke it destroy it with prdjudice"): the hub config's `assistant.selfieLook` (piercings, tattoos, black leather jacket over a pink bra, fishnets) overrode her likeness in every picture of her. It is deleted from `bridge/config.json` and from the host-local configs (the host PC, the live and dev hubs), and the setting itself is gone from both hubs: her likeness in pictures is always the built-in one (the emo girl next door, nude unless told what to wear), so no config can bring the getup back. `bridge/assistant.js` 1.5.1, native pgm-ai-internal.
 
 ## 5.56.1 — 2026-11-10
 
@@ -73,7 +81,7 @@ MINOR: Desktop Unity on the website too; she wears what she is told, nude otherw
 ### Fixed
 - **Regression check R107** follows the round-two way her pictures are prompted ("photo of one 22 year old American woman…", nude when no clothes are asked for) instead of the old prompt that began with the person's own words.
 - **What she wears comes from what you said** (asked: "well i told her to put on a red dress and she was still in leather and all tattoed", "should should be nude first then do her image of shats she is told and up the the desktop thing", and "shiot like this is kinda limiting we cant just list everyhting out that leaves so many loose ends not mentioned it needs to be dynasmic"): for any picture of her, a short call to her brain reads the person's message for clothes they named (none named: fully nude) and keeps only the moment (place, pose, light) from the scene she wrote, so looks or clothes she imagines for herself (leather, tattoos, anything) never reach the picture. No word lists. Both hubs (`bridge/assistant.js` 1.4.7, native pgm-ai-internal).
-- **Her persona no longer describes her as a pale goth in leather and tattoos**: the host-local persona file (not in git) on gee-pc and on the portal now describes the emo girl next door, nude unless told what to wear; the Rust hub's built-in fallback line too.
+- **Her persona no longer describes her as a pale goth in leather and tattoos**: the host-local persona file (not in git) on the host PC and on the portal now describes the emo girl next door, nude unless told what to wear; the Rust hub's built-in fallback line too.
 - **Her desktop self takes your order at once** (asked: "look at the message i sent her and u tell me how that is any way her bare nude or let alone what i told her to appear as"): an order to change her look was refused without a word while her fresh look of the app start was still filming; now an order always wins: the look being filmed (and its video job) is stopped and yours starts. Windows and Linux app: vr-desktop rebuilt.
 - **Desktop Unity settings show on the website too** (asked: "and sponge is saying he doesnt see the seetings for the desktop Unity nn the website and shit so whats up?", "nopt even the settings for it"): Settings → App always has the Desktop Unity section; on the website it says she lives in the desktop app (Windows or Linux) and its controls work there, and @unity orders in the team chat still reach your desktop app. `web/index.html` 1.43.0.
 
