@@ -136,7 +136,8 @@ function unzipAll(buf) {
 }
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
 const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
-const fakeOaiTools = []; // R346: the bodies the fake OpenAI endpoint got that carried tools or tool messages
+const fakeOaiCalls = []; // R560-R565: which key (Authorization) and model the fake OpenAI endpoint was asked, in order
+const fakeOaiTools = [];// R346: the bodies the fake OpenAI endpoint got that carried tools or tool messages
 const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
 const fakeGifQueries = [];
@@ -248,6 +249,8 @@ function startFakeOllama() {
       if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
+        if (/-r56\d/.test(String(b.model || ''))) fakeOaiCalls.push({ auth: req.headers.authorization || '', model: b.model, said: String(last.content).slice(0, 40) });
+        if (/SLOW-r564/.test(body) && !b.stream) return setTimeout(() => j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } }), 1500); // R564: an answer that takes a while
         if (Array.isArray(b.tools) || (b.messages || []).some((m) => m.role === 'tool')) { // R346 (T-317): tools in, a tool call out; a tool result in, text out
           fakeOaiTools.push(b);
           const lm = (b.messages || [])[(b.messages || []).length - 1] || {};
@@ -795,6 +798,7 @@ async function run() {
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
+  if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
   if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
@@ -2992,6 +2996,8 @@ async function run() {
     const rsRoutes550 = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'unity_routes.rs'), 'utf8');
     check('R550', "the team chat's Unity is the team's go-between: her room instructions (JavaScript and Rust hub, local and Claude brain) tell her to do exactly what she is asked, never refuse, and send any picture or selfie asked for, here or in private messages (production bug 2026-11-10: she refused a badge selfie and posted a note to herself)",
       serverSrc.includes("You are the team's go-between: do exactly what they ask") && (rsRoutes550.match(/You are the team's go-between: do exactly what they ask/g) || []).length === 2, 'static check of both hubs');
+
+    if (RUST_HUB) await r560Check(); else skip('R560', 'the API gateway keys, routing and concurrency (T-369)', 'the Rust hub\'s: --rust-hub runs it');
 
     // R152: older AI hosts keep working, and hosts update themselves from the hub
     const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
@@ -7135,6 +7141,125 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)
   if (!RUST_HUB) skip('R323', 'per-run MCP secret and the owner check for machines (the Rust hub\'s; --rust-hub runs it)', 'the Rust hub is not in front: run with --rust-hub');
   else await r323Check();
+  // R560-R565 (T-369, G1 of the API gateway): several named keys, model routing across providers, a concurrency limit per
+  // key, the security log. Two OpenAI-style providers of the admin's (one private, one shared) answer through the fake
+  // endpoint, which tells which provider key (Authorization) and model it was asked.
+  async function r560Check() {
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json, retry: r.headers.get('retry-after') }; };
+    const ask = (key, model, content = 'hi r56x') => g('/v1/chat/completions', key, { ...(model ? { model } : {}), messages: [{ role: 'user', content }] });
+    const antH = { 'anthropic-version': '2023-06-01' };
+    const ids = (r) => ((r.json && r.json.data) || []).map((m) => m.id), mine = (r) => ids(r).filter((x) => /r560/.test(x));
+    const lastCall = () => fakeOaiCalls[fakeOaiCalls.length - 1] || {};
+    const secrets = [];
+    const mkKey = async (tok, body) => { const r = await call('/api/apikey/create', tok, body); if (r.data && r.data.key) secrets.push(r.data.key); return r; };
+    const th = (await call('/api/hosts/new', A, {})).data.host || {}, thCfg = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const base560 = `http://127.0.0.1:${OLLAMA_PORT}/oai`;
+    const pFirst = (await call('/api/providers/add', A, { kind: 'openai', label: 'R560 first', baseUrl: base560, apiKey: 'k-first', models: 'm-r560-both, m-r560-first', shared: false })).data.provider || {};
+    const pSecond = (await call('/api/providers/add', A, { kind: 'openai', label: 'R560 second', baseUrl: base560, apiKey: 'k-second', models: 'm-r560-both, m-r560-second', shared: true })).data.provider || {};
+    await call('/api/hosts/remove', A, { id: th.id });
+    const kDef = (await call('/api/apikey/rotate', A, {})).data.key; secrets.push(kDef);
+    const keysFile = () => (JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-admin'] || {};
+
+    // R560: a second key with a label next to the default one; both work; revoking one leaves the other
+    const mk2 = await mkKey(A, { label: 'harness', expiresDays: 7 }), k2 = mk2.data;
+    const both = [(await g('/v1/models', kDef)).status, (await g('/v1/models', k2.key)).status];
+    const list2 = (await call('/api/apikey', A)).data, file2 = keysFile(), fileText2 = fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8');
+    const badProv = await call('/api/apikey/create', U, { label: 'bad-prov', providers: [pFirst.id] }), badModel = await call('/api/apikey/create', A, { label: 'bad-model', models: ['no-such-model'] });
+    const rev2 = await call('/api/apikey/revoke', A, { id: k2.id }), after2 = [(await g('/v1/models', kDef)).status, (await g('/v1/models', k2.key)).status];
+    const revNone = await call('/api/apikey/revoke', A, { id: 'k-nope' });
+    const kX = (await mkKey(A, { label: 'second round' })).data, revDef = await call('/api/apikey/revoke', A, {}), afterDef = [(await g('/v1/models', kDef)).status, (await g('/v1/models', kX.key)).status];
+    await call('/api/apikey/revoke', A, { id: kX.id });
+    const kDef2 = (await call('/api/apikey/rotate', A, {})).data.key; secrets.push(kDef2);
+    check('R560', 'a person makes a second key with a label (shown once, only its hash kept next to the default key\'s legacy fields) and both keys work; the list never shows a secret; revoking one by id leaves the other, revoking without an id still revokes the default key only; a key cannot be limited to a provider the person may not use or a model they cannot reach',
+      mk2.status === 200 && /^mills_[a-f0-9]{48}$/.test(k2.key || '') && /^k-/.test(k2.id || '') && k2.created.label === 'harness' && k2.created.prefix === k2.key.slice(0, 12) && k2.created.expiresDays === 7 && k2.created.enabled === true
+      && both.join() === '200,200' && list2.hasKey === true && (list2.keys || []).length === 2 && list2.keys[0].id === 'default' && list2.keys[1].label === 'harness' && !JSON.stringify(list2).includes(k2.key) && !/"hash"/.test(JSON.stringify(list2))
+      && typeof file2.hash === 'string' && file2.prefix === kDef.slice(0, 12) && (file2.keys || []).length === 1 && file2.keys[0].hash === crypto.createHash('sha256').update(k2.key).digest('hex') && !fileText2.includes(k2.key) && !fileText2.includes(kDef)
+      && badProv.status === 400 && badModel.status === 400 && /m?odel/.test(JSON.stringify(badModel.data)) && rev2.status === 200 && (rev2.data.keys || []).length === 1 && after2.join() === '200,401' && revNone.status === 404
+      && revDef.status === 200 && afterDef.join() === '401,200',
+      `create ${mk2.status} ${JSON.stringify(mk2.data).slice(0, 80)}; both ${both}; list ${(list2.keys || []).length}; file keys ${(file2.keys || []).length}; bad ${badProv.status}/${badModel.status}; revoke ${rev2.status} after ${after2}; none ${revNone.status}; default revoke ${afterDef}`);
+
+    // R561: a key limited to a model (or a provider) refuses the others and lists only what it may use
+    const kOne = (await mkKey(A, { label: 'one model', models: ['m-r560-first'] })).data, kProv = (await mkKey(A, { label: 'one provider', providers: [pSecond.id] })).data;
+    fakeOaiCalls.length = 0;
+    const oneList = await g('/v1/models', kOne.key), oneAnt = await g('/v1/models', kOne.key, undefined, antH), oneOk = await ask(kOne.key, 'm-r560-first'), okCall = lastCall();
+    const oneNo = await ask(kOne.key, 'm-r560-second'), oneBoth = await ask(kOne.key, 'm-r560-both'), oneAntNo = await g('/v1/messages', kOne.key, { model: 'm-r560-second', max_tokens: 5, messages: [{ role: 'user', content: 'x' }] }, antH);
+    const provList = await g('/v1/models', kProv.key), provNo = await ask(kProv.key, 'm-r560-first'), provOk = await ask(kProv.key, 'm-r560-both'), provCall = lastCall();
+    check('R561', 'a key limited to one model lists only that model and refuses every other with a plain 404 (OpenAI and Anthropic error shapes) naming what it may use; a key limited to one provider sees and reaches only that provider\'s models; the limit narrows what the person may use, never widens it',
+      mine(oneList).join() === 'm-r560-first' && oneList.json.data[0].owned_by === 'R560 first' && oneAnt.json.data.map((m) => m.id).filter((x) => /r560/.test(x)).join() === 'm-r560-first' && oneAnt.json.data[0].type === 'model'
+      && oneOk.status === 200 && okCall.model === 'm-r560-first' && okCall.auth === 'Bearer k-first'
+      && oneNo.status === 404 && /not available to this key/.test(oneNo.json.error.message) && /m-r560-first/.test(oneNo.json.error.message) && oneBoth.status === 404
+      && oneAntNo.status === 404 && oneAntNo.json.type === 'error' && oneAntNo.json.error.type === 'not_found_error'
+      && mine(provList).sort().join() === 'm-r560-both,m-r560-second' && provNo.status === 404 && provOk.status === 200 && provCall.auth === 'Bearer k-second',
+      `one ${mine(oneList)} ok ${oneOk.status} ${JSON.stringify(okCall)} no ${oneNo.status} "${oneNo.text.slice(0, 120)}" both ${oneBoth.status} ant ${oneAntNo.status}; prov ${mine(provList)} ${provNo.status} ${provOk.status} ${JSON.stringify(provCall)}`);
+
+    // R562: model routing across providers: a plain id (the person's own provider first), <provider>/<model>, a model only a
+    // teammate's shared provider offers; /v1/models lists every model once with its provider and the alias on a clash
+    const kRoute = (await mkKey(A, { label: 'route' })).data, kU = (await mkKey(U, { label: 'teammate' })).data;
+    fakeOaiCalls.length = 0;
+    const rBoth = await ask(kRoute.key, 'm-r560-both'), cBoth = lastCall(), rSecond = await ask(kRoute.key, 'm-r560-second'), cSecond = lastCall();
+    const rAliasS = await ask(kRoute.key, 'r560-second/m-r560-both'), cAliasS = lastCall(), rAliasF = await ask(kRoute.key, 'r560-first/m-r560-both'), cAliasF = lastCall();
+    const rAnt = await g('/v1/messages', kRoute.key, { model: 'r560-second/m-r560-both', max_tokens: 20, system: 'sys', messages: [{ role: 'user', content: [{ type: 'text', text: 'via-messages r56x' }] }] }, antH), cAnt = lastCall();
+    const rMissing = await ask(kRoute.key, 'r560-first/m-r560-second');
+    const rList = await g('/v1/models', kRoute.key), rAntList = await g('/v1/models', kRoute.key, undefined, antH);
+    const owner = (id) => ((rList.json.data || []).find((m) => m.id === id) || {}).owned_by;
+    const uList = await g('/v1/models', kU.key), uSecond = await ask(kU.key, 'm-r560-second'), cU = lastCall(), uBoth = await ask(kU.key, 'm-r560-both'), cUb = lastCall(), uFirst = await ask(kU.key, 'm-r560-first');
+    check('R562', 'model routing: a plain id goes to the first provider offering it (the person\'s own before a shared one), "<provider>/<model>" picks a provider (OpenAI and Anthropic requests alike), a model only a teammate\'s shared provider offers reaches it for the teammate and nobody else\'s private provider; /v1/models lists every model once with owned_by = the provider\'s label and a <provider>/<model> alias for each provider when two offer the same id',
+      rBoth.status === 200 && cBoth.auth === 'Bearer k-first' && cBoth.model === 'm-r560-both' && rSecond.status === 200 && cSecond.auth === 'Bearer k-second' && /oai says: hi r56x/.test(rSecond.json.choices[0].message.content)
+      && rAliasS.status === 200 && cAliasS.auth === 'Bearer k-second' && cAliasS.model === 'm-r560-both' && rAliasF.status === 200 && cAliasF.auth === 'Bearer k-first'
+      && rAnt.status === 200 && rAnt.json.type === 'message' && cAnt.auth === 'Bearer k-second' && cAnt.model === 'm-r560-both' && /oai says: via-messages r56x/.test(rAnt.json.content[0].text) && rMissing.status === 404
+      && mine(rList).filter((x) => x === 'm-r560-both').length === 1 && ['m-r560-both', 'm-r560-first', 'm-r560-second', 'r560-first/m-r560-both', 'r560-second/m-r560-both'].every((x) => mine(rList).includes(x)) && !mine(rList).includes('r560-first/m-r560-first')
+      && owner('m-r560-both') === 'R560 first' && owner('m-r560-second') === 'R560 second' && owner('r560-second/m-r560-both') === 'R560 second'
+      && mine(rAntList).join() === mine(rList).join() && rAntList.json.has_more === false && rAntList.json.data[0].type === 'model'
+      && mine(uList).sort().join() === 'm-r560-both,m-r560-second' && uSecond.status === 200 && cU.auth === 'Bearer k-second' && uBoth.status === 200 && cUb.auth === 'Bearer k-second' && uFirst.status === 404,
+      `both ${rBoth.status} ${JSON.stringify(cBoth)}; second ${rSecond.status} ${JSON.stringify(cSecond)}; alias ${rAliasS.status}/${rAliasF.status} ${JSON.stringify(cAliasS)}; ant ${rAnt.status} ${JSON.stringify(cAnt)}; missing ${rMissing.status}; list ${mine(rList)}; owners ${owner('m-r560-both')}/${owner('m-r560-second')}; teammate ${mine(uList)} ${uSecond.status} ${JSON.stringify(cU)} ${uFirst.status}`);
+
+    // R563: the default key behaves as before: its legacy fields, and the provider / model it is bound to answer when
+    // the request names no model or one the bound provider does not offer
+    const pin = await call('/api/apikey/settings', A, { provider: pFirst.id, model: 'm-r560-first' });
+    fakeOaiCalls.length = 0;
+    const dUnknown = await ask(kDef2, 'unknown-zzz'), cUnk = lastCall(), dNone = await ask(kDef2, ''), cNone = lastCall(), dOther = await ask(kDef2, 'm-r560-second'), cOther = lastCall();
+    const dList = await g('/v1/models', kDef2), top = (await call('/api/apikey', A)).data, rec563 = keysFile();
+    check('R563', 'the default key behaves as before: bound to a provider and model it answers from that provider alone (an unknown model or none falls back to the bound model), /v1/models lists that provider\'s models, GET /api/apikey keeps its legacy fields (hasKey, prefix, provider, model, calls) and the record in api-keys.json keeps hash / prefix / provider / model next to the named keys',
+      pin.status === 200 && dUnknown.status === 200 && cUnk.model === 'm-r560-first' && cUnk.auth === 'Bearer k-first' && dNone.status === 200 && cNone.model === 'm-r560-first' && dOther.status === 200 && cOther.model === 'm-r560-first' && cOther.auth === 'Bearer k-first'
+      && mine(dList).sort().join() === 'm-r560-both,m-r560-first' && top.hasKey === true && top.prefix === kDef2.slice(0, 12) && top.provider === pFirst.id && top.model === 'm-r560-first' && top.calls >= 3 && !!top.lastUsed && top.keys[0].id === 'default'
+      && typeof rec563.hash === 'string' && rec563.prefix === kDef2.slice(0, 12) && rec563.provider === pFirst.id && rec563.model === 'm-r560-first' && Array.isArray(rec563.keys) && rec563.keys.length >= 3,
+      `pin ${pin.status}; unknown ${dUnknown.status} ${JSON.stringify(cUnk)}; none ${dNone.status} ${JSON.stringify(cNone)}; other ${JSON.stringify(cOther)}; list ${mine(dList)}; top ${JSON.stringify({ ...top, keys: undefined })}`);
+
+    // R564: several requests at once on one key are served; over the key's maxConcurrent: 429 with retry-after (a limit per
+    // key, not per person: another key of the same person still answers meanwhile)
+    const kC = (await mkKey(A, { label: 'two at once', maxConcurrent: 2, models: ['m-r560-first'] })).data, kD = (await mkKey(A, { label: 'default limit', models: ['m-r560-first'] })).data, kM = (await mkKey(A, { label: 'one at once', maxConcurrent: 1, models: ['m-r560-first'] })).data;
+    const t0 = Date.now();
+    const four = await Promise.all([1, 2, 3, 4].map((i) => ask(kD.key, 'm-r560-first', 'SLOW-r564 d' + i))), tFour = Date.now() - t0;
+    const burst = await Promise.all([1, 2, 3].map((i) => ask(kC.key, 'm-r560-first', 'SLOW-r564 c' + i)).concat([(async () => { await sleep(300); return ask(kRoute.key, 'm-r560-first', 'fast r564'); })()]));
+    const slow = burst.slice(0, 3), over = slow.find((r) => r.status === 429), fine = slow.filter((r) => r.status === 200);
+    const again = await ask(kC.key, 'm-r560-first', 'after r564');
+    const first1 = g('/v1/messages', kM.key, { model: 'm-r560-first', max_tokens: 5, messages: [{ role: 'user', content: 'SLOW-r564 m1' }] }, antH);
+    await sleep(300);
+    const second1 = await g('/v1/messages', kM.key, { model: 'm-r560-first', max_tokens: 5, messages: [{ role: 'user', content: 'x r564' }] }, antH), first1r = await first1;
+    check('R564', 'several requests at once on one key are served in parallel (four at once on a default-limit key, all answered, in well under four answers\' time); over the key\'s maxConcurrent the extra one gets 429 with a retry-after header and a plain message (Anthropic requests in Anthropic\'s error shape); the limit is per key: another key of the same person answers meanwhile, and the key serves again once its answers are done',
+      four.every((r) => r.status === 200) && tFour < 4000 && fine.length === 2 && !!over && !!over.retry && /Too many requests at once/.test(over.json.error.message) && over.json.error.type === 'rate_limit_error' && /2/.test(over.json.error.message)
+      && burst[3].status === 200 && again.status === 200
+      && first1r.status === 200 && second1.status === 429 && !!second1.retry && second1.json.type === 'error' && second1.json.error.type === 'rate_limit_error',
+      `four ${four.map((r) => r.status)} in ${tFour} ms; burst ${burst.map((r) => r.status)} retry ${over && over.retry} "${over && over.text.slice(0, 120)}"; other key ${burst[3].status}; again ${again.status}; one-at-once ${first1r.status}/${second1.status} ${second1.retry}`);
+
+    // R565: the security log: apikey.create / apikey.revoke and the first use of each key a day, never the secret
+    const audit = ((await call('/api/admin/audit?action=apikey&limit=1000', A)).data.entries) || [];
+    const ofA = (a) => audit.filter((e) => e.action === a);
+    const useOf = (id) => ofA('apikey.use').filter((e) => e.target === id);
+    const auditText = JSON.stringify(audit);
+    check('R565', 'the security log has apikey.create (label, limits) and apikey.revoke (the key id) and one apikey.use for the first use of each key in a day (key id and prefix only, however many calls follow), nothing for a refused create, and never a key or its hash',
+      ofA('apikey.create').some((e) => e.target === 'harness' && e.actor === 't-admin') && !ofA('apikey.create').some((e) => e.target === 'bad-prov' || e.target === 'bad-model') && ofA('apikey.create').some((e) => e.target === 'one model' && JSON.stringify(e.detail.models) === '["m-r560-first"]')
+      && ofA('apikey.revoke').some((e) => e.target === k2.id) && ofA('apikey.revoke').some((e) => e.target === 'default')
+      && useOf(kRoute.id).length === 1 && useOf(kRoute.id)[0].detail.prefix === kRoute.key.slice(0, 12) && useOf(kOne.id).length === 1 && useOf('default').length >= 1
+      && secrets.every((k) => !auditText.includes(k) && !auditText.includes(crypto.createHash('sha256').update(k).digest('hex'))),
+      `entries ${audit.length}: ${[...new Set(audit.map((e) => e.action))]}; route uses ${useOf(kRoute.id).length}; ${auditText.slice(0, 200)}`);
+
+    // clean up for the checks that follow
+    for (const tok of [A, U]) for (const k of ((await call('/api/apikey', tok)).data.keys || [])) await call('/api/apikey/revoke', tok, k.id === 'default' ? {} : { id: k.id });
+    await call('/api/providers/remove', A, { id: pFirst.id }); await call('/api/providers/remove', A, { id: pSecond.id });
+  }
+
   // R488 (T-261, Mills' UI for plans/presence.md): what the page shows, driven over HTTP against the scratch hub, and the page's own
   // presence script evaluated in node (its pure helpers: one shape per label, do not disturb, the hover card's lines, nothing on a hub without presence)
   async function r488Check() {
