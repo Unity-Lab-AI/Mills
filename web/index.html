@@ -4310,6 +4310,8 @@ function deskUnitySetup() {
   refresh();
 }
 document.addEventListener('DOMContentLoaded', deskUnitySetup); setTimeout(deskUnitySetup, 0);
+// the desktop app tells the hub it is open (every minute): it films this person's looks on its own PC, so the website does not
+if (NATIVE) { const alive = () => { if (me) api('/api/assistant/desk-alive', { method: 'POST' }).catch(() => {}); }; setInterval(alive, 60000); setTimeout(alive, 5000); }
 // YouTube links in a team-chat message (watch?v=, youtu.be/, shorts/, embed/, live/) → the video ids, in order, no duplicates
 function ytIds(text) {
   const out = [];
