@@ -10,6 +10,8 @@
   let layer = null, her = null, x = 0, y = 0, facing = -1, clip = '', moving = null, until = 0, lastOrder = Date.now(), sitting = false, last = 0, running = false;
   const W = () => (layer ? layer.clientWidth : innerWidth), H = () => (layer ? layer.clientHeight : innerHeight);
   const isOn = () => localStorage.getItem(KEY) !== 'false';
+  const PLACE = 'vrDeskUnityPlace';
+  const keep = () => { try { localStorage.setItem(PLACE, JSON.stringify({ fx: x / Math.max(1, W()), fy: y / Math.max(1, H()), facing })); } catch {} };
   const BUILTIN = { ...CLIPS };
   let own = 0, poll = 0, info = { busy: false, step: '' };
   const hub = (p, o) => (typeof window.api === 'function' ? window.api(p, o) : fetch(p, o));
@@ -19,7 +21,8 @@
       const st = await (await hub('/api/assistant/look')).json();
       info = { busy: !!st.busy, step: (st.status && st.status.step) || '', look: (st.status && st.status.look) || '' };
       if (st.busy) watch();
-      if (!st.clips || st.clips.length < 5 || st.stamp === own) return;
+      if (!st.clips || st.clips.length < 5) { if (own) { for (const k of Object.keys(CLIPS)) { if (CLIPS[k] !== BUILTIN[k]) URL.revokeObjectURL(CLIPS[k]); CLIPS[k] = BUILTIN[k]; } own = 0; if (her) { const was = clip; clip = ''; play(was || 'idle'); } } return; }
+      if (st.stamp === own) return;
       const got = {};
       for (const n of st.clips) { const r = await hub('/api/assistant/look-clip?name=' + n + '&t=' + st.stamp); if (!r.ok) return; got[n] = URL.createObjectURL(await r.blob()); }
       for (const [k, v] of Object.entries(got)) { if (CLIPS[k] !== BUILTIN[k]) URL.revokeObjectURL(CLIPS[k]); CLIPS[k] = v; }
@@ -46,7 +49,9 @@
     her.style.cssText = 'position:absolute;bottom:0;height:30vh;max-height:340px;min-height:180px;transform-origin:50% 100%;will-change:left,bottom,transform;filter:drop-shadow(0 6px 10px rgba(0,0,0,.35));user-select:none;pointer-events:none';
     layer.appendChild(her);
     document.body.appendChild(layer);
-    x = W() * 0.8;
+    // where she stands is kept from one visit to the next (fractions of the page, so a resize keeps her place)
+    let p = {}; try { p = JSON.parse(localStorage.getItem(PLACE) || '{}'); } catch {}
+    x = W() * (Number.isFinite(p.fx) ? p.fx : 0.8); y = H() * (Number.isFinite(p.fy) ? p.fy : 0); facing = p.facing === 1 ? 1 : -1;
     play('idle');
     loadOwn();
   }
@@ -75,7 +80,7 @@
     const dt = Math.min(0.1, (now - (last || now)) / 1000); last = now;
     if (moving) {
       const dx = moving.tx - x, dy = moving.ty - y, d = Math.hypot(dx, dy), step = SPEED * dt;
-      if (d <= step) { x = moving.tx; y = moving.ty; moving = null; play('idle'); } else { x += dx / d * step; y += dy / d * step; }
+      if (d <= step) { x = moving.tx; y = moving.ty; moving = null; play('idle'); keep(); } else { x += dx / d * step; y += dy / d * step; }
     } else if (until && Date.now() > until) { until = 0; play('idle'); }
     else if (!sitting && !until && Date.now() - lastOrder > WANDER_MS) { lastOrder = Date.now(); walkTo(x + (Math.random() < 0.5 ? -1 : 1) * (120 + Math.random() * 260), y); }
     draw();
@@ -117,7 +122,7 @@
       case 'go_right_edge': walkTo(W(), y); break;
       case 'sit': moving = null; sitting = true; play('sit'); break;
       case 'wave': case 'dance': moving = null; sitting = false; play(a); until = Date.now() + ONCE_MS; break;
-      case 'turn': facing = -facing; break;
+      case 'turn': facing = -facing; keep(); break;
       default: moving = null; sitting = false; play('idle');
     }
     return true;
@@ -127,5 +132,15 @@
     if (on) { build(); layer.hidden = false; start(); } else if (layer) layer.hidden = true;
   }
   addEventListener('resize', draw);
-  window.webUnity = { order, setOn, isOn, quickMove, newLook, status: () => info, refresh: loadOwn };
+  // Reset: the built-in her at once, in the middle, while a fresh one of herself is filmed
+  async function reset() {
+    for (const k of Object.keys(CLIPS)) { if (CLIPS[k] !== BUILTIN[k]) URL.revokeObjectURL(CLIPS[k]); CLIPS[k] = BUILTIN[k]; }
+    own = 0; moving = null; sitting = false; x = W() / 2; y = 0; facing = -1; keep();
+    if (her) { clip = ''; play('idle'); }
+    const r = await hub('/api/assistant/look', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'failed');
+    info = { busy: true, step: 'starting', look: 'herself' }; watch(); return true;
+  }
+  window.webUnity = { reset, order, setOn, isOn, quickMove, newLook, status: () => info, refresh: loadOwn };
 })();
