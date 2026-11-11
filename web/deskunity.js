@@ -108,7 +108,8 @@
     if (a === 'show') { setOn(true); return true; }
     if (a === 'hide') { setOn(false); return true; }
     if (a === 'do') { a = quickMove(o.look) || ''; if (!a) return false; if (a === 'hide') { setOn(false); return true; } }
-    if (a === 'outfit') { if (o.look) newLook(String(o.look)).catch(() => {}); return true; }
+    // a look from the chat: when this person's desktop app is open, it films it on that PC, so the website does not
+    if (a === 'outfit') { if (o.look) hub('/api/assistant/look').then((r) => r.json()).then((st) => { if (!st.deskApp) return newLook(String(o.look)); }).catch(() => {}); return true; }
     if (!isOn()) return false;
     build(); layer.hidden = false; start();
     lastOrder = Date.now(); until = 0;

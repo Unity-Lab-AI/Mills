@@ -277,6 +277,7 @@ fn companion_clips(app: AppHandle) -> Value {
 static DRESSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LOOK_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LOOK_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+static CUR_LOOK: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// Stop a look being filmed: its Python (and what it started), and the video engine's job for it.
 fn stop_look(pid: u32) {
     #[cfg(windows)] { use std::os::windows::process::CommandExt; let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).creation_flags(0x0800_0000).status(); }
@@ -291,6 +292,9 @@ fn stop_look(pid: u32) {
 fn companion_outfit(app: &AppHandle, look: String) -> R<bool> {
     let look: String = look.chars().filter(|c| !c.is_control()).take(200).collect::<String>().trim().to_string();
     if look.is_empty() { return Err("What should she wear?".into()); }
+    // the same look again while it is being filmed (her reply and the hub both ordered it): nothing restarts
+    { let cur = CUR_LOOK.lock().unwrap_or_else(|e| e.into_inner()); if DRESSING.load(std::sync::atomic::Ordering::SeqCst) && *cur == look { clog(&format!("already filming: {look}")); return Ok(true); } }
+    *CUR_LOOK.lock().unwrap_or_else(|e| e.into_inner()) = look.clone();
     // an order always wins: a look being filmed (her fresh one at start, or an older order) is stopped for it
     let my = LOOK_RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     if let Some(pid) = LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()).take() { clog(&format!("stopping the look being filmed for: {look}")); stop_look(pid); }

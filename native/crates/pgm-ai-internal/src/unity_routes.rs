@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 use crate::hub::{answer, AiHub, Resp};
 use crate::unity::{s, truthy, Unity, ACTS, EMOTIONS, HISTORY_KEEP};
 use crate::unity_brain as brain;
+/// When each person's desktop app last said it is open (POST /api/assistant/desk-alive).
+static DESK_ALIVE: std::sync::LazyLock<Mutex<HashMap<String, std::time::Instant>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 use pgm_identity_internal::Account;
 use pgm_net_internal::http::Req;
 
@@ -131,10 +133,15 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         // Reset (Settings → Desktop Unity): the outfit her pictures kept is forgotten
         "/api/assistant/outfit-forget" if post => { u.forget_outfit(a); answer(200, json!({ "ok": true })) }
-        "/api/assistant/look" if get => match u.engine_json(hub, &format!("{}/companion/status?user={un}", u.image_url), "GET", Value::Null, 15_000).await {
-            Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
-            _ => answer(200, json!({ "ok": false, "clips": [], "busy": false })),
-        },
+        // the desktop app says it is open (every minute): its own PC films that person's looks, so the website does not
+        "/api/assistant/desk-alive" if post => { DESK_ALIVE.lock().unwrap_or_else(|e| e.into_inner()).insert(un.clone(), std::time::Instant::now()); answer(200, json!({ "ok": true })) }
+        "/api/assistant/look" if get => {
+            let desk = DESK_ALIVE.lock().unwrap_or_else(|e| e.into_inner()).get(un).map(|t| t.elapsed() < Duration::from_secs(150)).unwrap_or(false);
+            match u.engine_json(hub, &format!("{}/companion/status?user={un}", u.image_url), "GET", Value::Null, 15_000).await {
+                Ok((st, mut v)) if (200..300).contains(&st) => { v["deskApp"] = json!(desk); answer(200, v) }
+                _ => answer(200, json!({ "ok": false, "clips": [], "busy": false, "deskApp": desk })),
+            }
+        }
         "/api/assistant/look-clip" if get => {
             let name = r.param("name").unwrap_or_default();
             if !["idle", "walk", "sit", "wave", "dance"].contains(&name.as_str()) { return Some(answer(404, json!({ "error": "No such clip." }))); }
