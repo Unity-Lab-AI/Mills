@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.56.3 — 2026-11-10
+
+PATCH: she is described only by what she is.
+
+### Changed
+- **No more "no leather, no tattoos" in what her brain reads** (asked: "dont negative prompt the brain to drop them thats like telling it to use them"): the short call that reads what she wears now only says what to keep (place, pose, action, expression, camera angle, light), and her persona file (gee-pc, the live and dev hubs; host-local, not in git) only says what she looks like, with no list of looks she does not have and no "goth". Both hubs (`bridge/assistant.js` 1.5.2, native pgm-ai-internal).
+
 ## 5.56.2 — 2026-11-10
 
 PATCH: the leather getup is gone for good.
