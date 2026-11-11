@@ -112,6 +112,20 @@ def read_order(look):
         return None
 
 
+def outfit_photo(wear):
+    """How an outfit looks in a photo (colours, material, shape, what it covers), from her brain; "" when it does not answer."""
+    ask = ('A picture engine that has never heard of it must draw a woman wearing: "%s".\nAnswer with JSON only: {"photo": "..."}. '
+           "photo: only the outfit, in one short phrase: its colours, material, shape and what it covers on her body.") % wear
+    try:
+        body = {"model": os.environ.get("UNITY_BRAIN", "unity-brain"), "stream": False, "think": False, "format": "json", "keep_alive": 0,
+                "messages": [{"role": "user", "content": ask}], "options": {"num_predict": 120, "temperature": 0}}
+        req = urllib.request.Request(os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return " ".join(str(json.loads(json.loads(r.read())["message"]["content"]).get("photo") or "").split())[:300].strip(" .,")
+    except Exception:
+        return ""
+
+
 def look_prompt():
     # her own fresh look (the app's start) or an order that names her: her likeness
     if LOOK.startswith("emo hairstyle") or LOOK.lower().startswith("herself"):
@@ -125,7 +139,9 @@ def look_prompt():
     # (her body words drew her in underwear instead of the dress)
     if dressed:
         wear = changes if changes.lower().startswith(("wearing", "in ", "dressed")) else "wearing " + changes
-        return "photo of one 22 year old American woman alone, solo, " + wear + ", " + SELF_FACE
+        # the picture engine draws what it knows: "banana suit" alone drew her in underwear; how it looks gets it on her
+        looks = outfit_photo(changes)
+        return "photo of one 22 year old American woman alone, solo, " + wear + (", " + looks if looks else "") + ", " + SELF_FACE
     return "photo of one 22 year old American woman alone, solo, " + changes + ", fully nude, completely naked, topless, bottomless, " + SELF
 
 

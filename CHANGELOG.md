@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.56.4 — 2026-11-10
+
+PATCH: she wears what she is told, in her pictures and on the desktop, for any outfit.
+
+### Fixed
+- **She actually wears the outfit** (asked: "i asked for a banan suit fo her to wear and she was only in panties in the image and i never saw the secktop Unity uptate to a banana suit", and "now thats going to work for anything right not just bannana suit? this isnt the same issue as the gorilla were u only built in one thing not the actual infinity of options..."): dressed, her picture prompt now puts the outfit first with only her face and hair (her body words drew her in underwear), and her brain says how the outfit looks in a photo (colours, material, shape, what it covers) for a picture engine that does not know its name. Nothing is per outfit: any clothes named go the same way. Both hubs (`bridge/assistant.js` 1.5.3, native pgm-ai-internal) and the desktop look (companion-look.py).
+- **A selfie in clothes changes her desktop self too**: when a picture of her is in clothes someone named and she did not order the change herself, the hub orders it for her desktop self, and her reply says she is changing (direct chat too, where the order goes out at once). Windows and Linux app: vr-desktop rebuilt.
+
 ## 5.56.3 — 2026-11-10
 
 PATCH: she is described only by what she is.
