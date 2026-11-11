@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.55.0 — 2026-11-10
+
+MINOR: Desktop Unity on the website too; she wears what she is told, nude otherwise, and her desktop self takes the order.
+
+### Added
+- **Desktop Unity on the website** (asked: "no it needs to work on both"): on the website she stands on the bottom of the page head to toe like in the app, a layer that never takes a click; Settings → App turns her on or off there and "Tell her" moves her (walk, sit, wave, dance, turn, come here, stop, hide), and @unity orders in the team chat reach her on the page as well as in the app. New looks are filmed by the desktop app on a PC GPU. New `web/deskunity.js` 1.0.0 and her clips in `web/companion/`; `web/sw.js` 1.0.10 (shell v4).
+
+### Fixed
+- **What she wears comes from what you said** (asked: "well i told her to put on a red dress and she was still in leather and all tattoed", "should should be nude first then do her image of shats she is told and up the the desktop thing", and "shiot like this is kinda limiting we cant just list everyhting out that leaves so many loose ends not mentioned it needs to be dynasmic"): for any picture of her, a short call to her brain reads the person's message for clothes they named (none named: fully nude) and keeps only the moment (place, pose, light) from the scene she wrote, so looks or clothes she imagines for herself (leather, tattoos, anything) never reach the picture. No word lists. Both hubs (`bridge/assistant.js` 1.4.7, native pgm-ai-internal).
+- **Her persona no longer describes her as a pale goth in leather and tattoos**: the host-local persona file (not in git) on gee-pc and on the portal now describes the emo girl next door, nude unless told what to wear; the Rust hub's built-in fallback line too.
+- **Her desktop self takes your order at once** (asked: "look at the message i sent her and u tell me how that is any way her bare nude or let alone what i told her to appear as"): an order to change her look was refused without a word while her fresh look of the app start was still filming; now an order always wins: the look being filmed (and its video job) is stopped and yours starts. Windows and Linux app: vr-desktop rebuilt.
+- **Desktop Unity settings show on the website too** (asked: "and sponge is saying he doesnt see the seetings for the desktop Unity nn the website and shit so whats up?", "nopt even the settings for it"): Settings → App always has the Desktop Unity section; on the website it says she lives in the desktop app (Windows or Linux) and its controls work there, and @unity orders in the team chat still reach your desktop app. `web/index.html` 1.43.0.
+
 ## 5.54.5 — 2026-11-10
 
 PATCH: Agent Gen's round-two way of drawing her, whole and nude.

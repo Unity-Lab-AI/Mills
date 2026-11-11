@@ -257,10 +257,26 @@ fn companion_clips(app: AppHandle) -> Value {
 /// A new look: companion-look.py (redraw her base, film her moves, cut them out) runs here, hidden, with the image
 /// engine's Python; she keeps her look until all the new clips are there, then the window swaps them.
 static DRESSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOOK_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+/// Stop a look being filmed: its Python (and what it started), and the video engine's job for it.
+fn stop_look(pid: u32) {
+    #[cfg(windows)] { use std::os::windows::process::CommandExt; let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).creation_flags(0x0800_0000).status(); }
+    #[cfg(not(windows))] { let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status(); }
+    use std::io::Write;
+    if let Ok(mut s) = std::net::TcpStream::connect_timeout(&"127.0.0.1:5127".parse().unwrap(), std::time::Duration::from_secs(2)) {
+        let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = s.write_all(b"POST /abort HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        let _ = std::io::Read::read(&mut s, &mut [0u8; 256]);
+    }
+}
 fn companion_outfit(app: &AppHandle, look: String) -> R<bool> {
     let look: String = look.chars().filter(|c| !c.is_control()).take(200).collect::<String>().trim().to_string();
     if look.is_empty() { return Err("What should she wear?".into()); }
-    if DRESSING.swap(true, std::sync::atomic::Ordering::SeqCst) { return Err("She is still changing; one look at a time.".into()); }
+    // an order always wins: a look being filmed (her fresh one at start, or an older order) is stopped for it
+    let my = LOOK_RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if let Some(pid) = LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()).take() { clog(&format!("stopping the look being filmed for: {look}")); stop_look(pid); }
+    DRESSING.store(true, std::sync::atomic::Ordering::SeqCst);
     let dir = companion_dir(app); let _ = std::fs::create_dir_all(&dir);
     let st = app.state::<App>();
     let python = gpu::start_cmd(&st.host_dir).map(|(p, _, _)| p).unwrap_or_else(|| "python".into());
@@ -274,7 +290,13 @@ fn companion_outfit(app: &AppHandle, look: String) -> R<bool> {
         c.arg(dir.join("companion-look.py")).arg("--look").arg(&look).arg("--base").arg(&base).arg("--out").arg(&dir).current_dir(&dir)
             .stdout(std::process::Stdio::null()).stderr(std::fs::File::create(dir.join("look.log")).map(std::process::Stdio::from).unwrap_or(std::process::Stdio::null()));
         #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
-        let ok = c.status().map(|s| s.success()).unwrap_or(false);
+        let ok = match c.spawn() {
+            Ok(mut ch) => { *LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()) = Some(ch.id()); ch.wait().map(|s| s.success()).unwrap_or(false) }
+            Err(e) => { clog(&format!("outfit could not start: {e}")); false }
+        };
+        // a newer order took over: it reports, not this one
+        if LOOK_RUN.load(std::sync::atomic::Ordering::SeqCst) != my { clog("outfit stopped for a newer one"); return; }
+        *LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()) = None;
         clog(&format!("outfit done: {ok}"));
         DRESSING.store(false, std::sync::atomic::Ordering::SeqCst);
         use tauri::Emitter;
@@ -349,7 +371,7 @@ fn companion_do(app: &AppHandle, what: String) -> R<bool> {
 /// (she shows her last one meanwhile).
 static FRESHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const SELF_LOOK: &str = "emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones";
-fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
+fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) && !DRESSING.load(std::sync::atomic::Ordering::SeqCst) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
 static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 #[tauri::command]
 fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
