@@ -305,6 +305,16 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const aboutHer = (t) => !/\b(of|draw|paint|render|make)\s+(a|an|the|some|my|this|that|his|her)\b/i.test(String(t || '')) || /\b(you|your|yourself|selfie)\b/i.test(String(t || ''));
   // For a picture of her: what the person told her to wear ('' when they named none) and the moment from her scene
   // without any looks or clothes of her own. One short call to her brain; null when it does not answer.
+  // How an outfit looks in a photo (colours, material, shape, what it covers), for a picture engine that does not know
+  // the outfit's name; '' when the brain does not answer.
+  async function outfitPhoto(wear) {
+    const ask = `A picture engine that has never heard of it must draw a woman wearing: "${wear}".\nAnswer with JSON only: {"photo": "..."}. photo: only the outfit, in one short phrase: its colours, material, shape and what it covers on her body.`;
+    try {
+      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000), body: JSON.stringify({ model: LOCAL_MODEL, stream: false, think: false, format: 'json', messages: [{ role: 'user', content: ask }], options: { num_predict: 120, temperature: 0 } }) });
+      if (!r.ok) return '';
+      return String(JSON.parse(((await r.json()).message || {}).content || '{}').photo || '').replace(/[\u0000-\u001f]/g, '').slice(0, 300).trim().replace(/^[.,\s]+|[.,\s]+$/g, '');
+    } catch { return ''; }
+  }
   async function dress(asked, scene) {
     const ask = `Two separate jobs. Answer with JSON only: {"names_clothing": true or false, "wear": "...", "moment": "..."}.\n\n1. Read ONLY this message from a person: "${asked}"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else "".\n\n2. Read this picture description: "${scene}"\nmoment: only the place, pose, action, expression, camera angle and light, in a few words.`;
     try {
@@ -330,8 +340,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     let wear = '';
     if (selfie) { const d = await dress(ci.asked || '', scene); if (d) { wear = d.wear; if (d.moment) scene = d.moment; } }
     const bare = !wear;
-    if (wear) scene = `wearing ${wear}, ${scene}`;
-    const prompt = selfie ? `photo of one 22 year old American woman alone, solo, ${bare ? 'fully nude, completely naked, topless, bottomless, ' : ''}${SELFIE_LOOK}, ${scene}, photorealistic, detailed face, natural light, sharp focus` : scene;
+    // the picture engine draws what it knows: "banana suit" alone drew her in underwear; how it looks gets it on her
+    if (wear) { const looks = await outfitPhoto(wear); scene = `wearing ${wear}${looks ? ', ' + looks : ''}, ${scene}`; }
+    // dressed: the outfit first and only her face and hair (her body words drew her in underwear instead of the outfit)
+    const SELF_FACE = 'emo hairstyle, long straight jet black hair with hot pink streaks and side-swept bangs, bright blue eyes, naturally beautiful with no makeup, fair skin, light freckles, slim figure';
+    const prompt = !selfie ? scene : bare ? `photo of one 22 year old American woman alone, solo, fully nude, completely naked, topless, bottomless, ${SELFIE_LOOK}, ${scene}, photorealistic, detailed face, natural light, sharp focus`
+      : `photo of one 22 year old American woman alone, solo, ${scene}, ${SELF_FACE}, photorealistic, detailed face, natural light, sharp focus`;
     return render(ci, '/txt2img', { prompt, width, height, steps: 30, guidance: 7, negative: 'child, teen, underage, childlike, young girl, two people, multiple people, cropped body, out of frame, cropped feet, cut off legs, raised hand, holding object, extra fingers, missing fingers, fused fingers, mutated hands, deformed hands, black sclera, heavy makeup, white face paint, plastic skin' });
   }
   async function render(ci, route, body) {

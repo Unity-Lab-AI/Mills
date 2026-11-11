@@ -73,6 +73,8 @@ pub struct Unity {
 }
 use pgm_core_internal::json::read_json;
 pub use pgm_core_internal::json::{s_any as s, write_json};
+/// Her face and hair only: her likeness when she is dressed (her body words drew her in underwear instead of the outfit).
+pub const SELF_FACE: &str = "emo hairstyle, long straight jet black hair with hot pink streaks and side-swept bangs, bright blue eyes, naturally beautiful with no makeup, fair skin, light freckles, slim figure";
 pub fn truthy(v: &Value) -> bool { !(v.is_null() || *v == json!(false) || *v == json!(0) || *v == json!("") || *v == json!("false")) }
 fn clean_url(v: &Value, d: &str) -> String { v.as_str().unwrap_or(d).trim_end_matches('/').to_string() }
 
@@ -298,13 +300,34 @@ impl Unity {
         let selfie = truthy(&a["selfie"]) || regex::Regex::new(r"(?i)\b(selfie|unity|myself|herself)\b").unwrap().is_match(&scene);
         let mut wear = String::new();
         if selfie { if let Some((w, m)) = self.dress(hub, &ci.asked, &scene).await { wear = w; if !m.is_empty() { scene = m; } } }
-        let bare = wear.is_empty();
-        let scene = if wear.is_empty() { scene } else { format!("wearing {wear}, {scene}") };
-        let prompt = if selfie { format!("photo of one 22 year old American woman alone, solo, {1}{0}, {scene}, photorealistic, detailed face, natural light, sharp focus", self.selfie_look, if bare { "fully nude, completely naked, topless, bottomless, " } else { "" }) } else { scene };
+        // dressed: the outfit first and only her face and hair (her body words drew her in underwear instead of the outfit),
+        // and her desktop self puts it on too (unless she already ordered it this turn)
+        let prompt = if !selfie { scene } else if wear.is_empty() {
+            format!("photo of one 22 year old American woman alone, solo, fully nude, completely naked, topless, bottomless, {}, {scene}, photorealistic, detailed face, natural light, sharp focus", self.selfie_look)
+        } else {
+            if !ci.media.iter().any(|m| m.starts_with("companion:outfit:") || m.starts_with("companion-sent:outfit")) {
+                let look = format!("wearing {wear}");
+                if ci.out.is_none() { ci.media.push(format!("companion:outfit:0:{}:{}", ci.user, pgm_core_internal::text::urlencode(&look))); } else { ci.send(json!({ "type": "companion", "action": "outfit", "amount": 0, "look": look })); ci.media.push(format!("companion-sent:outfit:{}", pgm_core_internal::text::urlencode(&look))); }
+            }
+            // the picture engine draws what it knows: "banana suit" alone drew her in underwear; how it looks gets it on her
+            let looks = self.outfit_photo(hub, &wear).await.map(|p| format!(", {p}")).unwrap_or_default();
+            format!("photo of one 22 year old American woman alone, solo, wearing {wear}{looks}, {scene}, {SELF_FACE}, photorealistic, detailed face, natural light, sharp focus")
+        };
         self.render(hub, ci, "/txt2img", json!({ "prompt": prompt, "width": w, "height": h, "steps": 30, "guidance": 7, "negative": "child, teen, underage, childlike, young girl, two people, multiple people, cropped body, out of frame, cropped feet, cut off legs, raised hand, holding object, extra fingers, missing fingers, fused fingers, mutated hands, deformed hands, black sclera, heavy makeup, white face paint, plastic skin" })).await
     }
     /// For a picture of her: (what the person told her to wear, "" for nothing named; the moment from her scene without
     /// any looks or clothes of her own). One short call to her brain; None when it does not answer (her scene is kept).
+    /// How an outfit looks in a photo (colours, material, shape, what it covers), from her brain, for a picture engine that
+    /// does not know the outfit's name. None when the brain does not answer.
+    pub async fn outfit_photo(&self, hub: &Arc<dyn AiHub>, wear: &str) -> Option<String> {
+        let ask = format!("A picture engine that has never heard of it must draw a woman wearing: \"{wear}\".\nAnswer with JSON only: {{\"photo\": \"...\"}}. photo: only the outfit, in one short phrase: its colours, material, shape and what it covers on her body.");
+        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 120, "temperature": 0 } });
+        let (st, v) = self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 60_000).await.ok()?;
+        if !(200..300).contains(&st) { return None; }
+        let j: Value = serde_json::from_str(s(&v["message"], "content").trim()).ok()?;
+        let p: String = s(&j, "photo").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().trim_matches(|c: char| c == '.' || c == ',').to_string();
+        if p.is_empty() { None } else { Some(p) }
+    }
     async fn dress(&self, hub: &Arc<dyn AiHub>, asked: &str, scene: &str) -> Option<(String, String)> {
         let ask = format!("Two separate jobs. Answer with JSON only: {{\"names_clothing\": true or false, \"wear\": \"...\", \"moment\": \"...\"}}.\n\n1. Read ONLY this message from a person: \"{asked}\"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else \"\".\n\n2. Read this picture description: \"{scene}\"\nmoment: only the place, pose, action, expression, camera angle and light, in a few words.");
         let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 200, "temperature": 0 } });
@@ -422,7 +445,7 @@ impl Unity {
                 let look: String = if act == "do" { what.clone() } else { s(args, "look").chars().filter(|c| !c.is_control()).take(200).collect() };
                 Ok(if act == "outfit" && look.trim().is_empty() { json!({ "ok": false, "error": "outfit needs look: what she should wear." }) } else if !OK.contains(&act.as_str()) { json!({ "ok": false, "error": format!("Unknown move {act}; one of: {}.", OK.join(", ")) }) }
                    else if ci.out.is_none() { ci.media.push(format!("companion:{act}:{amount}:{}:{}", ci.user, pgm_core_internal::text::urlencode(&look))); json!({ "ok": true, "did": act, "note": "It happens on their desktop when your reply arrives." }) }
-                   else { ci.send(json!({ "type": "companion", "action": act, "amount": amount, "look": look })); json!({ "ok": true, "did": act }) })
+                   else { ci.send(json!({ "type": "companion", "action": act, "amount": amount, "look": look })); if act == "outfit" { ci.media.push(format!("companion-sent:outfit:{}", pgm_core_internal::text::urlencode(&look))); } json!({ "ok": true, "did": act }) })
             }
             "inpaint_image" => Ok(self.edit_image(hub, ci, args, "/inpaint").await),
             "calculate" => Ok(match ut::calculate(&s(args, "expression")) { Ok(v) => json!({ "ok": true, "result": ut::num(v) }), Err(e) => json!({ "ok": false, "error": e }) }),
