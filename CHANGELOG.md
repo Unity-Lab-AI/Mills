@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.57.4 — 2026-11-10
+
+PATCH: the GPU is only used while something asks for it.
+
+### Fixed
+- **Models leave the GPU once the work is done** (asked: "okay once we are done lets make sure it properly unloads my GPU after everything requested is processed it should only load models when its requesting a desktop Unity update or image. not havethem on the GPU at all times"): the image engine never let go of its model after a picture; now it unloads it (and SegFormer, used for writing on pictures) after 2 minutes with nothing asked (`MILLS_GPU_IDLE_S`), and also unloads the video engine's model once that has sat loaded and unused for 2 minutes (a look that was stopped, or a one-off clip for her, used to leave it loaded for good). Her brain's short calls (what she wears, how an outfit looks, whether she is asked to undress) keep the brain only as long as an answer does (`assistant.brainKeepAlive`, 2 minutes) instead of Ollama's 5, and the vision model that describes a photo is unloaded right after. `bridge/image-engine.py`, both hubs (`bridge/assistant.js` 1.6.2, native pgm-ai-internal).
+
 ## 5.57.3 — 2026-11-10
 
 PATCH: two people changing her look at once.
