@@ -190,7 +190,7 @@ impl Unity {
         for b in images {
             let mut said = String::new();
             for m in &models {
-                let body = json!({ "model": m, "stream": false, "think": false, "messages": [{ "role": "user", "content": ask, "images": [b] }], "options": { "num_predict": 160 } });
+                let body = json!({ "model": m, "stream": false, "think": false, "keep_alive": 0, "messages": [{ "role": "user", "content": ask, "images": [b] }], "options": { "num_predict": 160 } });
                 if let Ok((st, v)) = self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 120_000).await { if (200..300).contains(&st) { said = s(&v["message"], "content").trim().to_string(); if !said.is_empty() { break; } } }
             }
             out.push(if said.is_empty() { "(could not see it)".into() } else { said.chars().take(600).collect() });
@@ -336,7 +336,7 @@ impl Unity {
     /// does not know the outfit's name. None when the brain does not answer.
     pub async fn outfit_photo(&self, hub: &Arc<dyn AiHub>, wear: &str) -> Option<String> {
         let ask = format!("A picture engine that has never heard of it must draw a woman wearing: \"{wear}\".\nAnswer with JSON only: {{\"photo\": \"...\"}}. photo: only the outfit, in one short phrase: its colours, material, shape and what it covers on her body.");
-        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 120, "temperature": 0 } });
+        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "keep_alive": crate::unity_brain::brain_keep_alive(&self.a["brainKeepAlive"]), "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 120, "temperature": 0 } });
         let (st, v) = self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 60_000).await.ok()?;
         if !(200..300).contains(&st) { return None; }
         let j: Value = serde_json::from_str(s(&v["message"], "content").trim()).ok()?;
@@ -347,7 +347,7 @@ impl Unity {
     /// it does not answer (she keeps the outfit).
     async fn asks_nude(&self, hub: &Arc<dyn AiHub>, asked: &str) -> bool {
         let ask = format!("Read this message from a person to Unity, a young woman: \"{asked}\"\nAnswer with JSON only: {{\"undressed\": true or false}}. undressed: does it ask to see her naked, nude, topless or undressed?");
-        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 30, "temperature": 0 } });
+        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "keep_alive": crate::unity_brain::brain_keep_alive(&self.a["brainKeepAlive"]), "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 30, "temperature": 0 } });
         match self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 60_000).await {
             Ok((st, v)) if (200..300).contains(&st) => serde_json::from_str::<Value>(s(&v["message"], "content").trim()).map(|j| truthy(&j["undressed"])).unwrap_or(false),
             _ => false,
@@ -357,7 +357,7 @@ impl Unity {
     pub fn forget_outfit(&self, a: &Account) { self.with_store(a, |st| { if let Some(o) = st.as_object_mut() { o.remove("outfit"); } }); }
     async fn dress(&self, hub: &Arc<dyn AiHub>, asked: &str, scene: &str) -> Option<(String, String)> {
         let ask = format!("Two separate jobs. Answer with JSON only: {{\"names_clothing\": true or false, \"wear\": \"...\", \"moment\": \"...\"}}.\n\n1. Read ONLY this message from a person: \"{asked}\"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else \"\".\n\n2. Read this picture description: \"{scene}\"\nmoment: only the place, pose, action, expression, camera angle and light, in a few words.");
-        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 200, "temperature": 0 } });
+        let body = json!({ "model": self.local_model, "stream": false, "think": false, "format": "json", "keep_alive": crate::unity_brain::brain_keep_alive(&self.a["brainKeepAlive"]), "messages": [{ "role": "user", "content": ask }], "options": { "num_predict": 200, "temperature": 0 } });
         let (st, v) = self.engine_json(hub, &format!("{}/api/chat", self.ollama), "POST", body, 60_000).await.ok()?;
         if !(200..300).contains(&st) { return None; }
         let j: Value = serde_json::from_str(s(&v["message"], "content").trim()).ok()?;

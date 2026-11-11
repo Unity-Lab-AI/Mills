@@ -638,10 +638,11 @@ def render_caption(req):
 
 
 def unload():
-    had = _state["t2i"] is not None
+    had = _state["t2i"] is not None or bool(_seg.get("model"))
     for k in ("t2i", "i2i", "inpaint"):
         _state[k] = None
     _state["face"] = False
+    _seg.clear()
     gc.collect()
     try:
         import torch
@@ -771,6 +772,44 @@ def comp_status(user):
     return {"ok": True, "busy": busy, "status": st, "clips": clips, "stamp": int(stamp), "log": "" if busy else err}
 
 
+# --------------------------------------------------------------------------- the GPU only while asked
+# Models are loaded when a picture or a Desktop Unity look asks for them and leave the GPU once nothing has used them
+# for IDLE_S: this engine's own (Stable Diffusion, SegFormer), and the video engine's (Agent Gen's, 127.0.0.1:5127),
+# which a look that was stopped or a one-off clip would otherwise leave loaded.
+IDLE_S = int(os.environ.get("MILLS_GPU_IDLE_S", "120"))
+_last_use = {"t": time.time()}
+
+
+def _idle_reaper():
+    video_idle_since = None
+    while True:
+        time.sleep(15)
+        now = time.time()
+        if (_state["t2i"] is not None or _seg.get("model")) and not _lock.locked() and now - _last_use["t"] > IDLE_S:
+            with _lock:
+                unload()
+        try:
+            with urllib.request.urlopen(VIDEO_URL + "/health", timeout=3) as r:
+                h = json.loads(r.read())
+        except Exception:
+            video_idle_since = None
+            continue
+        if h.get("loaded") and not h.get("busy"):
+            video_idle_since = video_idle_since or now
+            if now - video_idle_since > IDLE_S:
+                try:
+                    urllib.request.urlopen(urllib.request.Request(VIDEO_URL + "/unload", data=b"{}", method="POST"), timeout=30).read()
+                    _log("video engine unloaded (idle)")
+                except Exception:
+                    pass
+                video_idle_since = None
+        else:
+            video_idle_since = None
+
+
+VIDEO_URL = os.environ.get("MILLS_VIDEO_URL", "http://127.0.0.1:5127")
+
+
 # --------------------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     server_version = "Mills-image/1.0"
@@ -858,6 +897,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Size", "%dx%d" % img.size)
         self.end_headers()
         self.wfile.write(body)
+        _last_use["t"] = time.time()
         _log("%s %dx%d seed %d in %.1fs" % (path[1:], img.size[0], img.size[1], seed, secs))
 
 
@@ -873,6 +913,7 @@ def main():
     CKPT, DEVICE_ARG, OFFLOAD = a.checkpoint, a.device, not a.no_offload
     if a.preload:
         _load()
+    threading.Thread(target=_idle_reaper, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     _log("serving on 127.0.0.1:%d  checkpoint=%s  present=%s" % (a.port, os.path.basename(CKPT), os.path.exists(CKPT)))
     try:
