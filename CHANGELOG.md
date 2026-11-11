@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.57.1 — 2026-11-10
+
+PATCH: the docs say what she does now.
+
+### Changed
+- **Docs brought up to date** (asked: "in mean time make sure docs are all updated properly and nothing is stale"): the README's Unity section no longer points at `assistant.selfieLook` or says there is no negative prompt or that her brain sees photos; it now covers how pictures of her are made (her built-in likeness, clothes read from your words, nude otherwise, the outfit kept until changed or reset), the vision model that describes photos, GIFs / web pictures / emojis, writing on pictures, her persona and uncensored brain, Desktop Unity in the app and on the website (looks, persistence, Reset), and the weekly cap's freshness rule; `native/README.md` covers Desktop Unity in vr-desktop and windowless starts on Windows; the pgm-ai-internal README lists the new Unity parts. The host-local regression checklist corrects R68 / R69 and adds R548–R561.
+
 ## 5.57.0 — 2026-11-10
 
 MINOR: a Reset for Desktop Unity, and she stays as she is from one session to the next.
