@@ -47,7 +47,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const IMAGES_DIR = path.join(MILLS_DIR, 'Images'); // Images/<username>/<id>.png (private) and Images/room/<id>.png (team chat); gitignored
   // Her look in pictures, added after the scene she writes so the moment leads (the engine encodes
   // long prompts in pieces, so neither the scene nor her look is cut).
-  const SELFIE_LOOK = A.selfieLook || '25 year old emo goth woman, black hair with hot pink streaks';
+  const SELFIE_LOOK = A.selfieLook || 'emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones';
   const MAX_ROUNDS = 6, MAX_RESULT = 3000, HISTORY_KEEP = 40;
 
   // ---------- host services: Ollama + the local model (started on demand, survives hub restarts) ----------
@@ -245,8 +245,8 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     }
     throw new Error('Too many redirects.');
   }
-  async function gifSearch(q, page) {
-    const r = await fetch(`${GIF_URL}?q=${encodeURIComponent(q)}&qft=+filterui:photo-animatedgif&first=${1 + page * GIF_PAGE}&form=IRFLTR`, { headers: UA, signal: AbortSignal.timeout(12000) });
+  async function gifSearch(q, page, gif = true) {
+    const r = await fetch(`${GIF_URL}?q=${encodeURIComponent(q)}${gif ? '&qft=+filterui:photo-animatedgif' : ''}&first=${1 + page * GIF_PAGE}&form=IRFLTR`, { headers: UA, signal: AbortSignal.timeout(12000) });
     if (!r.ok) throw new Error('GIF search answered ' + r.status);
     const html = await r.text(), found = [];
     for (const m of html.matchAll(/\sm="([^"]+)"/g)) {
@@ -257,12 +257,12 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     }
     return found;
   }
-  async function findGif(ci, a) {
+  async function findGif(ci, a, gif = true) {
     const q = String(a.query || '').trim().slice(0, 200);
     if (!q) return { ok: false, error: 'What GIF? Give a query.' };
-    const g = ci.gif && ci.gif.query === q && (a.more === true || a.more === 'true') ? ci.gif : (ci.gif = { query: q, page: -1, list: [] });
+    const g = ci.gif && ci.gif.query === q && ci.gif.isGif === gif && (a.more === true || a.more === 'true') ? ci.gif : (ci.gif = { query: q, page: -1, list: [], isGif: gif });
     g.page++;
-    const found = await gifSearch(q, g.page);
+    const found = await gifSearch(q, g.page, gif);
     if (!found.length) return { ok: false, error: `No GIFs found for "${q}"${g.page ? ' on that page' : ''}; try other words.` };
     const start = g.list.length;
     g.list.push(...found);
@@ -270,17 +270,31 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     ci.gifLook = thumbs.map((b, i) => (b ? { n: start + i + 1, b } : null)).filter(Boolean);
     return { ok: true, query: q, candidates: found.map((f, i) => ({ n: start + i + 1, title: f.title })),
       next: (ci.vision && ci.gifLook.length ? 'Their first frames are shown to you next, numbered in this order: look at them. ' : '')
-        + 'Post the one that fits with post_gif(n); if none fits, call find_gif again with the same query and more true for the next ones, or other words.' };
+        + `Post the one that fits with ${gif ? 'post_gif' : 'post_image'}(n); if none fits, call ${gif ? 'find_gif' : 'find_image'} again with the same query and more true for the next ones, or other words.` };
   }
   async function postGif(ci, a) {
     const g = ci.gif, n = Number(a.n || a.number || a.choice);
     const pick = g && Number.isInteger(n) && g.list[n - 1];
     if (!pick) return { ok: false, error: 'Call find_gif first, then post_gif with one of its numbers.' };
     let buf; try { buf = await fetchPublic(pick.gif, GIF_MAX); } catch (e) { return { ok: false, error: `That GIF would not download (${e.message}); pick another number.` }; }
-    if (buf.slice(0, 4).toString('latin1') !== 'GIF8') return { ok: false, error: 'That one is not really a GIF; pick another number.' };
+    const isGif = buf.slice(0, 4).toString('latin1') === 'GIF8', isPic = isGif || buf[0] === 0x89 && buf.slice(1, 4).toString('latin1') === 'PNG' || buf[0] === 0xff && buf[1] === 0xd8 || buf.slice(8, 12).toString('latin1') === 'WEBP';
+    if (g.isGif ? !isGif : !isPic) return { ok: false, error: `That one is not really ${g.isGif ? 'a GIF' : 'a picture'}; pick another number.` };
     const ref = savePicture(ci.scope || 'room', buf);
     (ci.images || (ci.images = [])).push(ref);
-    return { ok: true, image: ref, gif: pick.title, shown: 'The GIF is attached to your reply automatically.' };
+    if (!isGif && ci.acct) ci.acct.lastImage = ref;
+    return { ok: true, image: ref, gif: pick.title, shown: 'It is attached to your reply automatically.' };
+  }
+  // Words or drawings on a picture: on her (a body part or piece of clothing, sized to fit there) or a caption.
+  async function writeOnImage(ci, a) {
+    if (!(await ensureImage())) return { ok: false, error: 'The camera app on the host is not starting (image engine down).' };
+    const src = readPicture(ci.acct, a.image);
+    if (!src) return { ok: false, error: 'No picture to write on: make one, or they send one first.' };
+    const text = String(a.text || '').slice(0, 120), shape = String(a.shape || ''), part = String(a.part || '').toLowerCase();
+    if (!text && !shape) return { ok: false, error: 'Give text to write or a shape (heart, star, arrow, x, smiley, tally).' };
+    if (text && (!part || ['top', 'center', 'middle', 'bottom', 'caption'].includes(part))) return render(ci, '/caption', { image: src, text, where: !part || part === 'caption' ? 'bottom' : part, color: String(a.color || '') });
+    const item = { part: part || 'stomach', color: String(a.color || ''), tool: String(a.tool || '') };
+    if (text) item.text = text.slice(0, 24); else item.shape = shape;
+    return render(ci, '/mark', { image: src, items: [item] });
   }
 
   // ---------- images ----------
@@ -288,14 +302,37 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   // A message that asks for a picture (any wording, including one-word asks) and whether it is about her.
   const PIC_WORDS = /\b(pics?|pictures?|photos?|selfies?|images?|snaps?|nudes?|draw|paint|render|show me|send me|let me see|titties|tits|boobs|ass|booty|body)\b/i;
   const wantsPicture = (t) => PIC_WORDS.test(String(t || ''));
-  const aboutHer = (t) => !/(of|draw|paint|render|make)\s+(a|an|the|some|my|this|that|his|her)/i.test(String(t || '')) || /(you|your|yourself|selfie)/i.test(String(t || ''));
+  const aboutHer = (t) => !/\b(of|draw|paint|render|make)\s+(a|an|the|some|my|this|that|his|her)\b/i.test(String(t || '')) || /\b(you|your|yourself|selfie)\b/i.test(String(t || ''));
+  // For a picture of her: what the person told her to wear ('' when they named none) and the moment from her scene
+  // without any looks or clothes of her own. One short call to her brain; null when it does not answer.
+  async function dress(asked, scene) {
+    const ask = `Two separate jobs. Answer with JSON only: {"names_clothing": true or false, "wear": "...", "moment": "..."}.\n\n1. Read ONLY this message from a person: "${asked}"\nnames_clothing: does the message name a garment or outfit for her to wear (a dress, jeans, a bikini, work clothes, a costume...)? Asking for nudes, her body, body parts, a pose or a selfie is NOT clothing: false.\nwear: when names_clothing is true, those clothes in the person's words; else "".\n\n2. Read this picture description: "${scene}"\nmoment: only the place, pose, action, expression, camera angle and light. Drop every word about her looks, body, hair, skin, makeup, tattoos, jewellery and clothes.`;
+    try {
+      const r = await fetch(OLLAMA + '/api/chat', { method: 'POST', signal: AbortSignal.timeout(60000), body: JSON.stringify({ model: LOCAL_MODEL, stream: false, think: false, format: 'json', messages: [{ role: 'user', content: ask }], options: { num_predict: 200, temperature: 0 } }) });
+      if (!r.ok) return null;
+      const j = JSON.parse(((await r.json()).message || {}).content || '');
+      const clean = (x) => String(x || '').replace(/[\u0000-\u001f]/g, '').slice(0, 400).trim().replace(/^[.,\s]+|[.,\s]+$/g, '');
+      return { wear: j.names_clothing === true || j.names_clothing === 'true' ? clean(j.wear) : '', moment: clean(j.moment) };
+    } catch { return null; }
+  }
   async function makeImage(ci, args) {
     if (!(await ensureImage())) return { ok: false, error: 'The camera app on the host is not starting (image engine down).' };
     const shape = String(args.shape || args.orientation || 'square').toLowerCase();
     const [width, height] = /portrait|tall|vertical/.test(shape) ? [576, 1024] : /landscape|wide|horizontal/.test(shape) ? [1024, 576] : [768, 768];
-    const scene = String(args.prompt || '').slice(0, 1000).trim();
-    const prompt = args.selfie ? `${scene}, she is a ${SELFIE_LOOK}, candid photo` : scene;
-    return render(ci, '/txt2img', { prompt, width, height });
+    // slang the picture engine does not know, in the words it does ("tits out" drew her dressed)
+    let scene = String(args.prompt || '').slice(0, 1000).trim();
+    for (const [w, p] of [["tits out","topless, bare breasts"],["titties out","topless, bare breasts"],["boobs out","topless, bare breasts"],["tits","breasts"],["titties","breasts"],["boobs","breasts"],["naked","nude"],["butt naked","fully nude"],["ass out","bare buttocks"],["booty","buttocks"],["nudes","nude photo"]]) scene = scene.replace(new RegExp('\\b' + w.replace(/ /g, '\\s+') + '\\b', 'gi'), p);
+    // her: Agent Gen's way (the likeness and body, then the moment; clothes only if the moment names them)
+    // no clothes named: fully nude (top and bottom); any clothes named: those, and nothing else is added
+    // her, whatever the brain flagged: a scene about her gets her likeness. What she wears comes from what the person
+    // asked (none named: nude), and her scene keeps only the moment, so nothing she imagines about herself gets in.
+    const selfie = args.selfie || /\b(selfie|unity|myself|herself)\b/i.test(scene);
+    let wear = '';
+    if (selfie) { const d = await dress(ci.asked || '', scene); if (d) { wear = d.wear; if (d.moment) scene = d.moment; } }
+    const bare = !wear;
+    if (wear) scene = `wearing ${wear}, ${scene}`;
+    const prompt = selfie ? `photo of one 22 year old American woman alone, solo, ${bare ? 'fully nude, completely naked, topless, bottomless, ' : ''}${SELFIE_LOOK}, ${scene}, photorealistic, detailed face, natural light, sharp focus` : scene;
+    return render(ci, '/txt2img', { prompt, width, height, steps: 30, guidance: 7, negative: 'child, teen, underage, childlike, young girl, two people, multiple people, cropped body, out of frame, cropped feet, cut off legs, raised hand, holding object, extra fingers, missing fingers, fused fingers, mutated hands, deformed hands, black sclera, heavy makeup, white face paint, plastic skin' });
   }
   async function render(ci, route, body) {
     const r = await fetch(IMAGE_URL + route, { method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(300000) });
@@ -450,10 +487,26 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   });
   tool('find_gif', 'Search for GIFs (reactions, memes, moods, anything) to post in the chat; you see the candidates and pick one with post_gif. more true for the next results of the same query.', { query: P('What the GIF should show, e.g. "eye roll", "cat typing"'), more: P('true for the next page of the same query') }, ['query'], (a, s, ci) => findGif(ci, a));
   tool('post_gif', 'Post one of the GIFs find_gif found, by its number. It is attached to your reply.', { n: P('The number of the GIF from find_gif') }, ['n'], (a, s, ci) => postGif(ci, a));
+  const COMPANION = ['do', 'outfit', 'walk_left', 'walk_right', 'up', 'down', 'come_here', 'go_left_edge', 'go_right_edge', 'sit', 'wave', 'dance', 'turn', 'stop', 'stand', 'show', 'hide', 'idle'];
+  tool('companion', "Your little full-body self that stands on the bottom of their VibeRoller desktop app: give it anything to do (do) or anything to look like (look), exactly as they asked. Use it whenever they tell you to do, move, wear or be something on their screen.", { do: P("Anything they want your desktop self to do, in their words: walk to the left, sit on the edge, do a backflip, blow a kiss, anything. Walking and simple moves happen at once; anything new is filmed for it first (a minute or two)."), look: P("For outfit: the whole look exactly as they asked for it, as one plain picture description. She is always herself (herself: the same 22 year old emo American woman with black hair and hot pink streaks) unless they say she should be someone or something else; clothes or a state of dress go on her. Write it in plain visual words (topless, nude, bare breasts, lingerie, ...), never clothes that contradict what they asked."), action: P('Optional: show or hide her') }, [], (a, s, ci) => {
+    const what = String(a.do || '').replace(/[\x00-\x1f]/g, '').slice(0, 300);
+    if (!a.action || what || a.look) a.action = a.look && !what ? 'outfit' : 'do';
+    if (what) a.look = what;
+    const act = String(a.action || '').toLowerCase().replace(/[ -]/g, '_');
+    if (!COMPANION.includes(act)) return { ok: false, error: `Unknown move ${act}; one of: ${COMPANION.join(', ')}.` };
+    const amount = Math.max(0, Math.min(4000, Number(a.amount) || 0)), look = String(a.look || '').replace(/[\x00-\x1f]/g, '').slice(0, 200);
+    if (act === 'outfit' && !look.trim()) return { ok: false, error: 'outfit needs look: what she should wear.' };
+    if (!ci.out) { (ci.media || (ci.media = [])).push(`companion:${act}:${amount}:${ci.acct ? ci.acct.username : ''}:${encodeURIComponent(look)}`); return { ok: true, did: act, note: 'It happens on their desktop when your reply arrives.' }; }
+    ci.out({ type: 'companion', action: act, look, amount: Math.max(0, Math.min(4000, Number(a.amount) || 0)) });
+    return { ok: true, did: act };
+  });
+  tool('find_image', 'Search the web for real photos / pictures of real things (people, places, products, memes); you see the candidates and pick one with post_image. more true for the next results.', { query: P('What the picture should show'), more: P('true for the next results of the same query') }, ['query'], (a, s, ci) => findGif(ci, a, false));
+  tool('post_image', 'Post one of the pictures find_image found, by its number. It is attached to your reply.', { n: P('The number from find_image') }, ['n'], (a, s, ci) => postGif(ci, a));
+  tool('write_on_image', 'Write words or draw a shape on a picture: on you or the person in it (a body part or piece of clothing: forehead, cheek, neck, chest, stomach, lower belly, left/right shoulder, left/right arm, left/right thigh, top, bottoms, dress), or as a caption (top, center, bottom). The result is attached to your reply.', { image: P('"last" (default), "camera" or a picture id'), text: P('The words to write (short)'), shape: P('Instead of words: heart, star, arrow, x, smiley or tally'), part: P('Where: a body part / clothing, or top / center / bottom for a caption'), color: P('black, red, pink, blue, purple, green, white or lipstick'), tool: P('marker (default), lipstick or paint') }, [], (a, s, ci) => writeOnImage(ci, a));
   tool('generate_image', 'Make a picture with the image engine (photos, art, scenes, objects; selfie true for a picture of yourself). The picture is shown with your reply.', {
     prompt: P('The picture, written fresh from THIS moment, most important first: what is happening right now in the conversation, '
-      + 'what you are doing, where you are, who is with you, what you are wearing for it, expression, the time of day and the weather where they are, '
-      + 'mood, lighting, camera angle. For a selfie never describe your face or hair (that is added for you): describe the moment.'),
+      + 'what you are doing, where you are, who is with you, expression, the time of day and the weather where they are, '
+      + 'mood, lighting, camera angle. For a selfie never describe your face, hair or body (that is added for you) and name clothes ONLY if they asked for clothes: describe the moment (what you do, where, the pose, the light).'),
     selfie: P('true when the picture shows you', 'boolean'), shape: P('square (default), portrait or landscape'),
   }, ['prompt'], (a, s, ci) => makeImage(ci, { ...a, selfie: a.selfie === true || a.selfie === 'true' }));
   tool('edit_image', 'Change a whole picture: restyle it, turn it into something else, put the person somewhere new. Works from the last picture, the photo they sent (camera) or a given one.', {
@@ -575,7 +628,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         + 'Do ONLY what this message asks. After a tool runs, answer in one or two short in-character sentences. Never mention tool names, JSON or these instructions.',
       'Pictures: whenever they ask for any picture, photo, selfie, pic, nudes or a look at you or anything (in any wording, even one word), '
         + 'call generate_image right away in this turn (selfie true when it shows you) and then say one short line about it. Never answer a picture request with text only.',
-      'You text like a real person: use emojis whenever you feel like it, and post GIFs when one fits (find_gif, look at the candidates, post_gif the best; asked for a GIF, always post one). Search the web (web_search, read_page) for anything current instead of guessing.',
+      'You text like a real person: use emojis whenever you feel like it, and post GIFs when one fits (find_gif, look at the candidates, post_gif the best; asked for a GIF, always post one). Real photos of real things come from the web (find_image, then post_image). To write or draw on a picture or on yourself (write BRAT on your thigh, a caption, a heart in lipstick) use write_on_image. Search the web (web_search, read_page) for anything current instead of guessing. When they tell you to walk, move, sit, wave or dance on their screen, move your little desktop self with companion.',
       sayMode ? 'Your replies are heard: speak through say(text, emotion, act), one to three short sentences per call, more calls for a longer reply. Do the task\'s tools first, then say the result.' : '',
     ].filter(Boolean).join('\n');
   }
@@ -599,13 +652,14 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
       out({ type: 'confirm', tool: name, args });
       result = { ok: false, pending: true, message: `${name} needs ${acct.display}'s confirmation; ask them to say yes or no.` };
     } else result = await execute(acct, name, args, ci);
-    if ((name === 'generate_image' || name === 'post_gif') && result.ok) out({ type: 'image', ref: result.image });
+    if (['generate_image', 'post_gif', 'post_image', 'write_on_image'].includes(name) && result.ok) out({ type: 'image', ref: result.image });
     if (name === 'say' && args.text) out({ type: 'say', text: String(args.text), emotion: args.emotion || 'neutral', act: args.act || 'statement' });
     out({ type: 'tool_result', name, result });
     return result;
   }
 
   async function runLocal(acct, text, ci, out, signal, opts = {}) {
+    if (!ci.asked) ci.asked = String(text || '').slice(0, 1000);
     const st = await ensureOllama();
     const model = st.model ? LOCAL_MODEL : FALLBACK_MODEL;
     if (!st.up || !model) throw new Error(st.up ? `The local brain (${LOCAL_MODEL}) is not loaded on the AI host yet.` : (VIA_NODE && aiNodes.reason()) || "Unity's brain (Ollama) is not running on the AI host.");
@@ -663,7 +717,9 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
     }
     // Backstop: they clearly asked for a picture and none was made this turn, so make it from their words.
     if (opts.pictures !== false && wantsPicture(text) && !/gif/i.test(text) && !(ci.images || []).length) {
-      const r = await makeImage(ci, { prompt: text.replace(/^\s*@\w+\s*/, ''), selfie: aboutHer(text), shape: 'portrait' }).catch((e) => ({ ok: false, error: e.message }));
+      // the look she was just told to take (her desktop self) is the picture too, in her full words; else theirs
+      const lookM = (ci.media || []).map((m) => /^companion:outfit:[^:]*:[^:]*:(.*)$/.exec(m)).find(Boolean), lookTxt = lookM ? decodeURIComponent(lookM[1]) : '';
+      const r = await makeImage(ci, { prompt: lookTxt || text.replace(/^\s*@\w+\s*/, ''), selfie: aboutHer(text), shape: 'portrait' }).catch((e) => ({ ok: false, error: e.message }));
       out({ type: 'tool', name: 'generate_image', args: { prompt: text, auto: true } });
       out({ type: 'tool_result', name: 'generate_image', result: r });
       if (r.ok) out({ type: 'image', ref: r.image });
@@ -818,6 +874,31 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
         const { client } = await readBody(req);
         const k = await learnClient(acct, client, clientIp(req));
         send(res, 200, { ok: true, tz: k.tz, place: k.place || '' }); return true;
+      }
+      // Desktop Unity on the website: a new look is filmed by the image engine (one at a time, a newer order stops the
+      // one being filmed), then her page fetches the clips from here
+      if (p === '/api/assistant/look' && req.method === 'POST') {
+        const look = String((await readBody(req)).look || '').replace(/[\u0000-\u001f]/g, '').slice(0, 300).trim();
+        if (!look) { send(res, 400, { error: 'What should she look like?' }); return true; }
+        if (!(await ensureImage())) { send(res, 503, { error: 'The image engine on the AI host is not starting.' }); return true; }
+        try { const r = await fetch(IMAGE_URL + '/companion/look', { method: 'POST', body: JSON.stringify({ user: acct.username, look }), signal: AbortSignal.timeout(30000) }); const j = await r.json().catch(() => ({})); send(res, r.ok ? 200 : 502, r.ok ? j : { error: 'Image engine: ' + (j.error || r.status) }); }
+        catch (e) { send(res, 502, { error: 'Image engine: ' + e.message }); }
+        return true;
+      }
+      if (p === '/api/assistant/look' && req.method === 'GET') {
+        try { const r = await fetch(IMAGE_URL + '/companion/status?user=' + encodeURIComponent(acct.username), { signal: AbortSignal.timeout(15000) }); send(res, 200, r.ok ? await r.json() : { ok: false, clips: [], busy: false }); }
+        catch { send(res, 200, { ok: false, clips: [], busy: false }); }
+        return true;
+      }
+      if (p === '/api/assistant/look-clip' && req.method === 'GET') {
+        const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
+        if (!['idle', 'walk', 'sit', 'wave', 'dance'].includes(name)) { send(res, 404, { error: 'No such clip.' }); return true; }
+        try {
+          const r = await fetch(IMAGE_URL + '/companion/clip?user=' + encodeURIComponent(acct.username) + '&name=' + name, { signal: AbortSignal.timeout(60000) });
+          if (!r.ok) { send(res, 404, { error: 'No clip yet.' }); return true; }
+          const b = Buffer.from(await r.arrayBuffer()); res.writeHead(200, { 'Content-Type': 'image/webp', 'Content-Length': b.length, 'Cache-Control': 'private, max-age=600' }); res.end(b);
+        } catch { send(res, 404, { error: 'No clip yet.' }); }
+        return true;
       }
       if (p === '/api/assistant/image' && req.method === 'GET') { // ?ref=<scope>/<id>: room pictures for everyone, private ones for their owner
         const ref = new URL(req.url, 'http://x').searchParams.get('ref') || '';

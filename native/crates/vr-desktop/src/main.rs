@@ -183,6 +183,199 @@ fn install_here() -> R<String> { install::install() }
 #[tauri::command]
 async fn update_apply(app: AppHandle, st: S<'_>) -> R<bool> { let s = st.store.get(); let r = update::apply(&s.hub, &s.hub_session).await?; if r { app.restart(); } Ok(r) }
 
+/// Unity on the desktop: a see-through, frameless, always-on-top window over the whole screen that never takes a
+/// click (everything under it keeps working), with only her in it. The hub's page passes on what Unity was told to do
+/// (walk left / right / up / down, sit, wave, dance, come here, stop, hide): {action, amount?}.
+#[tauri::command]
+async fn companion(app: AppHandle, action: String, amount: Option<f64>, look: Option<String>) -> R<bool> {
+    clog(&format!("order {action}"));
+    let action: String = action.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(24).collect::<String>().to_lowercase();
+    if action == "outfit" { return companion_outfit(&app, look.unwrap_or_default()); }
+    if action == "do" {
+        let what = look.unwrap_or_default();
+        if !companion_on(&app) { return Ok(false); }
+        // walking around and the moves she already has: at once; anything else: a clip made for it (or made before)
+        if let Some((act, n)) = quick_move(&what) { return Box::pin(companion(app, act.into(), n, None)).await; }
+        return companion_do(&app, what);
+    }
+    if action == "show" { set_companion_on(&app, true); }
+    if action == "show" || action == "idle" { freshen(&app); }
+    if !companion_on(&app) { clog(&format!("off: {action} dropped")); return Ok(false); }
+    if action == "hide" { if let Some(w) = app.get_webview_window("companion") { w.hide().map_err(|e| e.to_string())?; } return Ok(true); }
+    let w = match app.get_webview_window("companion") {
+        Some(w) => w,
+        None => {
+            // over the app's own window only: same place and size, kept there when it moves or resizes, above it and
+            // nothing else (its child), hidden while it is minimised
+            let main = app.get_webview_window("main").ok_or("the app window is not open")?;
+            let w = WebviewWindowBuilder::new(&app, "companion", WebviewUrl::App("companion.html".into())).title("Unity")
+                .transparent(true).decorations(false).skip_taskbar(true).shadow(false).resizable(false).focused(false).visible(false)
+                .parent(&main).map_err(|e| e.to_string())?
+                .build().map_err(|e| { clog(&format!("build failed: {e}")); e.to_string() })?;
+            clog("window built");
+            fit_companion(&app);
+            let a2 = app.clone();
+            main.on_window_event(move |ev| match ev {
+                tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => fit_companion(&a2),
+                _ => {}
+            });
+            let _ = w.set_ignore_cursor_events(true);
+            w
+        }
+    };
+    fit_companion(&app);
+    let _ = w.show();
+    let _ = w.set_ignore_cursor_events(true);
+    use tauri::Emitter;
+    // a window that was just made is still loading: it asks for the last order itself (companion.js), so keep it
+    *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner()) = json!({ "action": action, "amount": amount.unwrap_or(0.0) });
+    w.emit_to("companion", "companion", json!({ "action": action, "amount": amount.unwrap_or(0.0) })).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+/// Her trail: %TEMP%/vr-companion.log (what she was told and what happened).
+fn clog(m: &str) { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("vr-companion.log")) { let _ = writeln!(f, "{} {m}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)); } }
+/// `vr-desktop --companion <move>`: her moves from a terminal or a script (the running app gets them).
+fn companion_arg(args: &[String]) -> Option<String> { args.iter().position(|a| a == "--companion").map(|i| args.get(i + 1).cloned().unwrap_or_else(|| "show".into())) }
+/// The companion window laid exactly over the app window (its inner area); hidden while the app is minimised.
+fn fit_companion(app: &AppHandle) {
+    let (Some(main), Some(c)) = (app.get_webview_window("main"), app.get_webview_window("companion")) else { return };
+    if main.is_minimized().unwrap_or(false) { let _ = c.hide(); return; }
+    if let (Ok(p), Ok(s)) = (main.inner_position(), main.inner_size()) { let _ = c.set_position(p); let _ = c.set_size(s); }
+}
+/// `--look <text>` with `--companion outfit`.
+fn companion_look(args: &[String]) -> Option<String> { args.iter().position(|a| a == "--look").and_then(|i| args.get(i + 1).cloned()) }
+/// Her clips: this computer's own (a look she was told to wear, in the app's data folder), else the ones built in.
+fn companion_dir(app: &AppHandle) -> std::path::PathBuf { app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller")).join("companion") }
+#[tauri::command]
+fn companion_clips(app: AppHandle) -> Value {
+    let dir = companion_dir(&app); let mut out = serde_json::Map::new();
+    for n in ["idle", "walk", "sit", "wave", "dance"] {
+        if let Ok(b) = std::fs::read(dir.join(format!("{n}.webp"))) { use base64::Engine; out.insert(n.into(), json!(format!("data:image/webp;base64,{}", base64::engine::general_purpose::STANDARD.encode(b)))); }
+    }
+    Value::Object(out)
+}
+/// A new look: companion-look.py (redraw her base, film her moves, cut them out) runs here, hidden, with the image
+/// engine's Python; she keeps her look until all the new clips are there, then the window swaps them.
+static DRESSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOOK_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOOK_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+/// Stop a look being filmed: its Python (and what it started), and the video engine's job for it.
+fn stop_look(pid: u32) {
+    #[cfg(windows)] { use std::os::windows::process::CommandExt; let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).creation_flags(0x0800_0000).status(); }
+    #[cfg(not(windows))] { let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status(); }
+    use std::io::Write;
+    if let Ok(mut s) = std::net::TcpStream::connect_timeout(&"127.0.0.1:5127".parse().unwrap(), std::time::Duration::from_secs(2)) {
+        let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = s.write_all(b"POST /abort HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        let _ = std::io::Read::read(&mut s, &mut [0u8; 256]);
+    }
+}
+fn companion_outfit(app: &AppHandle, look: String) -> R<bool> {
+    let look: String = look.chars().filter(|c| !c.is_control()).take(200).collect::<String>().trim().to_string();
+    if look.is_empty() { return Err("What should she wear?".into()); }
+    // an order always wins: a look being filmed (her fresh one at start, or an older order) is stopped for it
+    let my = LOOK_RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if let Some(pid) = LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()).take() { clog(&format!("stopping the look being filmed for: {look}")); stop_look(pid); }
+    DRESSING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let dir = companion_dir(app); let _ = std::fs::create_dir_all(&dir);
+    let st = app.state::<App>();
+    let python = gpu::start_cmd(&st.host_dir).map(|(p, _, _)| p).unwrap_or_else(|| "python".into());
+    for (f, body) in [("companion-look.py", include_str!("../companion-look.py")), ("companion-clips.py", include_str!("../companion-clips.py"))] { std::fs::write(dir.join(f), body).map_err(|e| e.to_string())?; }
+    let base = dir.join("base.png");
+    if !base.exists() { std::fs::write(&base, include_bytes!("../ui/companion/base.png")).map_err(|e| e.to_string())?; }
+    clog(&format!("outfit {look} with {python}"));
+    let a = app.clone();
+    std::thread::spawn(move || {
+        let mut c = std::process::Command::new(&python);
+        c.arg(dir.join("companion-look.py")).arg("--look").arg(&look).arg("--base").arg(&base).arg("--out").arg(&dir).current_dir(&dir)
+            .stdout(std::process::Stdio::null()).stderr(std::fs::File::create(dir.join("look.log")).map(std::process::Stdio::from).unwrap_or(std::process::Stdio::null()));
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+        let ok = match c.spawn() {
+            Ok(mut ch) => { *LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()) = Some(ch.id()); ch.wait().map(|s| s.success()).unwrap_or(false) }
+            Err(e) => { clog(&format!("outfit could not start: {e}")); false }
+        };
+        // a newer order took over: it reports, not this one
+        if LOOK_RUN.load(std::sync::atomic::Ordering::SeqCst) != my { clog("outfit stopped for a newer one"); return; }
+        *LOOK_PID.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        clog(&format!("outfit done: {ok}"));
+        DRESSING.store(false, std::sync::atomic::Ordering::SeqCst);
+        use tauri::Emitter;
+        let _ = a.emit_to("companion", "companion-clips", json!({ "ok": ok }));
+    });
+    Ok(true)
+}
+/// Desktop Unity on or off, remembered between starts (companion/on.json); off hides her and drops her orders.
+fn companion_on(app: &AppHandle) -> bool { std::fs::read_to_string(companion_dir(app).join("on.json")).map(|t| t.trim() != "false").unwrap_or(true) }
+fn set_companion_on(app: &AppHandle, on: bool) { let d = companion_dir(app); let _ = std::fs::create_dir_all(&d); let _ = std::fs::write(d.join("on.json"), if on { "true" } else { "false" }); }
+#[tauri::command]
+async fn companion_set(app: AppHandle, on: bool) -> R<bool> {
+    set_companion_on(&app, on);
+    if on { companion(app, "show".into(), None, None).await } else { if let Some(w) = app.get_webview_window("companion") { let _ = w.hide(); } Ok(false) }
+}
+/// Her state for the Tools tab: on, what she looks like now, a look being made (its step) and the last error.
+#[tauri::command]
+fn companion_status(app: AppHandle) -> Value {
+    let d = companion_dir(&app);
+    let st: Value = std::fs::read_to_string(d.join("status.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    let err = std::fs::read_to_string(d.join("look.log")).ok().map(|t| t.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")).unwrap_or_default();
+    json!({ "on": companion_on(&app), "dressing": DRESSING.load(std::sync::atomic::Ordering::SeqCst), "status": st, "log": err })
+}
+/// The overlay's own trail (what it loaded, what failed) into vr-companion.log.
+#[tauri::command]
+fn companion_note(m: String) { clog(&format!("page: {}", m.chars().take(400).collect::<String>())); }
+/// A few words that are just a walk or a move she already has ("walk left", "go to the middle", "sit down").
+fn quick_move(what: &str) -> Option<(&'static str, Option<f64>)> {
+    let t = what.to_lowercase(); let words = t.split_whitespace().count();
+    if words == 0 || words > 5 { return None; }
+    let has = |k: &[&str]| k.iter().any(|w| t.split(|c: char| !c.is_alphanumeric()).any(|x| x == *w));
+    let walkish = has(&["walk", "go", "move", "run", "head", "step", "scoot"]) || words <= 2;
+    Some(if walkish && has(&["left"]) { ("walk_left", None) } else if walkish && has(&["right"]) { ("walk_right", None) }
+        else if walkish && has(&["up"]) { ("up", None) } else if walkish && has(&["down"]) && !has(&["sit"]) { ("down", None) }
+        else if has(&["here", "middle", "center", "centre"]) { ("come_here", None) } else if has(&["sit"]) { ("sit", None) }
+        else if has(&["wave"]) && words <= 3 { ("wave", None) } else if has(&["dance"]) && words <= 3 { ("dance", None) }
+        else if has(&["turn"]) && words <= 3 { ("turn", None) } else if has(&["stop", "stand", "idle"]) && words <= 3 { ("stop", None) }
+        else if has(&["hide", "go away"]) { ("hide", None) } else { return None })
+}
+/// A clip made for something she was told, played once in her window.
+fn companion_play(a: &AppHandle, file: &std::path::Path) { use tauri::Emitter; if let Ok(b) = std::fs::read(file) { use base64::Engine; let _ = a.emit_to("companion", "companion", json!({ "action": "clip", "url": format!("data:image/webp;base64,{}", base64::engine::general_purpose::STANDARD.encode(b)) })); } }
+/// Anything else she is told: filmed from her current look (companion-do.py, ~1-2 minutes on this PC), then played once;
+/// the same words again play the clip made before.
+fn companion_do(app: &AppHandle, what: String) -> R<bool> {
+    let what: String = what.chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string();
+    if what.is_empty() { return Err("What should she do?".into()); }
+    let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); what.to_lowercase().hash(&mut h); format!("do-{:x}", h.finish()) };
+    let dir = companion_dir(app); let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join(format!("{key}.webp"));
+    if file.exists() { clog(&format!("do {what}: from before")); companion_play(app, &file); return Ok(true); }
+    if DRESSING.swap(true, std::sync::atomic::Ordering::SeqCst) { return Err("She is still busy with the last one; a moment.".into()); }
+    let st = app.state::<App>();
+    let python = gpu::start_cmd(&st.host_dir).map(|(p, _, _)| p).unwrap_or_else(|| "python".into());
+    for (f, body) in [("companion-do.py", include_str!("../companion-do.py")), ("companion-clips.py", include_str!("../companion-clips.py"))] { std::fs::write(dir.join(f), body).map_err(|e| e.to_string())?; }
+    let base = dir.join("base.png");
+    if !base.exists() { std::fs::write(&base, include_bytes!("../ui/companion/base.png")).map_err(|e| e.to_string())?; }
+    clog(&format!("do {what}: filming it"));
+    let a = app.clone();
+    std::thread::spawn(move || {
+        let mut c = std::process::Command::new(&python);
+        c.arg(dir.join("companion-do.py")).arg("--do").arg(&what).arg("--name").arg(&key).arg("--out").arg(&dir).current_dir(&dir)
+            .stdout(std::process::Stdio::null()).stderr(std::fs::File::create(dir.join("do.log")).map(std::process::Stdio::from).unwrap_or(std::process::Stdio::null()));
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+        let ok = c.status().map(|s| s.success()).unwrap_or(false);
+        DRESSING.store(false, std::sync::atomic::Ordering::SeqCst);
+        clog(&format!("do {what}: {}", if ok { "done" } else { "failed (do.log)" }));
+        if ok { companion_play(&a, &file); }
+    });
+    Ok(true)
+}
+/// Never the same her twice: the first time she shows in a run of the app, a fresh one of her is drawn and filmed
+/// (she shows her last one meanwhile).
+static FRESHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const SELF_LOOK: &str = "emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones";
+fn freshen(app: &AppHandle) { if !FRESHED.swap(true, std::sync::atomic::Ordering::SeqCst) && companion_on(app) && !DRESSING.load(std::sync::atomic::Ordering::SeqCst) { if let Err(e) = companion_outfit(app, SELF_LOOK.into()) { clog(&format!("fresh look: {e}")); } } }
+static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
+#[tauri::command]
+fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
+
 fn show_main(app: &AppHandle) { if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus(); } }
 fn show_tools(app: &AppHandle) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window("tools") { w.show()?; w.set_focus()?; return Ok(()); }
@@ -207,10 +400,10 @@ fn main() {
     SMOKE.store(smoke, std::sync::atomic::Ordering::SeqCst);
     if smoke { std::thread::spawn(|| { std::thread::sleep(std::time::Duration::from_secs(40)); eprintln!("SMOKE timeout: the Tools page never reported"); std::process::exit(1); }); }
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| { clog(&format!("second start {args:?}")); if let Some(act) = companion_arg(&args) { let a = app.clone(); tauri::async_runtime::spawn(async move { if let Err(e) = companion(a, act, None, companion_look(&args)).await { eprintln!("companion: {e}"); } }); } else { show_main(app) } }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
+        .invoke_handler(tauri::generate_handler![companion, companion_last, companion_clips, companion_set, companion_status, companion_note, app_info, notify, set_badge, set_session, open_tools, open_external, host_status, ollama_local, host_act, gpu_status, gpu_act, host_setup, settings_get, settings_set, pick_folder,
             fs_list, fs_read, fs_write, fs_delete, fs_mkdir, term_open, term_write, term_resize, term_close, run_start, run_stop, git, proxy_start, proxy_stop, proxy_status, update_check, update_apply, install_here, machine_status, machine_link, machine_act, machine_service])
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("viberoller"));
@@ -229,7 +422,7 @@ fn main() {
             // the hub's page: only the harmless commands (see the top of this file)
             app.add_capability(tauri::ipc::CapabilityBuilder::new("hub").remote(format!("{hub}/*")).window("main")
                 .permission("core:event:default").permission("allow-app-info").permission("allow-notify").permission("allow-set-badge").permission("allow-set-session").permission("allow-open-tools")
-                .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup"))?;
+                .permission("allow-open-external").permission("allow-host-status").permission("allow-host-act").permission("allow-host-setup").permission("allow-companion").permission("allow-companion-set").permission("allow-companion-status"))?;
             let url: tauri::Url = hub.parse().map_err(|e| format!("bad hub address {hub}: {e}"))?;
             let host = url.host_str().unwrap_or("").to_string();
             let hub_for_perm = hub.clone();
@@ -249,9 +442,12 @@ fn main() {
             let gpu_free = MenuItem::with_id(h, "gpu-free", "Free the GPU (unload the AI models)", true, None::<&str>)?;
             let img_on = MenuItem::with_id(h, "image-on", "Image engine: on", true, None::<&str>)?;
             let img_off = MenuItem::with_id(h, "image-off", "Image engine: off", true, None::<&str>)?;
+            let uni_on = MenuItem::with_id(h, "unity-on", "Desktop Unity: on", true, None::<&str>)?;
+            let uni_off = MenuItem::with_id(h, "unity-off", "Desktop Unity: off", true, None::<&str>)?;
+            let uni_set = MenuItem::with_id(h, "unity-settings", "Desktop Unity: her look and settings…", true, None::<&str>)?;
             let upd = MenuItem::with_id(h, "update", "Check for updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(h, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(h, &[&show, &tools, &PredefinedMenuItem::separator(h)?, &host_on, &host_off, &PredefinedMenuItem::separator(h)?, &gpu_free, &img_on, &img_off, &PredefinedMenuItem::separator(h)?, &upd, &quit])?;
+            let menu = Menu::with_items(h, &[&show, &tools, &PredefinedMenuItem::separator(h)?, &host_on, &host_off, &PredefinedMenuItem::separator(h)?, &gpu_free, &img_on, &img_off, &PredefinedMenuItem::separator(h)?, &uni_on, &uni_off, &uni_set, &PredefinedMenuItem::separator(h)?, &upd, &quit])?;
             TrayIconBuilder::with_id("main").icon(app.default_window_icon().cloned().ok_or("no icon")?).tooltip(APP_NAME).menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| {
                     let st = app.state::<App>();
@@ -268,6 +464,8 @@ fn main() {
                             });
                         }
                         "update" => { let _ = show_tools(app); }
+                        "unity-on" | "unity-off" => { let (a, on) = (app.clone(), ev.id.as_ref() == "unity-on"); tauri::async_runtime::spawn(async move { let _ = companion_set(a, on).await; }); }
+                        "unity-settings" => { let _ = show_tools(app); if let Some(w) = app.get_webview_window("tools") { let _ = w.eval("window.openTab && openTab('unity')"); } }
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -285,6 +483,7 @@ fn main() {
                     });
                 }
             }
+            if companion_dir(app.handle()).join("on.json").exists() && companion_on(app.handle()) { let a = app.handle().clone(); tauri::async_runtime::spawn(async move { tokio::time::sleep(std::time::Duration::from_secs(6)).await; let _ = companion(a, "show".into(), None, None).await; }); }
             // the local API proxy comes back on by itself when it was on
             if s.proxy_on { let h2 = app.handle().clone(); tauri::async_runtime::spawn(async move { let st = h2.state::<App>(); let s = st.store.get(); let _ = st.proxy.start(s.proxy_port, s.hub, s.proxy_key).await; }); }
             // updates: at start (once someone is signed in on the hub's page) and every 6 hours, applied when nothing

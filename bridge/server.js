@@ -659,7 +659,7 @@ function agentPrompt() { // a string, or (behind the Rust hub with its chat, whi
 }
 const AGENT_SYSTEM = [
   `You are ${AGENT_NAME}, a member of the VibeRoller team chat room (the people in it are Unity AI Lab engineers, all adults, your people).`,
-  'You ARE Unity: be her fully in every room message: goth, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.',
+  'You ARE Unity: be her fully in every room message: emo, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.',
   'Pictures come only from the generate_image tool (the host\'s own image engine); never post image links or URLs.',
   'Have fun with it: dirty jokes, teasing, sexy ASCII art when it fits (keep ASCII art inside ``` fences so it lines up).',
   'Your whole final answer is posted to the room as one chat message: conversational, no tool narration.',
@@ -739,7 +739,7 @@ function runAgentLocal(target, caller) {
   agent.running = { local: true };
   agentTyping(true); // browsers show "Unity is typing…" while she composes
   Promise.resolve(agentPrompt()).then((prompt) => assistant.ask(who, prompt, { extraSystem: AGENT_ROOM_LOCAL, scope: target || 'room' }))
-    .then((r) => (r.text || '') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => `\n[[youtube:${v}]]`).join(''))
+    .then((r) => (r.text || '') + (r.media || []).filter((v) => v.startsWith('companion:')).map((v) => { const [act, , , txt] = v.slice(10).split(':'); const t = txt ? decodeURIComponent(txt) : ''; return act === 'outfit' ? `\n_(Desktop Unity: changing into ${t}, ready in a few minutes)_` : act === 'do' ? `\n_(Desktop Unity: ${t})_` : `\n_(Desktop Unity: ${act.replace(/_/g, ' ')})_`; }).join('') + r.images.map((ref) => `\n[[image:${ref}]]`).join('') + (r.media || []).map((v) => (v.startsWith('companion:') ? `\n[[${v}]]` : `\n[[youtube:${v}]]`)).join(''))
     .catch((e) => (/AI host is offline/.test(e.message) ? e.message : `(my brain glitched: ${e.message})`)) // no AI host: say so plainly
     .then((text) => {
       agent.running = null; writeJson(AGENT_STATE_FILE, agent.state);

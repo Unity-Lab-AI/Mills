@@ -7,6 +7,161 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.57.0 — 2026-11-11
+
+MINOR: **the API gateway, first slices: several keys, model routing across providers, concurrent requests, and a setup
+page** (T-369; Sponge, 2026-11-10: "someone running an AI host, the team or the individual users that can use the AI …
+should be able to hook that into anything"; plan: team note plans/api-gateway.md). Slices G1 and G4; G2 (raw Anthropic
+passthrough), G3 (OpenAI passthrough, cross-format) and G5 (Responses API) are next.
+
+- **Keys (G1).** A person can make several named keys (`POST /api/apikey/create {label, expiresDays, providers?,
+  models?, maxConcurrent?}`, shown once, `mills_` prefix; `POST /api/apikey/revoke {id}`; `GET /api/apikey` lists them,
+  never a secret). A key can only be narrowed below what its person may use. Add-only data: the legacy key stays the
+  "default" key in `api-keys.json[user]` and the named ones go in a `keys` array the frozen JavaScript hub ignores.
+  Create, revoke and the first use of a key each day go to the security log (`apikey.create`, `apikey.revoke`,
+  `apikey.use`; never the secret).
+- **Model routing (G1).** `model` resolves across every provider the person may use for the API (their own and what
+  others share with the API use and model scope), narrowed by the key: a plain id goes to the first usable provider
+  offering it (the key's providers, then the person's own, then shared; online and uncapped first), `<provider>/<model>`
+  picks one; `GET /v1/models` lists every model once with its provider (and the alias where two providers offer the
+  same id), in both list shapes. The default key keeps answering from its bound provider and model as before.
+- **Concurrency (G1).** The one-request-at-a-time rule is a per-key limit now (`maxConcurrent`, config
+  `api.maxConcurrent`, default 8, at most 64); over it 429 with `retry-after`. A person's stop cancels all their API
+  answers.
+- **Settings → API access (G4).** A keys list with Create and Revoke, and a **Connect a tool** panel with copy-ready
+  setups filled with the hub's address, the key and a model: Claude Code (bash and PowerShell), Codex, jcode, opencode,
+  Cursor / Continue / any OpenAI client, and curl, with a note that a Claude subscription login serves Claude Code
+  only. The setups are `web/apisetup.js` 1.0.0 (pure functions); the old single-key section works as before against an
+  older hub.
+- Checks R560–R565 (keys, limits, routing, the default key, concurrency, the security log) and R568–R570 (the setups,
+  the page, the keys list code; numbered R565–R567 on their branch).
+
+## 5.56.0 — 2026-11-10
+
+MINOR: her new looks on the website too.
+
+### Added
+- **New looks for Desktop Unity on the website** (asked: "get to it"hub filming on someone's PC for it; that's a bigger job."): on the website, "Change her look" in Settings → App and @unity look orders in the team chat are filmed by the image engine on the AI host (the same filming as the desktop app: draw her, film her moves, cut them out), one look at a time, a newer order stopping the one being filmed and the same order from another tab not restarting it; her page swaps to the new clips once they are all there and shows the step meanwhile. New hub routes POST / GET `/api/assistant/look` and GET `/api/assistant/look-clip` (both hubs: `bridge/assistant.js` 1.5.0, native pgm-ai-internal); the image engine (`bridge/image-engine.py`) films into a folder per person (`~/.viberoller/companion-web`); `web/deskunity.js` 1.1.0, `web/index.html` 1.44.0.
+
+### Fixed
+- **A look order keeps her herself unless it makes her something else**: "put on a red dress" drew some other woman in a red dress; now her brain reads the order first: when it turns her into something else (a gorilla, a robot, a celebrity, an elf) the words are the picture, else she is herself (her face and hair) with the changes, dressed in what the order names or nude when it names none. Windows and Linux app: vr-desktop rebuilt (companion-look.py).
+
+## 5.55.0 — 2026-11-10
+
+MINOR: Desktop Unity on the website too; she wears what she is told, nude otherwise, and her desktop self takes the order.
+
+### Added
+- **Desktop Unity on the website** (asked: "no it needs to work on both"): on the website she stands on the bottom of the page head to toe like in the app, a layer that never takes a click; Settings → App turns her on or off there and "Tell her" moves her (walk, sit, wave, dance, turn, come here, stop, hide), and @unity orders in the team chat reach her on the page as well as in the app. New looks are filmed by the desktop app on a PC GPU. New `web/deskunity.js` 1.0.0 and her clips in `web/companion/`; `web/sw.js` 1.0.10 (shell v4).
+
+### Fixed
+- **Regression check R107** follows the round-two way her pictures are prompted ("photo of one 22 year old American woman…", nude when no clothes are asked for) instead of the old prompt that began with the person's own words.
+- **What she wears comes from what you said** (asked: "well i told her to put on a red dress and she was still in leather and all tattoed", "should should be nude first then do her image of shats she is told and up the the desktop thing", and "shiot like this is kinda limiting we cant just list everyhting out that leaves so many loose ends not mentioned it needs to be dynasmic"): for any picture of her, a short call to her brain reads the person's message for clothes they named (none named: fully nude) and keeps only the moment (place, pose, light) from the scene she wrote, so looks or clothes she imagines for herself (leather, tattoos, anything) never reach the picture. No word lists. Both hubs (`bridge/assistant.js` 1.4.7, native pgm-ai-internal).
+- **Her persona no longer describes her as a pale goth in leather and tattoos**: the host-local persona file (not in git) on gee-pc and on the portal now describes the emo girl next door, nude unless told what to wear; the Rust hub's built-in fallback line too.
+- **Her desktop self takes your order at once** (asked: "look at the message i sent her and u tell me how that is any way her bare nude or let alone what i told her to appear as"): an order to change her look was refused without a word while her fresh look of the app start was still filming; now an order always wins: the look being filmed (and its video job) is stopped and yours starts. Windows and Linux app: vr-desktop rebuilt.
+- **Desktop Unity settings show on the website too** (asked: "and sponge is saying he doesnt see the seetings for the desktop Unity nn the website and shit so whats up?", "nopt even the settings for it"): Settings → App always has the Desktop Unity section; on the website it says she lives in the desktop app (Windows or Linux) and its controls work there, and @unity orders in the team chat still reach your desktop app. `web/index.html` 1.43.0.
+
+## 5.54.5 — 2026-11-10
+
+PATCH: Agent Gen's round-two way of drawing her, whole and nude.
+
+### Fixed
+- **Her desktop self has her arms and legs** (asked: "she is a nuget and has no arms or legs"): her built-in clips are re-filmed from a picture of her standing with her arms at her sides and her legs in frame (the old one was cut at the thighs with her arms behind her back). Windows and Linux app: vr-desktop rebuilt; companion-look.py can film from a given still (--still).
+- **Nude means no panties** (asked: "aand she has panties on... if u check round 2 of the prompts use they show how in agent gen how to prompt no panties"): like Agent Gen's round two, no clothing word appears anywhere in her prompts, not even in the negatives (naming panties to avoid them drew panties); with no clothes asked for, her prompt says fully nude, completely naked, topless, bottomless; and she is "one 22 year old American woman alone, solo", full body, with Agent Gen's negatives. Both hubs (`bridge/assistant.js` 1.4.6, native pgm-ai-internal).
+
+## 5.54.4 — 2026-11-10
+
+PATCH: her first look is the new her, and nude means nude.
+
+### Fixed
+- **Her first look on the desktop** (asked: "okay we need to fix her first load image becasue its still a plae egoth chick in leather"): the clips built into the app are re-filmed from the new likeness (no makeup, natural skin, emo hair, no clothes), so she never starts as the pale goth in leather. Windows and Linux app: vr-desktop rebuilt.
+- **Bottomless too**: with no clothes named, her pictures and looks also say no underwear, and underwear is in the negatives, so she is not drawn in panties; desktop looks keep her whole legs in the frame. A new look failed at once before (a wrong prompt line in companion-look.py). Both hubs, `bridge/assistant.js` 1.4.5.
+
+## 5.54.3 — 2026-11-10
+
+PATCH: Unity drawn the way Agent Gen draws her.
+
+### Fixed
+- **Her likeness, like Agent Gen** (asked: "she still a pale ugly boitch not a proper amrican chick next dor emo amrican white girl no make up naturally breautiful; and noraml skin color and she is never doing nudes, are u sure you are doing it like agent gen. as she keeps appearing in leather, we cant prompt and clothing the model does that sdo we only lsit out her bodies features and description from bust size to ass to hips to skin collor and closthing is only added when told what to wear"; "not goth, emo!"; "goth always makes ugley gothics"): her pictures and her desktop self are written as Agent Gen writes them: "photo of a 22 year old American woman", her emo hair (black with hot pink streaks, side-swept bangs), her face with no makeup and natural fair skin with freckles, and her body (bust, waist, hips, butt, legs), then the moment; clothes only when asked for; Agent Gen's steps, guidance and negatives (no one underage, no heavy makeup, no face paint). Her picture tool no longer asks the brain what she wears, and "goth" is gone from her looks and her room voice. With no clothes named she is fully nude, top and bottom (asked: "and bottom less"); any clothes named are what she wears. Both hubs (`bridge/assistant.js` 1.4.4, `bridge/server.js` 4.3.5, native pgm-ai-internal); Windows and Linux app: vr-desktop rebuilt.
+
+## 5.54.2 — 2026-11-10
+
+PATCH: pictures as asked, her desktop self named in her reply, and never the same look twice.
+
+### Fixed
+- **What you ask for in a picture is what you get** (asked: "i told her tiots out and she was fully covered"): slang the picture engine does not know (tits out, naked, ...) is put in the words it does (topless, bare breasts, nude) before it draws, and Unity writes her pictures and looks that way, never with clothes that contradict what was asked. Both hubs.
+- **She says what her desktop self is doing** (asked: "she is not saying or mentioning that she is actually updating the model on desktop Unity"): her team-chat reply ends with one line for it ("Desktop Unity: changing into ..., ready in a few minutes").
+- **Herself unless told otherwise** (asked: "why the fuck is she a gorilla all the time, shoe should always be herself unless told other wise"): a look keeps her as herself and only changes what was asked; the test look left on the host PC is gone.
+- **Never the same look twice** (asked: "its not suppose to use the same one all the time, it should never use the sdame one twice"): every start of the desktop app, and every time she is switched on, draws and films a fresh one of her; meanwhile she shows her last one. `bridge/assistant.js` 1.4.3, `bridge/server.js` 4.3.4, native pgm-ai-internal; Windows and Linux app: vr-desktop rebuilt.
+
+## 5.54.1 — 2026-11-10
+
+PATCH: Unity looks like herself in her selfies.
+
+### Fixed
+- **No more pale ghost** (asked: "she is still appearing as a ghostly pale freak not a noraml random american colledge firl with a emo like appearance"): her selfie look is a 22 year old American college girl with an emo style (black hair with hot pink streaks, side bangs, eyeliner, natural skin tone, light freckles); "goth" made the picture model paint her chalk white. Both hubs; `bridge/assistant.js` 1.4.2, native pgm-ai-internal.
+
+## 5.54.0 — 2026-11-10
+
+MINOR: Unity sees again, and talking to her comes before filming.
+
+### Added
+- **She sees with an uncensored brain** (asked: "She can't see images anymore. The uncensored brain has no vision, so she can't look at photos you send her or at GIF thumbnails."): when her brain cannot see, a vision model on the AI host (assistant.visionModel, else llava:7b, else qwen3-vl:4b) says what a photo or a GIF / picture candidate shows, and she gets that in words: she reacts to what you send and picks GIFs by what they show. Native pgm-ai-internal (unity, unity_brain).
+
+### Changed
+- **Her answer comes first** (asked: "Thinking and filming fight over the graphics card. While a desktop clip is rendering, her chat replies are slow."): when her brain is asked, the AI host stops a Desktop Unity clip being filmed and frees the card; the clip is filmed again once she is done (companion-do.py / companion-look.py wait and retry). Native AI host (host/runner); Windows and Linux app: vr-desktop rebuilt.
+
+### Fixed
+- The 5.53.1 entry lost three names when it was written: its second item is about `bridge/assistant.js` 1.4.1, and its last one means `unity-brain` is rebuilt on qwen3-abliterated and the old one kept as `unity-brain-qwen35`.
+
+## 5.53.1 — 2026-11-10
+
+PATCH: what Unity is told in the team chat reaches her desktop self, and her pictures follow the look.
+
+### Fixed
+- **Team-chat orders reach Desktop Unity** (seen: "[[youtube:companion:outfit:…]]" in the chat): the room reply carried them as a YouTube marker, so the app never got them. Now the chat hides them and the asker's app acts on them. Native pgm-ai-internal (unity_routes).
+- **Her picture follows the look she was told** (asked: "image didnt have tits ourt as instructed"): when she takes a look and no picture was made, the picture is drawn from that full look, not from the few words of the message. Both hubs;  1.4.1.
+- **No more pale ghost**: her selfie look asks for a natural warm skin tone and real skin (asked: "she looks like a ples white ghose freak").
+
+### Changed
+- **Her local brain is uncensored**: on the AI host,  is rebuilt on qwen3-abliterated (tools, no refusals), like Agent Gen's; the old one is kept as . (Host model, not in the repo.)
+
+## 5.53.0 — 2026-11-10
+
+MINOR: Desktop Unity does anything she is told, not a list of moves.
+
+### Changed
+- **Anything, in your words** (asked: "i dont want buttons i want her to be dynamic and accept anything not just random predefined commands"; "when i @Unity i can tell here how to appear right.. its not just a fucking setting"): tell Unity (@Unity in the team chat, or her section) what her desktop self should do or look like, in any words. Walking and simple moves happen at once; anything else is filmed for it from her current look (a minute or two, then played; the same words again replay it). Settings and Tools have a "Tell her" box and a "How she looks" box, no move buttons and no ready-made examples. `web/index.html` 1.42.0, `bridge/assistant.js` 1.4.0, native pgm-ai-internal; Windows and Linux app: vr-desktop rebuilt (companion-do.py).
+
+## 5.52.1 — 2026-11-10
+
+PATCH: Desktop Unity's settings are in the app's Settings.
+
+### Fixed
+- **Desktop Unity in Settings** (asked: "i still dont see any settings for Unity"): Settings → App has a Desktop Unity section inside the desktop app (on / off, how she looks + Change her look, her moves, what she is doing), next to the tray menu and the Tools tab. `web/index.html` 1.41.1; Windows and Linux app: vr-desktop rebuilt (the page may switch her on / off and read her state).
+
+## 5.52.0 — 2026-11-10
+
+MINOR: Desktop Unity gets her switch, her settings and any look you ask for.
+
+### Added
+- **On / off and settings for Desktop Unity** (asked: "where the fuck is her setting and on off switch"): the tray has Desktop Unity: on / off and her look and settings; Tools has a Desktop Unity tab (on / off, how she looks + Change her look, her moves, the progress of a look being made). She stays off until switched on again, also after a restart.
+- **Any look, not only clothes** (asked: "if i want he to be a gorilla she should be or anyhting else i determine"): a look is now drawn fresh from the words ("a gorilla in a business suit", "the same goth girl in a red dress"), then filmed; Unity passes your words as the whole look.
+
+### Fixed
+- **A new look now shows**: the desktop window loads the clips made on this computer at start and when a look is ready (she kept the built-in look before), and reports what it loaded to its log. Windows and Linux app: vr-desktop rebuilt;  1.3.1, native pgm-ai-internal (the companion tool's look).
+
+## 5.51.0 — 2026-11-10
+
+MINOR: Unity on your desktop, writing on pictures, real web photos, and a picture engine that never stays off.
+
+### Added
+- **Unity on the desktop** (asked: "a little stand in fully figured model of Unity head to toe to walkaround the bottom of the application and take commands via talking to Unity so she does what u say ... photorealistic just like agent gen ... not in a windoe so evertyhting is transparent but her over top of the applicaiton"). In the desktop app she stands on the bottom of the app window, head to toe and photorealistic, in a see-through window that lets every click through and follows the app window. Tell Unity (typed or spoken, in her section) to walk left / right / up / down, come here, sit, wave, dance, turn around, stop or hide, and she does it; left alone she strolls a little. Her moves are clips rendered with Agent Gen's video engine and cut out (native/crates/vr-desktop/companion-clips.py rebuilds them). `vr-desktop --companion <move>` works from a terminal. Windows and Linux app: vr-desktop rebuilt. Check: **R553**.
+- **Writing and drawing on pictures** (asked: "how does unity send us images when we tell her to web search or genreate them or edit them and write on them and all of that"): write_on_image puts a caption on any picture, or words / a heart / a star in marker, lipstick or paint on a named part of her (or whoever is in it), sized to fit there, like Agent Gen. Image engine: /caption and /mark. Check: **R551**.
+- **Real photos from the web**: find_image / post_image (she looks at the candidates, posts the one she picks). GIFs (find_gif / post_gif) now work on the live Rust hub too. `bridge/assistant.js` 1.3.0, `web/index.html` 1.41.0, native pgm-ai-internal. Check: **R551**.
+
+### Fixed
+- **The picture engine starts itself** when a picture is asked for and it is not running (it was off, so every picture failed and Unity covered with refusals). Native AI host. Check: **R552**.
+
 ## 5.50.2 — 2026-11-10
 
 PATCH: Unity in the team chat does what she is asked.

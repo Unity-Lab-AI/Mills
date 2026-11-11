@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36";
-pub struct Web { http: reqwest::Client, manual: reqwest::Client, cache: Mutex<HashMap<String, (u64, Value)>>, search: String, youtube: String, private_ok: bool }
+pub struct Web { http: reqwest::Client, manual: reqwest::Client, cache: Mutex<HashMap<String, (u64, Value)>>, search: String, youtube: String, images: String, private_ok: bool }
 /// Where the person is, as far as anyone knows (lat / lon may be unknown).
 #[derive(Clone, Default)]
 pub struct Place { pub lat: Option<f64>, pub lon: Option<f64>, pub place: String, pub country: String, pub locale: String }
@@ -25,7 +25,7 @@ impl Web {
         let _ = pgm_net_internal::client::http_client(Duration::from_secs(10)); // (the TLS provider)
         let b = || reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).user_agent("VibeRoller/1.0 (team app)");
         Web { http: b().build().expect("http"), manual: b().redirect(reqwest::redirect::Policy::none()).build().expect("http"), cache: Mutex::default(),
-            search: a["searchUrl"].as_str().unwrap_or("https://www.bing.com/search").into(), youtube: a["youtubeUrl"].as_str().unwrap_or("https://www.youtube.com/results").into(), private_ok: a["allowPrivateFetch"] == json!(true) }
+            search: a["searchUrl"].as_str().unwrap_or("https://www.bing.com/search").into(), youtube: a["youtubeUrl"].as_str().unwrap_or("https://www.youtube.com/results").into(), images: a["imageSearchUrl"].as_str().or(a["gifSearchUrl"].as_str()).unwrap_or("https://www.bing.com/images/search").into(), private_ok: a["allowPrivateFetch"] == json!(true) }
     }
     /// JSON (or an RSS text) from a URL, kept for `ttl` ms.
     async fn get(&self, url: &str, ttl: u64) -> Result<Value, String> {
@@ -112,6 +112,42 @@ impl Web {
         let bad = |ip: &std::net::IpAddr| match ip { std::net::IpAddr::V4(v) => { let o = v.octets(); v.is_loopback() || v.is_private() || v.is_link_local() || o[0] == 0 || (o[0] == 100 && (64..=127).contains(&o[1])) } std::net::IpAddr::V6(v) => { let s0 = v.segments()[0]; v.is_loopback() || v.is_unspecified() || (s0 & 0xfe00) == 0xfc00 || (s0 & 0xffc0) == 0xfe80 || v.to_ipv4_mapped().map(|m| m.is_loopback() || m.is_private() || m.is_link_local()).unwrap_or(false) } };
         if ips.is_empty() || ips.iter().any(bad) || host.eq_ignore_ascii_case("localhost") { return Err("That address is on a private network; only public pages.".into()); }
         Ok((u, ips.first().copied()))
+    }
+    /// Bing Images (gif = its animated-GIF filter), one page of 6: [{ title, url, thumb }].
+    pub async fn image_search(&self, q: &str, gif: bool, page: usize) -> Result<Vec<Value>, String> {
+        let filter = if gif { "&qft=+filterui:photo-animatedgif" } else { "" };
+        let r = tokio::time::timeout(Duration::from_secs(12), self.http.get(format!("{}?q={}{filter}&first={}&form=IRFLTR", self.images, enc(q), 1 + page * 6)).header("user-agent", UA).header("accept-language", "en-US,en;q=0.8").send()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string())?;
+        if !r.status().is_success() { return Err(format!("Image search answered {}", r.status().as_u16())); }
+        let html = r.text().await.map_err(|e| e.to_string())?;
+        let mut out = vec![];
+        for c in regex::Regex::new(r#"\sm="([^"]+)""#).unwrap().captures_iter(&html) {
+            let Ok(j) = serde_json::from_str::<Value>(&c[1].replace("&quot;", "\"").replace("&amp;", "&")) else { continue };
+            let url = s(&j, "murl"); if !url.starts_with("http") { continue; }
+            let thumb = s(&j, "turl");
+            let title = if s(&j, "t").is_empty() { s(&j, "desc") } else { s(&j, "t") };
+            out.push(json!({ "title": unhtml(&title).chars().take(120).collect::<String>(), "url": url, "thumb": if thumb.starts_with("http") { thumb } else { String::new() } }));
+            if out.len() >= 6 { break; }
+        }
+        Ok(out)
+    }
+    /// A public file's bytes (every redirect hop checked like read_page), at most max bytes.
+    pub async fn fetch_bytes(&self, raw: &str, max: usize) -> Result<Vec<u8>, String> {
+        let (mut u, mut ip) = self.public_url(raw).await?;
+        for _ in 0..4 {
+            let client = match (ip, u.host_str()) {
+                (Some(ip), Some(h)) => reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::none()).resolve(h, std::net::SocketAddr::new(ip, u.port_or_known_default().unwrap_or(443))).build().map_err(|e| e.to_string())?,
+                _ => self.manual.clone(),
+            };
+            let mut r = tokio::time::timeout(Duration::from_secs(15), client.get(u.clone()).header("user-agent", UA).send()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string())?;
+            let st = r.status().as_u16();
+            if (300..400).contains(&st) { if let Some(l) = r.headers().get("location").and_then(|v| v.to_str().ok()) { let next = u.join(l).map_err(|e| e.to_string())?; (u, ip) = self.public_url(next.as_str()).await?; continue; } }
+            if !r.status().is_success() { return Err(format!("it answered {st}")); }
+            let mut buf: Vec<u8> = vec![];
+            let read = async { while let Ok(Some(c)) = r.chunk().await { buf.extend_from_slice(&c); if buf.len() > max { return Err("too big".to_string()); } } Ok(()) };
+            tokio::time::timeout(Duration::from_secs(30), read).await.map_err(|_| "timed out".to_string())??;
+            return Ok(buf);
+        }
+        Err("too many redirects".into())
     }
     pub async fn read_page(&self, raw: &str) -> Result<Value, String> {
         let (mut u, mut ip) = self.public_url(raw).await?;

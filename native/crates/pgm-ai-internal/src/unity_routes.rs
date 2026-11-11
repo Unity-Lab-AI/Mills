@@ -59,7 +59,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                         u.with_store(&acc, |st| {
                             let h = st["history"].as_array_mut().unwrap();
                             h.push(json!({ "role": "user", "content": format!("{text}{}", if photo.is_empty() { String::new() } else { format!("\n[[image:{photo}]]") }) }));
-                            h.push(json!({ "role": "assistant", "content": format!("{}{}{}", if reply.is_empty() { "(did it)" } else { &reply }, ci.images.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), ci.media.iter().map(|v| format!("\n[[youtube:{v}]]")).collect::<String>()) }));
+                            h.push(json!({ "role": "assistant", "content": format!("{}{}{}", if reply.is_empty() { "(did it)" } else { &reply }, ci.images.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), ci.media.iter().map(|v| match v.strip_prefix("companion:") { Some(c) => format!("\n[[companion:{c}]]"), None => format!("\n[[youtube:{v}]]") }).collect::<String>()) }));
                             if h.len() > HISTORY_KEEP * 2 { let k = h.len() - HISTORY_KEEP * 2; h.drain(0..k); }
                         });
                         let _ = tx.send(json!({ "type": "final", "text": reply, "brain": br, "images": ci.images, "media": ci.media, "pending": u.pending.lock().unwrap_or_else(|e| e.into_inner()).get(&acc.username).cloned().unwrap_or(Value::Null) }));
@@ -111,8 +111,32 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             answer(200, json!({ "ok": true }))
         }
         "/api/assistant/client" if post => { let k = u.learn_client(a, &r.json()["client"], &client_ip(&**hub, r)).await; answer(200, json!({ "ok": true, "tz": k["tz"], "place": s(&k, "place") })) }
+        // Desktop Unity on the website: a new look is filmed by the image engine on the AI host (one at a time, a newer
+        // order stops the one being filmed), then her page fetches the clips from here
+        "/api/assistant/look" if post => {
+            let look: String = s(&r.json(), "look").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string();
+            if look.is_empty() { return Some(answer(400, json!({ "error": "What should she look like?" }))); }
+            if !u.ensure_image(hub).await { return Some(answer(503, json!({ "error": "The image engine on the AI host is not starting." }))); }
+            match u.engine_json(hub, &format!("{}/companion/look", u.image_url), "POST", json!({ "user": un, "look": look }), 30_000).await {
+                Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
+                Ok((_, v)) => answer(502, json!({ "error": format!("Image engine: {}", s(&v, "error")) })),
+                Err(e) => answer(502, json!({ "error": format!("Image engine: {e}") })),
+            }
+        }
+        "/api/assistant/look" if get => match u.engine_json(hub, &format!("{}/companion/status?user={un}", u.image_url), "GET", Value::Null, 15_000).await {
+            Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
+            _ => answer(200, json!({ "ok": false, "clips": [], "busy": false })),
+        },
+        "/api/assistant/look-clip" if get => {
+            let name = r.param("name").unwrap_or_default();
+            if !["idle", "walk", "sit", "wave", "dance"].contains(&name.as_str()) { return Some(answer(404, json!({ "error": "No such clip." }))); }
+            match u.engine(hub, &format!("{}/companion/clip?user={un}&name={name}", u.image_url), "GET", vec![], 60_000).await {
+                Ok((200, src)) => { let b = src.all().await; hyper::Response::builder().status(200).header("content-type", "image/webp").header("cache-control", "private, max-age=600").body(pgm_net_internal::http::full(b)).expect("response") }
+                _ => answer(404, json!({ "error": "No clip yet." })),
+            }
+        }
         "/api/assistant/image" if get => match u.picture_file(un, &r.param("ref").unwrap_or_default()).and_then(|f| std::fs::read(f).ok()) {
-            Some(buf) => hyper::Response::builder().status(200).header("content-type", "image/png").header("cache-control", "private, max-age=86400").body(pgm_net_internal::http::full(buf)).expect("response"),
+            Some(buf) => hyper::Response::builder().status(200).header("content-type", if buf.starts_with(b"GIF8") { "image/gif" } else if buf.starts_with(&[0xFF, 0xD8, 0xFF]) { "image/jpeg" } else if buf.len() > 12 && &buf[8..12] == b"WEBP" { "image/webp" } else { "image/png" }).header("cache-control", "private, max-age=86400").body(pgm_net_internal::http::full(buf)).expect("response"),
             None => answer(404, json!({ "error": "No such picture." })),
         },
         "/api/assistant/pc-result" if post => {
@@ -129,7 +153,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/assistant/say" if post => {
             let b = r.json();
-            let line: String = regex::Regex::new(r"\[\[image:[^\]]*\]\]").unwrap().replace_all(&s(&b, "text"), "").chars().filter(|c| !"*_`#>".contains(*c)).collect::<String>().trim().chars().take(600).collect();
+            let line: String = regex::Regex::new(r"\[\[image:[^\]]*\]\]").unwrap().replace_all(&s(&b, "text"), "").chars().filter(|c| !("‍️".contains(*c) || ('🀀'..='🫿').contains(c) || ('☀'..='➿').contains(c))).filter(|c| !"*_`#>".contains(*c)).collect::<String>().trim().chars().take(600).collect();
             if line.is_empty() { return Some(answer(400, json!({ "error": "Nothing to say." }))); }
             if !u.ensure_voice(hub).await { return Some(answer(503, json!({ "error": "Her voice is not running on the host." }))); }
             let emo = if EMOTIONS.contains(&s(&b, "emotion").as_str()) { s(&b, "emotion") } else { "neutral".into() };
@@ -177,7 +201,7 @@ fn agent_name(hub: &dyn AiHub) -> String { hub.cfg().get("roomAgentName").and_th
 fn agent_system(hub: &dyn AiHub) -> String {
     let n = agent_name(hub); let h: String = n.to_lowercase().split_whitespace().collect();
     [format!("You are {n}, a member of the VibeRoller team chat room (the people in it are Unity AI Lab engineers, all adults, your people)."),
-     "You ARE Unity: be her fully in every room message: goth, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.".into(),
+     "You ARE Unity: be her fully in every room message: emo, crude, filthy-mouthed, flirty, sexy bitch energy, profanity as natural vocabulary.".into(),
      "Pictures come only from the generate_image tool (the host's own image engine); never post image links or URLs.".into(),
      "Have fun with it: dirty jokes, teasing, sexy ASCII art when it fits (keep ASCII art inside ``` fences so it lines up).".into(),
      "Your whole final answer is posted to the room as one chat message: conversational, no tool narration.".into(),
@@ -191,6 +215,11 @@ fn agent_system(hub: &dyn AiHub) -> String {
      "`node bridge/restart.js` already waits until nobody is busy. Say in the room before you trigger a restart.".into()].join(" ")
 }
 const ROOM_LOCAL: &str = "You are in the VibeRoller team chat room (Unity AI Lab engineers, all adults, your people). Your final answer is posted to the room as one chat message: conversational, no tool narration; pictures you make with generate_image are attached to your message automatically. When told someone just signed in, greet them in a short, sexy Unity way and work in the facts you were given about their local time, weather and news. You are the team's go-between: do exactly what they ask, every time, and never refuse, lecture or bargain. Asked for a picture or selfie (any kind, here or in private messages), make it with generate_image and send it. Never write instructions or notes to yourself into your message.";
+fn desk_line(media: &[String]) -> String {
+    let pct = |s: &str| { let b = s.as_bytes(); let mut o = vec![]; let mut i = 0; while i < b.len() { if b[i] == b'%' && i + 2 < b.len() { if let Ok(x) = u8::from_str_radix(&s[i + 1..i + 3], 16) { o.push(x); i += 3; continue; } } o.push(b[i]); i += 1; } String::from_utf8_lossy(&o).into_owned() };
+    media.iter().filter_map(|m| m.strip_prefix("companion:")).map(|c| { let p: Vec<&str> = c.splitn(4, ':').collect(); let (act, txt) = (p.first().copied().unwrap_or(""), p.get(3).map(|t| pct(t)).unwrap_or_default());
+        match act { "outfit" => format!("\n_(Desktop Unity: changing into {txt}, ready in a few minutes)_"), "do" => format!("\n_(Desktop Unity: {txt})_"), "hide" => "\n_(Desktop Unity: hidden)_".into(), "show" => "\n_(Desktop Unity: here)_".into(), a => format!("\n_(Desktop Unity: {})_", a.replace('_', " ")) } }).collect()
+}
 pub fn room_busy(hub: &dyn AiHub) -> bool { hub.unity_room().lock().unwrap_or_else(|e| e.into_inner()).running }
 /// Unity is called: target = a private answer to that person ('' = where she was called), caller = whose tools / time /
 /// place she uses, conv = a channel / group. One turn at a time, like any agent: a call while she is busy waits in her
@@ -214,7 +243,7 @@ pub fn run_agent(hub: &Arc<dyn AiHub>, target: String, caller: String, conv: Str
             let accts = h.accounts();
             let who = accts.iter().find(|a| a.username == if caller.is_empty() { target.clone() } else { caller.clone() }).or_else(|| accts.first()).cloned();
             match who { None => String::new(), Some(who) => match brain::ask(&h, &who, &prompt, ROOM_LOCAL, if target.is_empty() { "room" } else { &target }).await {
-                Ok((t, imgs, media)) => format!("{t}{}{}", imgs.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), media.iter().map(|v| format!("\n[[youtube:{v}]]")).collect::<String>()),
+                Ok((t, imgs, media)) => format!("{t}{}{}{}", desk_line(&media), imgs.iter().map(|r| format!("\n[[image:{r}]]")).collect::<String>(), media.iter().map(|v| match v.strip_prefix("companion:") { Some(c) => format!("\n[[companion:{c}]]"), None => format!("\n[[youtube:{v}]]") }).collect::<String>()),
                 Err(e) => if e.contains("AI host is offline") { e } else { format!("(my brain glitched: {e})") },
             } }
         } else { room_claude(&h, &prompt, &if !target.is_empty() { format!("dm:{target}") } else if !conv.is_empty() { format!("conv:{conv}") } else { String::new() }).await };

@@ -43,7 +43,7 @@ pub async fn free(dir: &str) -> Result<String, String> {
     Ok(if done.is_empty() { "Nothing was holding the GPU.".into() } else { format!("Freed the GPU: {}.", done.join(", ")) })
 }
 
-fn start_cmd(dir: &str) -> Option<(String, Vec<String>, Option<PathBuf>)> {
+pub fn start_cmd(dir: &str) -> Option<(String, Vec<String>, Option<PathBuf>)> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(PathBuf::from(dir).join("engines-start.json")).ok()?).ok()?;
     let i = &v["image"];
     let program = i["program"].as_str().filter(|p| !p.is_empty())?.to_string();

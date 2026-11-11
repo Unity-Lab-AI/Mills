@@ -1280,6 +1280,11 @@
       <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
        <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
       </section>
+      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
+       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <span id="duState" class="status"></span></span></div>
+       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
+       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
+      </section>
       <!-- one Save for the whole tab, always in reach at the bottom of the box -->
       <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
       <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
@@ -1642,6 +1647,7 @@
   </div>
 </div>
 
+<script src="deskunity.js"></script>
 <script src="md.js"></script>
 <script src="localai.js"></script>
 <script src="hyperwork.js"></script>
@@ -2061,6 +2067,7 @@ $('assistForm').addEventListener('submit', async (e) => {
         else if (ev.type === 'tool' && ev.name !== 'say') { const t = document.createElement('div'); t.className = 'tool'; t.textContent = ev.name.replace(/_/g, ' ') + ' ' + JSON.stringify(ev.args); $('assistLog').insertBefore(t, bubble); }
         else if (ev.type === 'confirm') assistConfirm(ev);
         else if (ev.type === 'pc_tool' || ev.type === 'run_code') answerBrowserCall(ev);
+        else if (ev.type === 'companion') { companionOrder({ action: String(ev.action || ''), amount: Number(ev.amount) || null, look: ev.look ? String(ev.look) : null }); }
         else if (ev.type === 'final') { outcome = ['done', 'Done in ' + elapsed(t0u)]; if (!said.length && ev.text) speakLine(ev.text, 'neutral', /\?$/.test(ev.text) ? 'yes_no_question' : 'statement'); } if (ev.type === 'final') renderText(bubble, (ev.text || shown || said.join(' ') || '(done)') + (ev.images || []).map((r) => `
 [[image:${r}]]`).join('') + (ev.media || []).map((v) => `
 [[youtube:${v}]]`).join(''));
@@ -4270,6 +4277,52 @@ function ytPlayer(id, autoplay = true) { // a YouTube video, played right here (
   f.addEventListener('click', (e) => e.stopPropagation());
   return f;
 }
+// Unity's moves for someone's desktop Unity ([[companion:move:amount:user]] in her chat reply): the chat never shows them;
+// inside the desktop app, a fresh one for this person moves their little Unity (once per message).
+const COMPANION_MARK = /\[\[companion:([a-z_]+):([\d.]+):([a-z0-9-]+)(?::([^\]]*))?\]\]/g;
+const companionDone = new Set();
+// an order for Desktop Unity: the desktop app's own window when inside it, else her on this page (deskunity.js)
+function companionOrder(o) {
+  if (NATIVE) return NATIVE.call('companion', o).catch(() => {});
+  if (window.webUnity) window.webUnity.order(o);
+}
+function companionFrom(m, rec) {
+  if (!me || !rec || !rec.text || Date.now() - new Date(m.ts).getTime() > 120000) return;
+  for (const x of String(rec.text).matchAll(COMPANION_MARK)) {
+    const key = (m.id || m.ts) + x[0];
+    if (x[3] !== me.username || companionDone.has(key)) continue;
+    companionDone.add(key);
+    companionOrder({ action: x[1], amount: Number(x[2]) || null, look: x[4] ? decodeURIComponent(x[4]) : null });
+  }
+}
+// Desktop Unity's settings (Settings → App): on / off, her look, her moves; only inside the desktop app
+function deskUnitySetup() {
+  const box = document.getElementById('sgDeskUnity'); if (!box || box.dataset.ready) return;
+  box.dataset.ready = '1'; box.hidden = false;
+  const state = document.getElementById('duState');
+  if (!NATIVE) {
+    // on the website she stands on the bottom of this page: on / off, her look (filmed by the image engine on the AI
+    // host, a few minutes) and her moves work here
+    const W = window.webUnity; if (!W) return;
+    let timer = 0;
+    const show = () => { const i = W.status(); state.textContent = (W.isOn() ? 'on' : 'off') + ' · on this page' + (i.look ? ' · ' + i.look.slice(0, 80) : '') + (i.busy ? ' · changing: ' + (i.step || 'starting') : ''); if (i.busy && !timer) timer = setTimeout(() => { timer = 0; W.refresh().then(show); }, 10000); };
+    W.setOn(W.isOn()); W.refresh().then(show); show();
+    document.getElementById('duOn').onclick = () => { W.setOn(true); show(); };
+    document.getElementById('duOff').onclick = () => { W.setOn(false); show(); };
+    document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; state.textContent = 'starting her new look…'; W.newLook(look).then(show, (e) => { state.textContent = String(e.message || e); }); };
+    const doWeb = () => { const el = document.getElementById('duDo'); const t = el.value.trim(); if (!t) return; if (W.order({ action: 'do', look: t })) { el.value = ''; show(); } else state.textContent = 'On this page she walks, sits, waves, dances, turns, comes here, stops or hides; a new look goes in "How she looks".'; };
+    document.getElementById('duDoGo').onclick = doWeb; document.getElementById('duDo').onkeydown = (e) => { if (e.key === 'Enter') doWeb(); };
+    return;
+  }
+  const refresh = () => NATIVE.call('companion_status').then((s) => { const st = s.status || {}; state.textContent = (s.on ? 'on' : 'off') + (st.look ? ' · ' + st.look : ' · the built-in look') + (s.dressing ? ' · changing: ' + (st.step || 'starting') : ''); if (s.dressing) setTimeout(refresh, 5000); }).catch((e) => { state.textContent = String(e); });
+  document.getElementById('duOn').onclick = () => NATIVE.call('companion_set', { on: true }).then(refresh, refresh);
+  document.getElementById('duOff').onclick = () => NATIVE.call('companion_set', { on: false }).then(refresh, refresh);
+  document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; NATIVE.call('companion', { action: 'outfit', look }).then(() => setTimeout(refresh, 1500), (e) => { state.textContent = String(e); }); };
+  const doIt = () => { const t = document.getElementById('duDo').value.trim(); if (!t) return; NATIVE.call('companion', { action: 'do', look: t }).then(() => { document.getElementById('duDo').value = ''; setTimeout(refresh, 1500); }, (e) => { state.textContent = String(e); }); };
+  document.getElementById('duDoGo').onclick = doIt; document.getElementById('duDo').onkeydown = (e) => { if (e.key === 'Enter') doIt(); };
+  refresh();
+}
+document.addEventListener('DOMContentLoaded', deskUnitySetup); setTimeout(deskUnitySetup, 0);
 // YouTube links in a team-chat message (watch?v=, youtu.be/, shorts/, embed/, live/) → the video ids, in order, no duplicates
 function ytIds(text) {
   const out = [];
@@ -4281,6 +4334,7 @@ function withImages(el, text, render) { // split out [[image:ref]] markers, rend
   parts.forEach((part, i) => { if (i % 2) el.append(part.startsWith('youtube:') ? ytPlayer(part.slice(8)) : hostImage(part.slice(6))); else if (part.trim()) { const span = document.createElement('div'); render(span, part.replace(/\n+$/, '')); el.append(span); } });
 }
 function renderRich(el, text) { // markdown + @mentions, with host pictures / YouTube players split out
+  text = String(text).replace(COMPANION_MARK, '');
   if (/\[\[(image|youtube):/.test(text)) return withImages(el, text, renderRichText);
   renderRichText(el, text);
 }
@@ -4325,6 +4379,7 @@ function renderMsg(rec, bulk) {
   if (m.deleted) body.textContent = 'message deleted';
   else if (rec.locked) body.append(ic('lock', 'lead'), rec.text); // could not be opened: say why, never render it
   else {
+    companionFrom(m, rec);
     renderRich(body, rec.text);
     for (const vid of ytIds(rec.text)) body.append(ytPlayer(vid, false)); // a YouTube link posted to the team plays right here (no autoplay)
   }

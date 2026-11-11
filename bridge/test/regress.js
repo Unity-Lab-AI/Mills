@@ -2998,6 +2998,26 @@ async function run() {
       serverSrc.includes("You are the team's go-between: do exactly what they ask") && (rsRoutes550.match(/You are the team's go-between: do exactly what they ask/g) || []).length === 2, 'static check of both hubs');
 
     if (RUST_HUB) await r560Check(); else skip('R560', 'the API gateway keys, routing and concurrency (T-369)', 'the Rust hub\'s: --rust-hub runs it');
+    // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
+    const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
+    const asrc551 = fs.readFileSync(path.join(BRIDGE, 'assistant.js'), 'utf8'), eng551 = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
+    const rsU551 = N551('pgm-ai-internal', 'src', 'unity.rs'), rsW551 = N551('pgm-ai-internal', 'src', 'unity_web.rs'), rsT551 = N551('pgm-ai-internal', 'src', 'unity-tools.json'), rsR551 = N551('pgm-ai-internal', 'src', 'unity_routes.rs');
+    check('R551', 'Unity writes and draws on pictures and posts real web images, on both hubs: write_on_image (a caption top / center / bottom, or words / a shape on a named body part or piece of clothing, sized to fit there, a part not in the picture is an error) through the image engine\'s /caption and /mark; find_image / post_image (Bing Images, she sees the thumbnails, public addresses only, must really be a picture); find_gif / post_gif on the Rust hub too; GIFs / JPEGs served with their own type',
+      ["'/mark': render_mark", "'/caption': render_caption", 'def _face_from_seg', 'is not in the picture'].every((x) => eng551.replace(/"/g, "'").includes(x))
+      && ["tool('write_on_image'", "tool('find_image'", "tool('post_image'", "render(ci, '/mark'", "render(ci, '/caption'"].every((x) => asrc551.includes(x))
+      && ['"find_gif" | "find_image"', '"post_gif" | "post_image"', '"write_on_image" =>', '"/mark"', '"/caption"'].every((x) => rsU551.includes(x))
+      && ['pub async fn image_search', 'pub async fn fetch_bytes', 'photo-animatedgif'].every((x) => rsW551.includes(x))
+      && ['"find_gif"', '"post_gif"', '"find_image"', '"post_image"', '"write_on_image"', '"companion"'].every((x) => rsT551.includes(x))
+      && rsR551.includes('buf.starts_with(b"GIF8") { "image/gif" }'), 'static check of both hubs and the image engine');
+    const host552 = N551('pgm-ai-internal', 'src', 'host', 'runner.rs');
+    check('R552', 'the image engine starts itself: an AI host whose engine is down starts it from engines-start.json (no window, one start at a time) and waits for it before the call goes on, so a picture ask never fails because nobody turned it on (production bug 2026-11-10: the engine was off and Unity covered with refusals)',
+      ['async fn wake_engine', 'engines-start.json', 'static WAKE: tokio::sync::Mutex', 'spawn_detached(program', 'wake_engine(&h, &job.engine, &base).await'].every((x) => host552.includes(x)), 'static check of the AI host');
+    const dm553 = N551('vr-desktop', 'src', 'main.rs'), dj553 = N551('vr-desktop', 'ui', 'companion.js'), page553 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
+    const clips553 = ['idle', 'walk', 'sit', 'wave', 'dance'].every((c) => fs.existsSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'ui', 'companion', c + '.webp')));
+    check('R553', 'Unity on the desktop: in the desktop app a see-through, click-through window lies exactly over the app window (follows it, hidden when it is minimised) with only her in it, head to toe (idle, walk, sit, wave, dance clips); Unity\'s companion tool (both hubs) moves her: walk left / right / up / down, come here, sit, wave, dance, turn, stop, hide; the Unity page passes her orders on; vr-desktop --companion <move> does it from a terminal',
+      clips553 && ['async fn companion(', '.transparent(true)', 'set_ignore_cursor_events(true)', '.parent(&main)', 'fn fit_companion', 'companion_arg(&args)', 'allow-companion'].every((x) => dm553.includes(x))
+      && ["case 'walk_left'", "case 'sit'", "case 'come_here'", "T.event.listen('companion'"].every((x) => dj553.includes(x))
+      && page553.includes("ev.type === 'companion'") && page553.includes("NATIVE.call('companion'") && asrc551.includes("tool('companion'"), 'static check of the desktop app, the page and the hubs');
 
     // R152: older AI hosts keep working, and hosts update themselves from the hub
     const oh = { 'X-VR-Host': 'old-node', 'X-VR-Host-Token': OLD_NODE_SECRET, 'Content-Type': 'application/json' };
@@ -6367,7 +6387,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     gfFind.ok === true && (gfFind.candidates || []).length === 2 && gfFind.candidates[0].title === 'Eye & roll' && gfFind.candidates[1].n === 2 && gq.q === 'eye roll' && /animatedgif/.test(gq.qft || '') && gq.first === '1'
       && gfPost.ok === false && /private network|port is not allowed/.test(gfPost.error || '') && !(gfFinal.images || []).length
       && ["images: look.map((x) => x.b)", "vision: (r.capabilities || []).includes('vision')", '!/gif/i.test(text)', 'use emojis whenever you feel like it, and post GIFs',
-        'Extended_Pictographic', "=== 'GIF8' ? 'image/gif'", "!== 'GIF8') return { ok: false"].every((s) => asrc.includes(s)),
+        'Extended_Pictographic', "=== 'GIF8' ? 'image/gif'", 'g.isGif ? !isGif : !isPic'].every((s) => asrc.includes(s)),
     `find ${JSON.stringify(gfFind).slice(0, 200)}; post ${JSON.stringify(gfPost)}; q ${JSON.stringify(gq)}; images ${JSON.stringify(gfFinal.images)}`);
   const pl = await uchat(U, 'PLAYME');
   const plr = toolRes(pl, 'play_youtube'), plf = pl.events.find((e) => e.type === 'final') || {};
@@ -6448,7 +6468,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   const ti = await uchat(U, 'titties');
   const tiFinal = ti.events.find((e) => e.type === 'final') || {};
   const tiPrompt = fakeImagePrompts[nImg] || '';
-  check('R107', 'a picture ask the brain answers with text only still gets a picture (hub backstop), a picture of her with her full look', (tiFinal.images || []).length === 1 && tiPrompt.startsWith('titties') && (!look || tiPrompt.includes(look)), tiPrompt.slice(0, 80));
+  check('R107', 'a picture ask the brain answers with text only still gets a picture (hub backstop), a picture of her with her full look', (tiFinal.images || []).length === 1 && tiPrompt.startsWith('photo of one 22 year old American woman') && /fully nude/.test(tiPrompt) && (!look || tiPrompt.includes(look)), tiPrompt.slice(0, 80));
   const nImg2 = fakeImagePrompts.length;
   const wx = await uchat(U, 'whats up with you today');
   check('R108', 'no picture when none was asked for', !((wx.events.find((e) => e.type === 'final') || {}).images || []).length && fakeImagePrompts.length === nImg2);
@@ -7486,8 +7506,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
       ok, JSON.stringify(seen));
   }
-  // R565-R567 (T-369, G4): Settings -> API access, page side. R565 drives web/apisetup.js (pure), R566 reads the served
-  // page (keys list, Create, Revoke, Connect panel, old single key kept), R567 runs the page's key list code on a stand-in.
+  // R568-R570 (T-369, G4): Settings -> API access, page side. R568 drives web/apisetup.js (pure), R569 reads the served
+  // page (keys list, Create, Revoke, Connect panel, old single key kept), R570 runs the page's key list code on a stand-in.
   async function r565Check() {
     const page = await (await fetch(H + '/')).text(), jsr = await fetch(H + '/apisetup.js'), src = jsr.status === 200 ? await jsr.text() : '';
     const seen = {};
@@ -7513,7 +7533,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.pick = A.pickModel('', ['m1', 'm2']) === 'm1' && A.pickModel('x', ['m1']) === 'x' && A.pickModel('', []) === '' && A.originOf('https://h.org/v1') === 'https://h.org';
       ok = seen.ids === 'claude-code,codex,jcode,opencode,openai,curl-openai,curl-anthropic' && seen.cc && seen.cx && seen.jc && seen.oc && seen.oa && seen.curl && seen.noKey && seen.pick;
     }
-    check('R565', 'the "Connect a tool" setups (web/apisetup.js) give, for Claude Code, Codex, jcode, opencode, Cursor / Continue / any OpenAI client and curl (both APIs), a ready-to-paste text with the hub address, the key and the model filled in and the right names (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL in bash and PowerShell forms, a Codex model_providers block with base_url, env_key and wire_api "chat", a jcode provider add, an opencode baseURL, the two curl calls), the address never doubles /v1, and with no key every one says <your key> and never a real-looking key', ok && !!A, JSON.stringify(seen));
+    check('R568', 'the "Connect a tool" setups (web/apisetup.js) give, for Claude Code, Codex, jcode, opencode, Cursor / Continue / any OpenAI client and curl (both APIs), a ready-to-paste text with the hub address, the key and the model filled in and the right names (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL in bash and PowerShell forms, a Codex model_providers block with base_url, env_key and wire_api "chat", a jcode provider add, an opencode baseURL, the two curl calls), the address never doubles /v1, and with no key every one says <your key> and never a real-looking key', ok && !!A, JSON.stringify(seen));
     const i = page.indexOf('<h3>API access</h3>'), sec = i < 0 ? '' : page.slice(i, page.indexOf('</section>', page.indexOf('id="apiConnect"', i)) + 10);
     const s2 = {
       served: jsr.status === 200 && /<script src="apisetup\.js(\?[^"]*)?"><\/script>/.test(page),
@@ -7522,8 +7542,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       keys: /function renderApiKeys/.test(page) && /\/api\/apikey\/create/.test(page) && /\/api\/apikey\/revoke', \{ method: 'POST', body: JSON\.stringify\(\{ id: k\.id/.test(page) && /Click again to revoke/.test(page) && /Create key/.test(page),
       oldKept: /Array\.isArray\(st\.keys\)\) renderApiKeys/.test(page) && /\/api\/apikey\/rotate/.test(page) && /\/api\/apikey\/settings/.test(page) && /\/api\/apikey\/revoke', \{ method: 'POST', body: '\{\}' \}/.test(page) && /Rotate key/.test(page) && /Make my key/.test(page),
     };
-    check('R566', 'the page serves web/apisetup.js and Settings → API access has the key list with Create key and a confirmed Revoke, the "Connect a tool" panel with Copy buttons (SVG icon) and the note that a Claude subscription login serves Claude Code only, while the single-key section (Rotate / Make my key, expiry, provider and model, Revoke) is kept and the key list only shows when the hub sends `keys`', Object.values(s2).every(Boolean), JSON.stringify(s2));
-    // R567: the page's own key-list code on a plain element stand-in
+    check('R569', 'the page serves web/apisetup.js and Settings → API access has the key list with Create key and a confirmed Revoke, the "Connect a tool" panel with Copy buttons (SVG icon) and the note that a Claude subscription login serves Claude Code only, while the single-key section (Rotate / Make my key, expiry, provider and model, Revoke) is kept and the key list only shows when the hub sends `keys`', Object.values(s2).every(Boolean), JSON.stringify(s2));
+    // R570: the page's own key-list code on a plain element stand-in
     const s3 = {};
     try {
       const mkEl = (tag) => {
@@ -7550,7 +7570,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       await go.onclick(); await new Promise((r) => setTimeout(r, 0));
       s3.created = calls[1] === '/api/apikey/create {"label":"CI","expiresDays":0,"models":["m-b"]}' && rendered[1] === 'mills_new';
     } catch (e) { s3.err = e.message; }
-    check('R567', 'the key list code of Settings → API access shows each key with its label, prefix, calls, last use and limits; Revoke asks once more and then revokes just that key; Create key sends the label, expiry and only the ticked limits, and shows the new secret once', !!(s3.rows && s3.confirm && s3.revoked && s3.created), JSON.stringify(s3));
+    check('R570', 'the key list code of Settings → API access shows each key with its label, prefix, calls, last use and limits; Revoke asks once more and then revokes just that key; Create key sends the label, expiry and only the ticked limits, and shows the new secret once', !!(s3.rows && s3.confirm && s3.revoked && s3.created), JSON.stringify(s3));
   }
   // R544 (T-291; R527, then R535, until 5.46.1 and 5.48.0 took them): the Theme menu opens on top of every panel. The page's placement function (button rect + list size +
   // window -> where the list goes) runs here in vm on wide, narrow, low and tiny windows; the served markup keeps the list

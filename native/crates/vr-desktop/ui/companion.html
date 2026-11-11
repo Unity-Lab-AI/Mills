@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unity</title>
+<style>
+  /* see-through: only she shows; the window never takes a click (main.rs) */
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  #her { position: absolute; bottom: 0; height: 30vh; max-height: 340px; min-height: 180px; transform-origin: 50% 100%; will-change: left, bottom, transform;
+         filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .35)); user-select: none; pointer-events: none; }
+</style>
+</head>
+<body>
+<img id="her" alt="" src="companion/idle.webp">
+<script src="companion.js"></script>
+</body>
+</html>
