@@ -10,7 +10,11 @@ Everything AI: the server side (AI hosts, providers, inference, coding runs, the
 - `work`: AI coding runs (Claude Code here, relayed to a host's login, or on an older host), the run log + attach,
   MCP tool relays, shared sessions
 - `unity`, `unity_brain`, `unity_routes`, `unity_time`, `unity_web`: the assistant (tools, brain, confirmations,
-  voice / speech / pictures, the chat's AI member and its queue)
+  voice / speech / pictures, the chat's AI member and its queue). Pictures of her: her likeness is built in, what
+  she wears is read from the person's message by short brain calls (`dress`, `outfit_photo`, `asks_nude`), her
+  outfit is kept per person until changed or reset. Web GIFs / pictures (`find_*` / `post_*`, Bing Images, a vision
+  model describes candidates for her brain), `write_on_image`, and Desktop Unity orders (`companion`; the website's
+  looks through `/api/assistant/look`, `/look-clip`, `/outfit-forget`)
 - `host`: the AI host program (`runner::run`, `relay`, `work`, `mcp`, `folder`, `settings` = ai-node.json)
 - `local_proxy`: 127.0.0.1 → a hub's `/v1` with a person's key (no web page can use it)
 

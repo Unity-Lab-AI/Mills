@@ -6368,9 +6368,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   const ownImg = imgEv ? await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(imgEv.ref), { headers: { Authorization: 'Bearer ' + U } }) : null;
   const otherImg = imgEv ? await fetch(H + '/api/assistant/image?ref=' + encodeURIComponent(imgEv.ref), { headers: { Authorization: 'Bearer ' + A } }) : null;
   const sentPrompt = fakeImagePrompts[fakeImagePrompts.length - 1] || '';
-  check('R68', 'selfie: picture made by the host engine, her likeness first then the moment (since 5.54.3), private picture only for its owner', !!imgEv && imgEv.ref.startsWith('t-user/')
+  check('R68', 'selfie: picture made by the host engine, one 22 year old American woman with her built-in likeness, fully nude when no clothes were named, private picture only for its owner', !!imgEv && imgEv.ref.startsWith('t-user/')
     && ownImg.status === 200 && (ownImg.headers.get('content-type') || '').includes('image/png') && otherImg.status === 404
-    && sentPrompt.startsWith('photo of one 22 year old') && sentPrompt.includes('regress moment') && (!look || sentPrompt.includes(look)), sentPrompt.slice(0, 80));
+    && sentPrompt.startsWith('photo of one 22 year old American woman alone') && /fully nude/.test(sentPrompt) && /hot pink streaks/.test(sentPrompt), sentPrompt.slice(0, 80));
   const eng = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
   check('R69', '[static] image engine: no prompt cap (long prompts encoded in pieces), no built-in negative prompt', /def _embeds/.test(eng) && !/_tokens_fit/.test(eng) && /^NEG = ""/m.test(eng));
   const seqI = Math.max(0, ...((await call('/api/room/messages?since=0', U)).data.messages || []).map((m) => m.seq));

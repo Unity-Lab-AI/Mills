@@ -638,10 +638,11 @@ def render_caption(req):
 
 
 def unload():
-    had = _state["t2i"] is not None
+    had = _state["t2i"] is not None or bool(_seg.get("model"))
     for k in ("t2i", "i2i", "inpaint"):
         _state[k] = None
     _state["face"] = False
+    _seg.clear()
     gc.collect()
     try:
         import torch
@@ -661,7 +662,8 @@ def unload():
 import subprocess
 _COMP_SRC = os.environ.get("MILLS_COMPANION_SRC") or os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "native", "crates", "vr-desktop"))
 _COMP_OUT = os.environ.get("MILLS_COMPANION_OUT") or os.path.join(os.path.expanduser("~"), ".viberoller", "companion-web")
-_comp = {"proc": None, "user": ""}
+_comp = {"proc": None, "user": "", "queue": {}}
+_comp_lock = threading.Lock()
 _COMP_CLIPS = ("idle", "walk", "sit", "wave", "dance")
 
 
@@ -672,27 +674,30 @@ def _comp_user(u):
     return u
 
 
-def comp_look(req):
-    user, look = _comp_user(req.get("user")), " ".join(str(req.get("look") or "").split())[:300]
-    if not look:
-        raise ValueError("what should she look like?")
-    p = _comp["proc"]
-    if p and p.poll() is None and _comp["user"] == user and _comp.get("look") == look:  # the same order again (another tab)
-        return {"ok": True, "user": user, "look": look, "already": True}
-    if p and p.poll() is None:  # an order always wins: the look being filmed stops
-        try:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=0x08000000)
-            else:
-                p.kill()
-        except Exception:
-            pass
-        try:
-            urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:5127/abort", data=b"{}", method="POST"), timeout=5).read()
-        except Exception:
-            pass
+def _comp_kill(p):
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=0x08000000)
+        else:
+            p.kill()
+    except Exception:
+        pass
+    try:
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:5127/abort", data=b"{}", method="POST"), timeout=5).read()
+    except Exception:
+        pass
+
+
+def _comp_start(user, look, reset):
     out = os.path.join(_COMP_OUT, user)
     os.makedirs(out, exist_ok=True)
+    if reset:  # reset: her clips go (her page shows the built-in her) while a fresh one of herself is filmed
+        for n in os.listdir(out):
+            if n.endswith(".webp") or n in ("status.json", "_look.png", "base.png"):
+                try:
+                    os.remove(os.path.join(out, n))
+                except OSError:
+                    pass
     base = os.path.join(out, "base.png")
     if not os.path.exists(base):
         shutil.copyfile(os.path.join(_COMP_SRC, "ui", "companion", "base.png"), base)
@@ -704,6 +709,47 @@ def comp_look(req):
                                      cwd=out, stdout=subprocess.DEVNULL, stderr=log, **kw)
     _comp["user"], _comp["look"] = user, look
     _log("companion look for %s: %s" % (user, look[:80]))
+    if not _comp.get("watch"):
+        _comp["watch"] = True
+        threading.Thread(target=_comp_next, daemon=True).start()
+
+
+def _comp_next():
+    """One look at a time on the GPU: when the one being filmed ends, the next person's waiting order starts."""
+    while True:
+        time.sleep(2)
+        with _comp_lock:
+            p = _comp["proc"]
+            if (p is None or p.poll() is not None) and _comp["queue"]:
+                user, (look, reset) = next(iter(_comp["queue"].items()))
+                del _comp["queue"][user]
+                _comp_start(user, look, reset)
+
+
+def comp_look(req):
+    """A new look for someone. Their own newer order replaces theirs (being filmed or waiting); another person's
+    look being filmed is never stopped for it: theirs waits its turn. The same order again (another tab) changes nothing."""
+    user, look = _comp_user(req.get("user")), " ".join(str(req.get("look") or "").split())[:300]
+    if not look:
+        raise ValueError("what should she look like?")
+    reset = bool(req.get("reset"))
+    with _comp_lock:
+        p = _comp["proc"]
+        running = p is not None and p.poll() is None
+        if running and _comp["user"] == user and _comp.get("look") == look and not reset:
+            return {"ok": True, "user": user, "look": look, "already": True}
+        if running and _comp["user"] != user:
+            _comp["queue"][user] = (look, reset)
+            _comp["queue_say"] = True
+            out = os.path.join(_COMP_OUT, user)
+            os.makedirs(out, exist_ok=True)
+            with open(os.path.join(out, "status.json"), "w", encoding="utf-8") as fh:
+                json.dump({"look": look, "step": "waiting for another look to finish", "at": time.time()}, fh)
+            return {"ok": True, "user": user, "look": look, "queued": True}
+        _comp["queue"].pop(user, None)
+        if running:
+            _comp_kill(p)
+        _comp_start(user, look, reset)
     return {"ok": True, "user": user, "look": look}
 
 
@@ -715,7 +761,7 @@ def comp_status(user):
     except Exception:
         pass
     p = _comp["proc"]
-    busy = bool(p and p.poll() is None and _comp["user"] == user)
+    busy = bool(p and p.poll() is None and _comp["user"] == user) or user in _comp["queue"]
     err = ""
     try:
         err = "\n".join(open(os.path.join(out, "look.log")).read().strip().splitlines()[-3:])
@@ -724,6 +770,44 @@ def comp_status(user):
     clips = [n for n in _COMP_CLIPS if os.path.exists(os.path.join(out, n + ".webp"))]
     stamp = max([os.path.getmtime(os.path.join(out, n + ".webp")) for n in clips] or [0])
     return {"ok": True, "busy": busy, "status": st, "clips": clips, "stamp": int(stamp), "log": "" if busy else err}
+
+
+# --------------------------------------------------------------------------- the GPU only while asked
+# Models are loaded when a picture or a Desktop Unity look asks for them and leave the GPU once nothing has used them
+# for IDLE_S: this engine's own (Stable Diffusion, SegFormer), and the video engine's (Agent Gen's, 127.0.0.1:5127),
+# which a look that was stopped or a one-off clip would otherwise leave loaded.
+IDLE_S = int(os.environ.get("MILLS_GPU_IDLE_S", "120"))
+_last_use = {"t": time.time()}
+
+
+def _idle_reaper():
+    video_idle_since = None
+    while True:
+        time.sleep(15)
+        now = time.time()
+        if (_state["t2i"] is not None or _seg.get("model")) and not _lock.locked() and now - _last_use["t"] > IDLE_S:
+            with _lock:
+                unload()
+        try:
+            with urllib.request.urlopen(VIDEO_URL + "/health", timeout=3) as r:
+                h = json.loads(r.read())
+        except Exception:
+            video_idle_since = None
+            continue
+        if h.get("loaded") and not h.get("busy"):
+            video_idle_since = video_idle_since or now
+            if now - video_idle_since > IDLE_S:
+                try:
+                    urllib.request.urlopen(urllib.request.Request(VIDEO_URL + "/unload", data=b"{}", method="POST"), timeout=30).read()
+                    _log("video engine unloaded (idle)")
+                except Exception:
+                    pass
+                video_idle_since = None
+        else:
+            video_idle_since = None
+
+
+VIDEO_URL = os.environ.get("MILLS_VIDEO_URL", "http://127.0.0.1:5127")
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -813,6 +897,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Size", "%dx%d" % img.size)
         self.end_headers()
         self.wfile.write(body)
+        _last_use["t"] = time.time()
         _log("%s %dx%d seed %d in %.1fs" % (path[1:], img.size[0], img.size[1], seed, secs))
 
 
@@ -828,6 +913,7 @@ def main():
     CKPT, DEVICE_ARG, OFFLOAD = a.checkpoint, a.device, not a.no_offload
     if a.preload:
         _load()
+    threading.Thread(target=_idle_reaper, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     _log("serving on 127.0.0.1:%d  checkpoint=%s  present=%s" % (a.port, os.path.basename(CKPT), os.path.exists(CKPT)))
     try:

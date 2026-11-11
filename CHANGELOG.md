@@ -7,7 +7,7 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
-## 5.57.0 — 2026-11-11
+## 5.58.0 — 2026-11-11
 
 MINOR: **the API gateway, first slices: several keys, model routing across providers, concurrent requests, and a setup
 page** (T-369; Sponge, 2026-11-10: "someone running an AI host, the team or the individual users that can use the AI …
@@ -35,9 +35,75 @@ passthrough), G3 (OpenAI passthrough, cross-format) and G5 (Responses API) are n
   older hub.
 - Checks R560–R565 (keys, limits, routing, the default key, concurrency, the security log) and R568–R570 (the setups,
   the page, the keys list code; numbered R565–R567 on their branch).
-- Two checks brought up to date with changes that were already on develop (they were red there): R546 now lists the
-  Desktop Unity group 5.52.1 added to Settings, and R68 expects the selfie prompt as 5.54.3 builds it, her likeness first
-  and then the moment.
+
+## 5.57.4 — 2026-11-10
+
+PATCH: the GPU is only used while something asks for it.
+
+### Fixed
+- **Models leave the GPU once the work is done** (asked: "okay once we are done lets make sure it properly unloads my GPU after everything requested is processed it should only load models when its requesting a desktop Unity update or image. not havethem on the GPU at all times"): the image engine never let go of its model after a picture; now it unloads it (and SegFormer, used for writing on pictures) after 2 minutes with nothing asked (`MILLS_GPU_IDLE_S`), and also unloads the video engine's model once that has sat loaded and unused for 2 minutes (a look that was stopped, or a one-off clip for her, used to leave it loaded for good). Her brain's short calls (what she wears, how an outfit looks, whether she is asked to undress) keep the brain only as long as an answer does (`assistant.brainKeepAlive`, 2 minutes) instead of Ollama's 5, and the vision model that describes a photo is unloaded right after. `bridge/image-engine.py`, both hubs (`bridge/assistant.js` 1.6.2, native pgm-ai-internal).
+
+## 5.57.3 — 2026-11-10
+
+PATCH: two people changing her look at once.
+
+### Fixed
+- **One person's look order never stops another's** (asked: "i aksed it for a red dress while sponges was generating how does it handle both"): a red dress ordered while Sponge's look was on its last clip stopped his, and his look was lost. The image engine now films one look at a time and keeps a line: your own newer order replaces yours, someone else's waits its turn (its page says so) and starts when the one being filmed ends; the same order again (another tab) changes nothing.
+- **Her look is filmed once, not twice**: the desktop app ignores an order for the look it is already filming (her reply and the hub both ordered it), and the website does not film a chat order while that person's desktop app is open (the app says so to the hub every minute, new POST `/api/assistant/desk-alive`; GET `/api/assistant/look` answers `deskApp`), since the app films it on its own PC. Both hubs (`bridge/assistant.js` 1.6.1, native pgm-ai-internal), `bridge/image-engine.py`, `web/deskunity.js` 1.2.1, `web/index.html` 1.45.1. Windows and Linux app: vr-desktop rebuilt.
+
+## 5.57.2 — 2026-11-10
+
+PATCH: the full regression run, and what it found.
+
+### Fixed
+- **A machine name had slipped into this changelog** (R31, no local names in tracked files): the 5.56.2 and 5.56.3 entries named the host PC by its machine name; it now reads "the host PC" there (the only change to those entries).
+- **Regression checks follow what shipped**: R68 checks her picture prompt as it is now (one 22 year old American woman, her built-in likeness, fully nude when no clothes were named) and R546 counts Desktop Unity among the App settings groups, since it shows on the website too.
+
+## 5.57.1 — 2026-11-10
+
+PATCH: the docs say what she does now.
+
+### Changed
+- **Docs brought up to date** (asked: "in mean time make sure docs are all updated properly and nothing is stale"): the README's Unity section no longer points at `assistant.selfieLook` or says there is no negative prompt or that her brain sees photos; it now covers how pictures of her are made (her built-in likeness, clothes read from your words, nude otherwise, the outfit kept until changed or reset), the vision model that describes photos, GIFs / web pictures / emojis, writing on pictures, her persona and uncensored brain, Desktop Unity in the app and on the website (looks, persistence, Reset), and the weekly cap's freshness rule; `native/README.md` covers Desktop Unity in vr-desktop and windowless starts on Windows; the pgm-ai-internal README lists the new Unity parts. The host-local regression checklist corrects R68 / R69 and adds R548–R561.
+
+## 5.57.0 — 2026-11-10
+
+MINOR: a Reset for Desktop Unity, and she stays as she is from one session to the next.
+
+### Added
+- **Reset in Settings → App → Desktop Unity** (asked: "and we need  a rest button for unity in settings desktop unity and her self image but where ever she is persists session to session"): one button, in the app and on the website: her desktop self goes back to the built-in her at once, in the middle, while a fresh one of herself is filmed, and the outfit her pictures kept is forgotten. New app command companion_reset (Windows and Linux app: vr-desktop rebuilt), POST `/api/assistant/look` takes `{reset: true}` and new POST `/api/assistant/outfit-forget` (both hubs; the image engine clears that person's clips).
+
+### Changed
+- **She persists from session to session**: her desktop look stays what it was (the app no longer draws a new one at every start; only when she has none of her own), where she stands is remembered (app and website), and her pictures keep the outfit she was last told to wear until she is told to wear something else, asked to undress, or reset (her brain reads whether a message asks to see her undressed; a kept outfit does not film her desktop self again; the kept outfit is the Rust hub's, the frozen JavaScript hub only has the reset routes). `bridge/assistant.js` 1.6.0, native pgm-ai-internal, `web/deskunity.js` 1.2.0, `web/index.html` 1.45.0.
+
+## 5.56.4 — 2026-11-10
+
+PATCH: she wears what she is told, in her pictures and on the desktop, for any outfit.
+
+### Fixed
+- **She actually wears the outfit** (asked: "i asked for a banan suit fo her to wear and she was only in panties in the image and i never saw the secktop Unity uptate to a banana suit", and "now thats going to work for anything right not just bannana suit? this isnt the same issue as the gorilla were u only built in one thing not the actual infinity of options..."): dressed, her picture prompt now puts the outfit first with only her face and hair (her body words drew her in underwear), and her brain says how the outfit looks in a photo (colours, material, shape, what it covers) for a picture engine that does not know its name. Nothing is per outfit: any clothes named go the same way. Both hubs (`bridge/assistant.js` 1.5.3, native pgm-ai-internal) and the desktop look (companion-look.py).
+- **A selfie in clothes changes her desktop self too**: when a picture of her is in clothes someone named and she did not order the change herself, the hub orders it for her desktop self, and her reply says she is changing (direct chat too, where the order goes out at once). Windows and Linux app: vr-desktop rebuilt.
+
+## 5.56.3 — 2026-11-10
+
+PATCH: she is described only by what she is.
+
+### Changed
+- **No more "no leather, no tattoos" in what her brain reads** (asked: "dont negative prompt the brain to drop them thats like telling it to use them"): the short call that reads what she wears now only says what to keep (place, pose, action, expression, camera angle, light), and her persona file (the host PC, the live and dev hubs; host-local, not in git) only says what she looks like, with no list of looks she does not have and no "goth". Both hubs (`bridge/assistant.js` 1.5.2, native pgm-ai-internal).
+
+## 5.56.2 — 2026-11-10
+
+PATCH: the leather getup is gone for good.
+
+### Removed
+- **Her old goth look in the hub config** (asked: "in vibe roller the images she made of her self to go along side the desktop Unity appearacence wasnt a nude and it was still the shit fucking leather getup. get rid of that shit! nuke it destroy it with prdjudice"): the hub config's `assistant.selfieLook` (piercings, tattoos, black leather jacket over a pink bra, fishnets) overrode her likeness in every picture of her. It is deleted from `bridge/config.json` and from the host-local configs (the host PC, the live and dev hubs), and the setting itself is gone from both hubs: her likeness in pictures is always the built-in one (the emo girl next door, nude unless told what to wear), so no config can bring the getup back. `bridge/assistant.js` 1.5.1, native pgm-ai-internal.
+
+## 5.56.1 — 2026-11-10
+
+PATCH: Desktop Unity goes with the app when it is minimised.
+
+### Fixed
+- **She no longer stays behind when the app is minimised** (asked: "when i minimize the app its like the desktop unity stays where the window was"): Windows does not always say a window was minimised, so her window now checks the app's twice a second: minimised or hidden, she hides with it; back again, she comes back (only when it was the minimise that hid her, and she is on). Windows and Linux app: vr-desktop rebuilt.
 
 ## 5.56.0 — 2026-11-10
 
@@ -59,7 +125,7 @@ MINOR: Desktop Unity on the website too; she wears what she is told, nude otherw
 ### Fixed
 - **Regression check R107** follows the round-two way her pictures are prompted ("photo of one 22 year old American woman…", nude when no clothes are asked for) instead of the old prompt that began with the person's own words.
 - **What she wears comes from what you said** (asked: "well i told her to put on a red dress and she was still in leather and all tattoed", "should should be nude first then do her image of shats she is told and up the the desktop thing", and "shiot like this is kinda limiting we cant just list everyhting out that leaves so many loose ends not mentioned it needs to be dynasmic"): for any picture of her, a short call to her brain reads the person's message for clothes they named (none named: fully nude) and keeps only the moment (place, pose, light) from the scene she wrote, so looks or clothes she imagines for herself (leather, tattoos, anything) never reach the picture. No word lists. Both hubs (`bridge/assistant.js` 1.4.7, native pgm-ai-internal).
-- **Her persona no longer describes her as a pale goth in leather and tattoos**: the host-local persona file (not in git) on gee-pc and on the portal now describes the emo girl next door, nude unless told what to wear; the Rust hub's built-in fallback line too.
+- **Her persona no longer describes her as a pale goth in leather and tattoos**: the host-local persona file (not in git) on the host PC and on the portal now describes the emo girl next door, nude unless told what to wear; the Rust hub's built-in fallback line too.
 - **Her desktop self takes your order at once** (asked: "look at the message i sent her and u tell me how that is any way her bare nude or let alone what i told her to appear as"): an order to change her look was refused without a word while her fresh look of the app start was still filming; now an order always wins: the look being filmed (and its video job) is stopped and yours starts. Windows and Linux app: vr-desktop rebuilt.
 - **Desktop Unity settings show on the website too** (asked: "and sponge is saying he doesnt see the seetings for the desktop Unity nn the website and shit so whats up?", "nopt even the settings for it"): Settings → App always has the Desktop Unity section; on the website it says she lives in the desktop app (Windows or Linux) and its controls work there, and @unity orders in the team chat still reach your desktop app. `web/index.html` 1.43.0.
 
