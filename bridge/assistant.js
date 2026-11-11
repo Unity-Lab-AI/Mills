@@ -47,7 +47,7 @@ module.exports = function createAssistant({ config, ROOT, MILLS_DIR, readJson, w
   const IMAGES_DIR = path.join(MILLS_DIR, 'Images'); // Images/<username>/<id>.png (private) and Images/room/<id>.png (team chat); gitignored
   // Her look in pictures, added after the scene she writes so the moment leads (the engine encodes
   // long prompts in pieces, so neither the scene nor her look is cut).
-  const SELFIE_LOOK = A.selfieLook || 'emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones';
+  const SELFIE_LOOK = 'emo hairstyle, long straight jet black hair with clearly visible hot pink streaks and side-swept bangs, soft oval face, bright blue eyes, naturally beautiful with no makeup, fair skin with a light natural flush, natural skin texture, light freckles, slim fit body, natural medium breasts, toned flat stomach with soft subtle abs, narrow waist, gently rounded hips, round firm butt, long slender toned legs, slender arms, delicate collarbones';
   const MAX_ROUNDS = 6, MAX_RESULT = 3000, HISTORY_KEEP = 40;
 
   // ---------- host services: Ollama + the local model (started on demand, survives hub restarts) ----------
