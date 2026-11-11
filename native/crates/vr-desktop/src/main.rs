@@ -213,6 +213,7 @@ async fn companion(app: AppHandle, action: String, amount: Option<f64>, look: Op
                 .parent(&main).map_err(|e| e.to_string())?
                 .build().map_err(|e| { clog(&format!("build failed: {e}")); e.to_string() })?;
             clog("window built");
+            watch_companion(&app);
             fit_companion(&app);
             let a2 = app.clone();
             main.on_window_event(move |ev| match ev {
@@ -239,8 +240,25 @@ fn companion_arg(args: &[String]) -> Option<String> { args.iter().position(|a| a
 /// The companion window laid exactly over the app window (its inner area); hidden while the app is minimised.
 fn fit_companion(app: &AppHandle) {
     let (Some(main), Some(c)) = (app.get_webview_window("main"), app.get_webview_window("companion")) else { return };
-    if main.is_minimized().unwrap_or(false) { let _ = c.hide(); return; }
+    // minimised or hidden (Windows parks a minimised window far off screen at -32000): she goes with it
+    let gone = main.is_minimized().unwrap_or(false) || !main.is_visible().unwrap_or(true)
+        || main.outer_position().map(|p| p.x <= -30000 || p.y <= -30000).unwrap_or(false);
+    static HID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if gone { if c.is_visible().unwrap_or(false) { let _ = c.hide(); HID.store(true, std::sync::atomic::Ordering::SeqCst); } return; }
     if let (Ok(p), Ok(s)) = (main.inner_position(), main.inner_size()) { let _ = c.set_position(p); let _ = c.set_size(s); }
+    // back from minimised: she shows again (only when the minimise hid her, and she is on)
+    if HID.swap(false, std::sync::atomic::Ordering::SeqCst) && companion_on(app) { let _ = c.show(); let _ = c.set_ignore_cursor_events(true); }
+}
+/// Minimise does not always send a window event on Windows: her window checks the app's twice a second.
+fn watch_companion(app: &AppHandle) {
+    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ON.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+    let a = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let b = a.clone();
+        let _ = a.run_on_main_thread(move || fit_companion(&b));
+    });
 }
 /// `--look <text>` with `--companion outfit`.
 fn companion_look(args: &[String]) -> Option<String> { args.iter().position(|a| a == "--look").and_then(|i| args.get(i + 1).cloned()) }
