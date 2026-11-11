@@ -35,6 +35,9 @@ passthrough), G3 (OpenAI passthrough, cross-format) and G5 (Responses API) are n
   older hub.
 - Checks R560–R565 (keys, limits, routing, the default key, concurrency, the security log) and R568–R570 (the setups,
   the page, the keys list code; numbered R565–R567 on their branch).
+- Two checks brought up to date with changes that were already on develop (they were red there): R546 now lists the
+  Desktop Unity group 5.52.1 added to Settings, and R68 expects the selfie prompt as 5.54.3 builds it, her likeness first
+  and then the moment.
 
 ## 5.56.0 — 2026-11-10
 
