@@ -1268,7 +1268,7 @@
        <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
       </section>
       <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
-       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <span id="duState" class="status"></span></span></div>
+       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <button type="button" id="duReset" title="Back to herself: her default look, a fresh one filmed; where she stands goes back to the middle">Reset</button> <span id="duState" class="status"></span></span></div>
        <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
        <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
       </section>
@@ -4293,6 +4293,7 @@ function deskUnitySetup() {
     W.setOn(W.isOn()); W.refresh().then(show); show();
     document.getElementById('duOn').onclick = () => { W.setOn(true); show(); };
     document.getElementById('duOff').onclick = () => { W.setOn(false); show(); };
+    document.getElementById('duReset').onclick = () => { state.textContent = 'back to herself…'; api('/api/assistant/outfit-forget', { method: 'POST' }).catch(() => {}); W.reset().then(show, (e) => { state.textContent = String(e.message || e); }); };
     document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; state.textContent = 'starting her new look…'; W.newLook(look).then(show, (e) => { state.textContent = String(e.message || e); }); };
     const doWeb = () => { const el = document.getElementById('duDo'); const t = el.value.trim(); if (!t) return; if (W.order({ action: 'do', look: t })) { el.value = ''; show(); } else state.textContent = 'On this page she walks, sits, waves, dances, turns, comes here, stops or hides; a new look goes in "How she looks".'; };
     document.getElementById('duDoGo').onclick = doWeb; document.getElementById('duDo').onkeydown = (e) => { if (e.key === 'Enter') doWeb(); };
@@ -4301,6 +4302,8 @@ function deskUnitySetup() {
   const refresh = () => NATIVE.call('companion_status').then((s) => { const st = s.status || {}; state.textContent = (s.on ? 'on' : 'off') + (st.look ? ' · ' + st.look : ' · the built-in look') + (s.dressing ? ' · changing: ' + (st.step || 'starting') : ''); if (s.dressing) setTimeout(refresh, 5000); }).catch((e) => { state.textContent = String(e); });
   document.getElementById('duOn').onclick = () => NATIVE.call('companion_set', { on: true }).then(refresh, refresh);
   document.getElementById('duOff').onclick = () => NATIVE.call('companion_set', { on: false }).then(refresh, refresh);
+  // an older app has no reset: say so instead of failing quietly
+  document.getElementById('duReset').onclick = () => (api('/api/assistant/outfit-forget', { method: 'POST' }).catch(() => {}), NATIVE.call('companion_reset')).then(() => setTimeout(refresh, 1500), (e) => { state.textContent = /not found|unknown/i.test(String(e)) ? 'Update the VibeRoller app for Reset.' : String(e); });
   document.getElementById('duApply').onclick = () => { const look = document.getElementById('duLook').value.trim(); if (!look) return; NATIVE.call('companion', { action: 'outfit', look }).then(() => setTimeout(refresh, 1500), (e) => { state.textContent = String(e); }); };
   const doIt = () => { const t = document.getElementById('duDo').value.trim(); if (!t) return; NATIVE.call('companion', { action: 'do', look: t }).then(() => { document.getElementById('duDo').value = ''; setTimeout(refresh, 1500); }, (e) => { state.textContent = String(e); }); };
   document.getElementById('duDoGo').onclick = doIt; document.getElementById('duDo').onkeydown = (e) => { if (e.key === 'Enter') doIt(); };

@@ -693,6 +693,13 @@ def comp_look(req):
             pass
     out = os.path.join(_COMP_OUT, user)
     os.makedirs(out, exist_ok=True)
+    if req.get("reset"):  # reset: her clips go (her page shows the built-in her) while a fresh one of herself is filmed
+        for n in os.listdir(out):
+            if n.endswith(".webp") or n in ("status.json", "_look.png", "base.png"):
+                try:
+                    os.remove(os.path.join(out, n))
+                except OSError:
+                    pass
     base = os.path.join(out, "base.png")
     if not os.path.exists(base):
         shutil.copyfile(os.path.join(_COMP_SRC, "ui", "companion", "base.png"), base)

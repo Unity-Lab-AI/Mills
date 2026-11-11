@@ -7,6 +7,16 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.57.0 — 2026-11-10
+
+MINOR: a Reset for Desktop Unity, and she stays as she is from one session to the next.
+
+### Added
+- **Reset in Settings → App → Desktop Unity** (asked: "and we need  a rest button for unity in settings desktop unity and her self image but where ever she is persists session to session"): one button, in the app and on the website: her desktop self goes back to the built-in her at once, in the middle, while a fresh one of herself is filmed, and the outfit her pictures kept is forgotten. New app command companion_reset (Windows and Linux app: vr-desktop rebuilt), POST `/api/assistant/look` takes `{reset: true}` and new POST `/api/assistant/outfit-forget` (both hubs; the image engine clears that person's clips).
+
+### Changed
+- **She persists from session to session**: her desktop look stays what it was (the app no longer draws a new one at every start; only when she has none of her own), where she stands is remembered (app and website), and her pictures keep the outfit she was last told to wear until she is told to wear something else, asked to undress, or reset (her brain reads whether a message asks to see her undressed; a kept outfit does not film her desktop self again; the kept outfit is the Rust hub's, the frozen JavaScript hub only has the reset routes). `bridge/assistant.js` 1.6.0, native pgm-ai-internal, `web/deskunity.js` 1.2.0, `web/index.html` 1.45.0.
+
 ## 5.56.4 — 2026-11-10
 
 PATCH: she wears what she is told, in her pictures and on the desktop, for any outfit.

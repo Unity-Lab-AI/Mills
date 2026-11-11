@@ -118,15 +118,19 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         // Desktop Unity on the website: a new look is filmed by the image engine on the AI host (one at a time, a newer
         // order stops the one being filmed), then her page fetches the clips from here
         "/api/assistant/look" if post => {
-            let look: String = s(&r.json(), "look").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string();
+            // {reset: true}: back to a fresh one of herself (her clips go at once)
+            let reset = truthy(&r.json()["reset"]);
+            let look: String = if reset { "herself".into() } else { s(&r.json(), "look").chars().filter(|c| !c.is_control()).take(300).collect::<String>().trim().to_string() };
             if look.is_empty() { return Some(answer(400, json!({ "error": "What should she look like?" }))); }
             if !u.ensure_image(hub).await { return Some(answer(503, json!({ "error": "The image engine on the AI host is not starting." }))); }
-            match u.engine_json(hub, &format!("{}/companion/look", u.image_url), "POST", json!({ "user": un, "look": look }), 30_000).await {
+            match u.engine_json(hub, &format!("{}/companion/look", u.image_url), "POST", json!({ "user": un, "look": look, "reset": reset }), 30_000).await {
                 Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
                 Ok((_, v)) => answer(502, json!({ "error": format!("Image engine: {}", s(&v, "error")) })),
                 Err(e) => answer(502, json!({ "error": format!("Image engine: {e}") })),
             }
         }
+        // Reset (Settings → Desktop Unity): the outfit her pictures kept is forgotten
+        "/api/assistant/outfit-forget" if post => { u.forget_outfit(a); answer(200, json!({ "ok": true })) }
         "/api/assistant/look" if get => match u.engine_json(hub, &format!("{}/companion/status?user={un}", u.image_url), "GET", Value::Null, 15_000).await {
             Ok((st, v)) if (200..300).contains(&st) => answer(200, v),
             _ => answer(200, json!({ "ok": false, "clips": [], "busy": false })),
