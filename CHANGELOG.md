@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.56.1 — 2026-11-10
+
+PATCH: Desktop Unity goes with the app when it is minimised.
+
+### Fixed
+- **She no longer stays behind when the app is minimised** (asked: "when i minimize the app its like the desktop unity stays where the window was"): Windows does not always say a window was minimised, so her window now checks the app's twice a second: minimised or hidden, she hides with it; back again, she comes back (only when it was the minimise that hid her, and she is on). Windows and Linux app: vr-desktop rebuilt.
+
 ## 5.56.0 — 2026-11-10
 
 MINOR: her new looks on the website too.
