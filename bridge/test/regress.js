@@ -6462,7 +6462,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   const ti = await uchat(U, 'titties');
   const tiFinal = ti.events.find((e) => e.type === 'final') || {};
   const tiPrompt = fakeImagePrompts[nImg] || '';
-  check('R107', 'a picture ask the brain answers with text only still gets a picture (hub backstop), a picture of her with her full look', (tiFinal.images || []).length === 1 && tiPrompt.startsWith('titties') && (!look || tiPrompt.includes(look)), tiPrompt.slice(0, 80));
+  check('R107', 'a picture ask the brain answers with text only still gets a picture (hub backstop), a picture of her with her full look', (tiFinal.images || []).length === 1 && tiPrompt.startsWith('photo of one 22 year old American woman') && /fully nude/.test(tiPrompt) && (!look || tiPrompt.includes(look)), tiPrompt.slice(0, 80));
   const nImg2 = fakeImagePrompts.length;
   const wx = await uchat(U, 'whats up with you today');
   check('R108', 'no picture when none was asked for', !((wx.events.find((e) => e.type === 'final') || {}).images || []).length && fakeImagePrompts.length === nImg2);
