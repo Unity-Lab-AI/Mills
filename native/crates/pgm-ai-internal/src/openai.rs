@@ -4,6 +4,7 @@
 //!   POST /v1/chat/completions        OpenAI chat format in (stream or not)
 //!   POST /v1/messages                Anthropic Messages format in (stream or not: Anthropic's SSE events)
 //!   POST /v1/messages/count_tokens   a rough count (about 4 characters a token)
+//!   POST /v1/responses               OpenAI's Responses API (Codex): raw where the provider speaks it, else translated (gateway.rs)
 //!   Authorization: Bearer mills_… or x-api-key: mills_…   (made in Settings → API access)
 //! Keys: bridge/api-keys.json { <username>: { hash (sha256), prefix, createdAt, expiresDays, calls, lastUsed, provider,
 //! model } }, taken over from each account's state.json ("api") the first time. Providers: bridge/providers.json.
@@ -48,7 +49,7 @@ pub struct KeyCtx { pub id: String, pub label: String, pub providers: Vec<String
 impl KeyCtx { pub fn default_key() -> KeyCtx { KeyCtx { id: "default".into(), label: "default".into(), ..Default::default() } } }
 /// The answers being made: slot → (person, key id, its cancel).
 type RunMap = HashMap<u64, (String, String, Arc<Cancel>)>;
-pub struct Api { root: PathBuf, mills: PathBuf, keys: Mutex<Map<String, Value>>, running: Mutex<RunMap>, run_seq: std::sync::atomic::AtomicU64, http: reqwest::Client }
+pub struct Api { root: PathBuf, mills: PathBuf, keys: Mutex<Map<String, Value>>, running: Mutex<RunMap>, run_seq: std::sync::atomic::AtomicU64, http: reqwest::Client, roll: Mutex<()> }
 use pgm_core_internal::json::{read_json, s, write_json_private as write_json};
 fn js_len(t: &str) -> usize { t.encode_utf16().count() }
 
@@ -62,7 +63,7 @@ impl Api {
         // (no redirects: an endpoint someone typed in must not lead this hub on to an address of its own choosing)
         let _ = pgm_net_internal::client::http_client(std::time::Duration::from_secs(15));
         let http = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build().expect("http");
-        Api { root: root.to_path_buf(), mills: root.join(".."), keys: Mutex::new(keys), running: Mutex::default(), run_seq: Default::default(), http }
+        Api { root: root.to_path_buf(), mills: root.join(".."), keys: Mutex::new(keys), running: Mutex::default(), run_seq: Default::default(), http, roll: Mutex::default() }
     }
     fn save(&self) { write_json(&self.root.join("api-keys.json"), &Value::Object(self.keys.lock().unwrap_or_else(|e| e.into_inner()).clone())); }
     /// A named key by id.
@@ -137,6 +138,7 @@ fn pub_view(p: &Value) -> Value {
     let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
     for k in ["baseUrl", "configDir", "command", "home", "provider"] { if !s(p, k).is_empty() { v[k] = p[k].clone(); } }
     if p["args"].is_array() { v["args"] = p["args"].clone(); }
+    if p["responses"] == json!(true) { v["responses"] = json!(true); }
     if p["kind"] == json!(crate::jcode::KIND) { v["harness"] = json!(crate::jcode::HARNESS); }
     v
 }
@@ -189,6 +191,9 @@ fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String>
             let m = clean_models(&b["models"], vec![]);
             if m.is_empty() { return Err("List at least one model id the endpoint serves.".into()); }
             p["models"] = json!(m);
+            // G5: the endpoint speaks OpenAI's Responses API itself (POST <baseUrl>/responses), so /v1/responses goes to it raw;
+            // api.openai.com counts as such without the flag
+            if b["responses"] == json!(true) { p["responses"] = json!(true); }
         }
     }
     let mut list = providers_db(hub); list.push(p.clone()); save_providers(hub, list);
@@ -201,6 +206,7 @@ fn update_provider(hub: &dyn AiHub, user: &str, id: &str, b: &Value) -> Result<V
     if b.get("shared").is_some() { p["shared"] = json!(!(b["shared"].is_null() || b["shared"] == json!(false) || b["shared"] == json!(0) || b["shared"] == json!(""))); }
     if b.get("models").is_some() { let fb = if p["kind"] == json!("openai") || p["kind"] == json!("jcode") { p["models"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() } else { host_models(hub) }; p["models"] = json!(clean_models(&b["models"], fb)); }
     if !s(b, "apiKey").is_empty() && p["kind"] != json!("claude-cli") && p["kind"] != json!("jcode") { p["apiKey"] = json!(s(b, "apiKey").trim()); }
+    if p["kind"] == json!("openai") && b.get("responses").is_some() { if b["responses"] == json!(true) { p["responses"] = json!(true); } else if let Some(m) = p.as_object_mut() { m.remove("responses"); } }
     if p["kind"] == json!("jcode") {
         if !s(b, "command").trim().is_empty() { p["command"] = json!(s(b, "command").trim()); }
         if b.get("provider").is_some() { let pr: String = s(b, "provider").trim().chars().take(80).collect(); if pr.is_empty() { p.as_object_mut().map(|m| m.remove("provider")); } else { p["provider"] = json!(pr); } }
@@ -589,8 +595,10 @@ pub(crate) fn too_many(anthropic: bool, key: &KeyCtx, max: usize) -> Resp {
     r.headers_mut().insert("retry-after", hyper::header::HeaderValue::from_static("1"));
     r
 }
-/// Counts a call on its key; the first call of a day goes to the security log (key id and prefix, never the secret).
-pub(crate) fn count_use(hub: &dyn AiHub, u: &str, key: &KeyCtx) {
+/// Counts a call on its key (and in the key's day roll-up, under the provider and model it was routed to); the first call
+/// of a day goes to the security log (key id and prefix, never the secret).
+pub(crate) fn count_use(hub: &dyn AiHub, u: &str, key: &KeyCtx, provider: &str, model: &str) {
+    roll_up(hub, u, &key.id, provider, model, 1, 0, 0);
     let api = hub.api(); let now = pgm_core_internal::time::iso_now();
     let mut first_today = false; let mut prefix = String::new();
     api.edit(u, |rec| {
@@ -600,13 +608,71 @@ pub(crate) fn count_use(hub: &dyn AiHub, u: &str, key: &KeyCtx) {
     });
     if first_today { pgm_core_internal::audit::record(u, "apikey.use", &key.id, json!({ "prefix": prefix, "label": key.label }), ""); }
 }
-/// Adds an answer's tokens to its key's counters (`tokensIn`: everything read, cache included; `tokensOut`).
-pub(crate) fn count_tokens(hub: &dyn AiHub, u: &str, key: &KeyCtx, input: u64, output: u64) {
+/// Adds an answer's tokens to its key's counters (`tokensIn`: everything read, cache included; `tokensOut`) and to the key's
+/// day roll-up under the provider and model it was routed to.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn count_tokens(hub: &dyn AiHub, u: &str, key: &KeyCtx, provider: &str, model: &str, input: u64, output: u64) {
     hub.api().edit(u, |rec| {
         let add = |k: &mut Value| { k["tokensIn"] = json!(k["tokensIn"].as_u64().unwrap_or(0) + input); k["tokensOut"] = json!(k["tokensOut"].as_u64().unwrap_or(0) + output); };
         if !key.named { add(rec); }
         else if let Some(k) = rec["keys"].as_array_mut().and_then(|a| a.iter_mut().find(|k| k["id"] == json!(key.id))) { add(k); }
     });
+    roll_up(hub, u, &key.id, provider, model, 0, input, output);
+}
+
+// ---------- per-key usage by day (G5): <root>/profiles/<user>/apikey-usage.json ----------
+// { <key id>: { "YYYY-MM-DD" (UTC): { calls, tokensIn, tokensOut, models: { "<provider> <model>": { provider, model, calls,
+// tokensIn, tokensOut } } } } }. Written by the Rust hub only (the frozen JS hub neither reads nor needs it), add-only next to
+// the totals on the key record; it lives in the person's profile folder, which is data (never shipped, in every deploy /
+// pack / restore / hand-off list already). Days older than USAGE_KEEP_DAYS are dropped when the file is written; a revoked
+// key's days stay until then but are never listed.
+const USAGE_KEEP_DAYS: i64 = 120;
+fn usage_file(hub: &dyn AiHub, u: &str) -> PathBuf { hub.root().join("profiles").join(u).join("apikey-usage.json") }
+fn utc_day(back: i64) -> String { (chrono::Utc::now() - chrono::Duration::days(back)).format("%Y-%m-%d").to_string() }
+#[allow(clippy::too_many_arguments)]
+fn roll_up(hub: &dyn AiHub, u: &str, key: &str, provider: &str, model: &str, calls: u64, tin: u64, tout: u64) {
+    if !pgm_identity_internal::valid_username(u) || key.is_empty() || (calls == 0 && tin == 0 && tout == 0) { return; }
+    let _one = hub.api().roll.lock().unwrap_or_else(|e| e.into_inner()); // one read-change-write at a time
+    let f = usage_file(hub, u);
+    let mut all = read_json(&f).filter(Value::is_object).unwrap_or_else(|| json!({}));
+    let add = |o: &mut Value| { for (k, n) in [("calls", calls), ("tokensIn", tin), ("tokensOut", tout)] { o[k] = json!(o[k].as_u64().unwrap_or(0) + n); } };
+    let d = &mut all[key][utc_day(0)];
+    add(d);
+    let m = &mut d["models"][format!("{provider} {model}")];
+    m["provider"] = json!(provider); m["model"] = json!(model); add(m);
+    let cut = utc_day(USAGE_KEEP_DAYS);
+    if let Some(keys) = all.as_object_mut() { for v in keys.values_mut() { if let Some(days) = v.as_object_mut() { days.retain(|day, _| day.as_str() >= cut.as_str()); } } }
+    if let Some(p) = f.parent() { let _ = std::fs::create_dir_all(p); }
+    write_json(&f, &all);
+}
+/// `GET /api/apikey/usage?days=N` (1 to 90, default 30): the person's own keys with their totals and, for the last N days
+/// (UTC, oldest first, empty days included), the calls and tokens per day and per provider and model.
+fn usage_view(hub: &dyn AiHub, u: &str, days: i64) -> Value {
+    let rec = hub.api().key_of(u);
+    let roll = read_json(&usage_file(hub, u)).unwrap_or(Value::Null);
+    let day_list: Vec<String> = (0..days).rev().map(utc_day).collect();
+    let mut keys: Vec<(String, String, Value)> = vec![];
+    if !s(&rec, "hash").is_empty() { keys.push(("default".into(), "default".into(), rec.clone())); }
+    for k in rec["keys"].as_array().cloned().unwrap_or_default() { keys.push((s(&k, "id"), s(&k, "label"), k)); }
+    let n = |v: &Value, k: &str| v[k].as_u64().unwrap_or(0);
+    let out: Vec<Value> = keys.into_iter().map(|(id, label, k)| {
+        let r = &roll[&id];
+        let by_day: Vec<Value> = day_list.iter().map(|d| { let x = &r[d]; json!({ "day": d, "calls": n(x, "calls"), "tokensIn": n(x, "tokensIn"), "tokensOut": n(x, "tokensOut") }) }).collect();
+        let mut models: Vec<Value> = vec![];
+        for d in &day_list {
+            for m in r[d]["models"].as_object().map(|o| o.values().cloned().collect::<Vec<_>>()).unwrap_or_default() {
+                match models.iter_mut().find(|x| x["provider"] == m["provider"] && x["model"] == m["model"]) {
+                    Some(x) => { for f in ["calls", "tokensIn", "tokensOut"] { x[f] = json!(n(x, f) + n(&m, f)); } }
+                    None => models.push(json!({ "model": m["model"], "provider": m["provider"], "calls": n(&m, "calls"), "tokensIn": n(&m, "tokensIn"), "tokensOut": n(&m, "tokensOut") })),
+                }
+            }
+        }
+        models.sort_by_key(|x| std::cmp::Reverse((n(x, "calls"), n(x, "tokensIn") + n(x, "tokensOut"))));
+        let sum = |f: &str| by_day.iter().map(|x| n(x, f)).sum::<u64>();
+        json!({ "id": id, "label": label, "prefix": s(&k, "prefix"), "calls": n(&k, "calls"), "tokensIn": n(&k, "tokensIn"), "tokensOut": n(&k, "tokensOut"), "lastUsed": k.get("lastUsed").cloned().filter(|v| !v.is_null()).unwrap_or(Value::Null),
+            "period": { "calls": sum("calls"), "tokensIn": sum("tokensIn"), "tokensOut": sum("tokensOut") }, "byDay": by_day, "byModel": models })
+    }).collect();
+    json!({ "days": days, "from": day_list.first(), "to": day_list.last(), "keys": out })
 }
 fn total(u: &Value) -> Value { let mut v = u.clone(); v["total_tokens"] = json!(u["prompt_tokens"].as_u64().unwrap_or(0) + u["completion_tokens"].as_u64().unwrap_or(0)); v }
 
@@ -727,7 +793,7 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
             if crate::gateway::speaks_openai(&prov) { return crate::gateway::messages_via_openai(hub, &user, &key, &prov, &model, b).await; }
             let Some(run) = start_running(hub, &user, &key) else { return too_many(true, &key, max_concurrent(&**hub, &key)) };
             let max = b["max_tokens"].as_f64().filter(|n| *n > 0.0).map(|n| (n.round() as u64).min(128000));
-            count_use(&**hub, &user, &key);
+            count_use(&**hub, &user, &key, &s(&prov, "id"), &model);
             let mid = format!("msg_{}", pgm_core_internal::crypto::random_hex(12));
             let ant_usage = |u: &Value| json!({ "input_tokens": u["prompt_tokens"].as_u64().unwrap_or(0), "output_tokens": u["completion_tokens"].as_u64().unwrap_or(0) });
             let pid = s(&prov, "id");
@@ -771,7 +837,7 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
             let Some(run) = start_running(hub, &user, &key) else { return too_many(false, &key, max_concurrent(&**hub, &key)) };
             let system = msgs.iter().filter(|m| m.0 == "system").map(|m| m.1.clone()).collect::<Vec<_>>().join("\n\n");
             let max = b["max_tokens"].as_u64();
-            count_use(&**hub, &user, &key);
+            count_use(&**hub, &user, &key, &s(&prov, "id"), &model);
             let cid = format!("chatcmpl-{}", pgm_core_internal::crypto::random_hex(12)); let created = now_ms() / 1000;
             let pid = s(&prov, "id");
             if crate::toolconv::wants_tools(&b) { // T-317: tools in, tool calls out (a request without them takes the path below, unchanged)
@@ -813,7 +879,13 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
                 Err(e) => oa_error(if e.status == 0 { 502 } else { e.status }, &e.msg, if e.status == 503 { "service_unavailable" } else { "api_error" }),
             }
         }
-        _ => fail(404, "Unknown endpoint. This hub serves GET /v1/models, POST /v1/chat/completions (OpenAI) and POST /v1/messages (Anthropic).", "not_found_error"),
+        // G5: the Responses API (Codex): raw to a provider that speaks it, translated to the others (gateway.rs)
+        ("POST", "/v1/responses") => {
+            let Some(b) = body.filter(Value::is_object) else { return oa_error(400, "Body is not JSON.", "invalid_request_error") };
+            let (prov, model) = match chosen { Ok(x) => x, Err(e) => return e };
+            crate::gateway::responses(hub, r, &user, &key, &prov, &model, b).await
+        }
+        _ => fail(404, "Unknown endpoint. This hub serves GET /v1/models, POST /v1/chat/completions and POST /v1/responses (OpenAI) and POST /v1/messages (Anthropic).", "not_found_error"),
     }
 }
 
@@ -825,6 +897,8 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let list = || json!(crate::work::providers_list(&**hub, u));
     Some(match r.path.as_str() {
         "/api/apikey" if get => answer(200, api.status(u)),
+        // G5: the signed-in person's own keys, their calls and tokens per day and per model (never another person's)
+        "/api/apikey/usage" if get => { let d = r.param("days").and_then(|x| x.trim().parse::<i64>().ok()).unwrap_or(30).clamp(1, 90); answer(200, usage_view(&**hub, u, d)) }
         "/api/apikey/rotate" if post => {
             let key = format!("mills_{}", pgm_core_internal::crypto::random_hex(24));
             let mut k = api.key_of(u); if !k.is_object() { k = json!({}); }

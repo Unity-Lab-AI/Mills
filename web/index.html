@@ -508,6 +508,17 @@
   .apiKeyRow { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 6px; padding: .4rem .55rem; font-size: .82rem; }
   .apiKeyRow small { color: var(--muted, inherit); opacity: .8; overflow-wrap: anywhere; }
   .apiKeyRow.off { opacity: .55; }
+  .apiKeyRow .apiKeyBtns { display: inline-flex; gap: .3rem; }
+  .apiUsage { flex-basis: 100%; display: flex; flex-direction: column; gap: .35rem; border-top: 1px solid var(--line); padding-top: .4rem; }
+  .apiBars { display: flex; align-items: flex-end; gap: 2px; height: 3.2rem; padding-bottom: 1px; border-bottom: 1px solid var(--line); }
+  .apiBar { flex: 1 1 0; min-width: 3px; height: 100%; display: flex; align-items: flex-end; }
+  .apiBar span { display: block; width: 100%; min-height: 0; background: var(--accent); border-radius: 4px 4px 0 0; }
+  .apiBar:hover span { opacity: .75; }
+  .apiBarAxis { display: flex; justify-content: space-between; font-size: .72rem; opacity: .7; }
+  .apiUsage table { border-collapse: collapse; font-size: .78rem; width: 100%; }
+  .apiUsage th, .apiUsage td { text-align: left; padding: .1rem .4rem .1rem 0; border-bottom: 1px solid var(--line); }
+  .apiUsage td.n, .apiUsage th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .apiUsage summary { cursor: pointer; font-size: .8rem; }
   .apiNew { display: flex; flex-direction: column; gap: .4rem; border-top: 1px solid var(--line); padding-top: .5rem; }
   .apiNew .checks { display: flex; flex-wrap: wrap; gap: .2rem .8rem; font-size: .82rem; }
   .apiNew .checks label { display: inline-flex; gap: .25rem; align-items: center; }
@@ -1074,6 +1085,7 @@
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.3l3.4 2"/></symbol>
   <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 0 0 0 17c1.2 0 1.8-.9 1.4-1.9-.5-1.3.3-2.6 1.7-2.6H17a3.5 3.5 0 0 0 3.5-3.5c0-5-3.8-9-8.5-9z"/><circle cx="7.8" cy="11.5" r="1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="7.7" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="8.2" r="1" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="16" height="6.5" rx="1.8"/><path d="M7.5 7.2h.01M7.5 16.7h.01M11 7.2h5.5M11 16.7h5.5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16M7 16.5V11M12 16.5V6.5M17 16.5v-3.5"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15.5" r="4"/><path d="M10.8 12.7L19.5 4M16 7.5l2.5 2.5M14 9.5l1.8 1.8"/></symbol>
   <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3.5v4.5M15 3.5v4.5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5v4"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2H5z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></symbol>
@@ -5405,7 +5417,17 @@ function renderApiKeys(box, st, info) {
       if (rv.dataset.armed !== '1') { rv.dataset.armed = '1'; rv.textContent = 'Click again to revoke'; return; }
       json('/api/apikey/revoke', { method: 'POST', body: JSON.stringify({ id: k.id }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
     };
-    r.append(t, rv); list.append(r);
+    // Usage (G5): this key's last 30 days, opened on demand (a hub without /api/apikey/usage says so in the panel)
+    const ub = mk('button', 'ghost'); ub.type = 'button'; ub.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg>'; ub.append(' Usage');
+    ub.setAttribute('aria-expanded', 'false');
+    const panel = mk('div', 'apiUsage'); panel.hidden = true;
+    ub.onclick = async () => {
+      if (!panel.hidden) { panel.hidden = true; ub.setAttribute('aria-expanded', 'false'); return; }
+      panel.hidden = false; ub.setAttribute('aria-expanded', 'true'); panel.textContent = 'Loading usage…';
+      try { const u = await json('/api/apikey/usage?days=30'); renderApiUsage(panel, (u.keys || []).find((x) => x.id === k.id), u.days || 30); } catch (e) { panel.textContent = e.message; }
+    };
+    const btns = mk('span', 'apiKeyBtns'); btns.append(ub, rv);
+    r.append(t, btns, panel); list.append(r);
   }
   box.append(list);
   // New key: label, expiry, optional limits chosen from what this person may use
@@ -5433,6 +5455,34 @@ function renderApiKeys(box, st, info) {
   if (provs.length > 1) nw.append(pc.w);
   if (mset.length) nw.append(mc.w);
   box.append(nw);
+}
+// One key's usage (GET /api/apikey/usage): the period's totals, tokens per day as plain bars (each with its numbers on
+// hover), the active days as a table, and the calls and tokens per model
+function renderApiUsage(panel, ku, days) {
+  const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  panel.textContent = '';
+  if (!ku) { panel.append(mk('div', 'status', 'No usage recorded for this key yet.')); return; }
+  const p = ku.period || {};
+  panel.append(mk('div', 'status', 'Last ' + days + ' days: ' + fmt(p.calls) + ' call' + (p.calls === 1 ? '' : 's') + ', ' + fmt(p.tokensIn) + ' tokens in, ' + fmt(p.tokensOut) + ' out'));
+  const byDay = ku.byDay || [], tok = (d) => (d.tokensIn || 0) + (d.tokensOut || 0);
+  const useTokens = byDay.some((d) => tok(d) > 0), val = (d) => (useTokens ? tok(d) : d.calls || 0);
+  const max = Math.max(1, ...byDay.map(val));
+  const bars = mk('div', 'apiBars'); bars.setAttribute('role', 'img'); bars.setAttribute('aria-label', (useTokens ? 'Tokens' : 'Calls') + ' per day, last ' + days + ' days');
+  for (const d of byDay) {
+    const col = mk('div', 'apiBar'); col.title = d.day + ': ' + fmt(d.calls) + ' call' + (d.calls === 1 ? '' : 's') + ', ' + fmt(d.tokensIn) + ' in, ' + fmt(d.tokensOut) + ' out';
+    const fill = mk('span'); fill.style.height = (val(d) ? Math.max(4, Math.round(val(d) / max * 100)) : 0) + '%'; col.append(fill); bars.append(col);
+  }
+  const axis = mk('div', 'apiBarAxis'); axis.append(mk('span', '', byDay.length ? byDay[0].day : ''), mk('span', '', useTokens ? 'tokens per day' : 'calls per day'), mk('span', '', byDay.length ? byDay[byDay.length - 1].day : ''));
+  panel.append(bars, axis);
+  const table = (head, rows) => { const t = mk('table'), hr = mk('tr'); for (const [h, n] of head) hr.append(mk('th', n ? 'n' : '', h)); t.append(hr); for (const r of rows) { const tr = mk('tr'); r.forEach((c, i) => tr.append(mk('td', head[i][1] ? 'n' : '', c))); t.append(tr); } return t; };
+  const active = byDay.filter((d) => d.calls || tok(d));
+  const det = mk('details'); det.append(mk('summary', '', 'Per day (' + active.length + ' active)'));
+  det.append(active.length ? table([['Day'], ['Calls', 1], ['Tokens in', 1], ['Tokens out', 1]], active.slice().reverse().map((d) => [d.day, fmt(d.calls), fmt(d.tokensIn), fmt(d.tokensOut)])) : mk('div', 'status', 'No calls in this period.'));
+  panel.append(det);
+  const models = ku.byModel || [];
+  const provName = (id) => ((typeof providerList !== 'undefined' && providerList.find((x) => x.id === id)) || {}).label || id;
+  if (models.length) panel.append(table([['Model'], ['Provider'], ['Calls', 1], ['Tokens in', 1], ['Tokens out', 1]], models.map((m) => [m.model || '(default)', provName(m.provider), fmt(m.calls), fmt(m.tokensIn), fmt(m.tokensOut)])));
 }
 // Connect a tool: ready-to-paste setups (web/apisetup.js); the key is filled in only while it is the one just made
 function renderApiConnect(st) {

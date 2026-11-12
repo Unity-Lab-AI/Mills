@@ -22,6 +22,11 @@
 //! answer comes back in the shape the caller speaks; what cannot be carried is refused with a 400 naming it. All four
 //! flows share one stream pump ([`Pump`]): the slot is held to the end, the caller hanging up closes the upstream.
 //!
+//! G5: `POST /v1/responses` (OpenAI's Responses API, Codex) on the same pump ([`responses`]): raw to a provider that speaks it
+//! (an endpoint at api.openai.com or marked `responses: true`, a host's ChatGPT / Codex login), translated to chat completions
+//! or Messages for the others. Every flow's usage also goes to the key's day roll-up (`openai::count_use` /
+//! `openai::count_tokens`, under the provider and model the call was routed to).
+//!
 //! Providers that speak neither (`host` / `claude-cli`, Codex, Jcode) keep the text path in `openai.rs`; so does a plain text
 //! chat request to a Claude login (`host-claude`), which that path has always sent as Claude Code (an older arrangement;
 //! requests with tools or images take the translator and are sent as they are).
@@ -209,6 +214,32 @@ impl Pump for OaToAntPump {
     fn error(&mut self, m: &str) -> Vec<Bytes> { frames(self.0.error(m)) }
     fn usage(&self) -> (String, Value) { (self.0.model().to_string(), self.0.native().clone()) }
 }
+/// A native Responses stream, byte for byte; its usage read from `response.completed`. An upstream that breaks off gets an
+/// `error` event numbered after the last one that came.
+struct RawResp(crate::xlate::RespReader);
+impl Pump for RawResp {
+    fn push(&mut self, c: &[u8]) -> Vec<Bytes> { self.0.push(c); vec![Bytes::copy_from_slice(c)] }
+    fn error(&mut self, m: &str) -> Vec<Bytes> {
+        if self.0.done.is_some() { return vec![]; }
+        let n = self.0.last_seq.map(|n| n + 1).unwrap_or(0);
+        vec![Bytes::from(format!("event: error\ndata: {}\n\n", json!({ "type": "error", "sequence_number": n, "code": "server_error", "message": m, "param": Value::Null })))]
+    }
+    fn usage(&self) -> (String, Value) { (self.0.model.clone(), self.0.native.clone()) }
+}
+struct ChatToRespPump(crate::xlate::ChatToResp);
+impl Pump for ChatToRespPump {
+    fn push(&mut self, c: &[u8]) -> Vec<Bytes> { frames(self.0.push(c)) }
+    fn finish(&mut self) -> Vec<Bytes> { frames(self.0.finish()) }
+    fn error(&mut self, m: &str) -> Vec<Bytes> { frames(self.0.error(m)) }
+    fn usage(&self) -> (String, Value) { (self.0.model().to_string(), self.0.native().clone()) }
+}
+struct AntToRespPump(crate::xlate::AntToResp);
+impl Pump for AntToRespPump {
+    fn push(&mut self, c: &[u8]) -> Vec<Bytes> { frames(self.0.push(c)) }
+    fn finish(&mut self) -> Vec<Bytes> { frames(self.0.finish()) }
+    fn error(&mut self, m: &str) -> Vec<Bytes> { frames(self.0.error(m)) }
+    fn usage(&self) -> (String, Value) { (self.0.model().to_string(), self.0.native().clone()) }
+}
 
 fn base_url(hub: &dyn AiHub) -> String {
     hub.cfg().get("api").and_then(|a| a["anthropicBase"].as_str()).map(|b| b.trim().trim_end_matches('/').to_string()).filter(|b| b.starts_with("http")).unwrap_or_else(|| DEFAULT_BASE.into())
@@ -229,12 +260,20 @@ async fn read_all(mut up: Up, cancel: &openai::Cancel) -> Option<Vec<u8>> {
     let mut v = vec![];
     loop { tokio::select! { _ = cancel.woke() => return None, c = up.next() => match c { Some(Ok(b)) => v.extend_from_slice(&b), Some(Err(_)) | None => return Some(v) } } }
 }
-fn note_usage(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, kind: &str, ur: &UsageReader) { note_native(hub, user, key, kind, &ur.model, &ur.native); }
-/// An answer's usage (the provider's own object, whichever shape) to the ledger and the key's counters.
-fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, kind: &str, model: &str, native: &Value) {
+/// Where an answer's usage is counted: the provider's kind (the ledger), its id and the model it was routed to (the key's day
+/// roll-up, G5).
+#[derive(Clone)]
+struct Tally { kind: String, prov: String, model: String }
+fn tally(p: &Value, model: &str) -> Tally { Tally { kind: s(p, "kind"), prov: s(p, "id"), model: model.to_string() } }
+/// A call starts on its key: counted, in the roll-up under its provider and model.
+fn count_call(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally) { openai::count_use(&**hub, user, key, &t.prov, &t.model); }
+fn note_usage(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, ur: &UsageReader) { note_native(hub, user, key, t, &ur.model, &ur.native); }
+/// An answer's usage (the provider's own object, whichever shape) to the ledger (under the model the upstream named) and the
+/// key's counters and day roll-up (under the routed model).
+fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, model: &str, native: &Value) {
     if let Some(u) = openai::normalise(native) {
-        hub.ai().usage.note_answer(user, kind, model, &u);
-        openai::count_tokens(&**hub, user, key, u.total_input(), u.output);
+        hub.ai().usage.note_answer(user, &t.kind, model, &u);
+        openai::count_tokens(&**hub, user, key, &t.prov, &t.model, u.total_input(), u.output);
     }
 }
 /// The provider's full record (its own key is in it), else what routing gave.
@@ -263,12 +302,16 @@ async fn ant_upstream(hub: &Arc<dyn AiHub>, user: &str, p: &Value, headers: Vec<
         match sent { Ok(x) => Ok((x.status, x.headers, Up::Host(x.body))), Err(e) => Err(err_resp(f, e.status, &e.msg)) }
     }
 }
-/// The request to an OpenAI-speaking provider: an endpoint with its key as a bearer, or a host's server through its relay.
-async fn oa_upstream(hub: &Arc<dyn AiHub>, user: &str, p: &Value, body: Vec<u8>, stream: bool, cancel: &Arc<openai::Cancel>, f: Fmt) -> Result<Upstream, Resp> {
+/// The chat completions path of an OpenAI-speaking provider (under its base URL).
+const CHAT: &str = "/chat/completions";
+/// The request to an OpenAI-speaking provider at `path` (chat completions, or a native Responses provider's /responses): an
+/// endpoint with its key as a bearer, or a host's server through its relay.
+#[allow(clippy::too_many_arguments)]
+async fn oa_upstream(hub: &Arc<dyn AiHub>, user: &str, p: &Value, path: &str, body: Vec<u8>, stream: bool, cancel: &Arc<openai::Cancel>, f: Fmt) -> Result<Upstream, Resp> {
     let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
     if stream { headers.push(("accept".into(), "text/event-stream".into())); }
     if s(p, "kind") == "openai" {
-        let mut rb = openai::self_http(&**hub).post(format!("{}/chat/completions", s(p, "baseUrl").trim_end_matches('/'))).body(body);
+        let mut rb = openai::self_http(&**hub).post(format!("{}{path}", s(p, "baseUrl").trim_end_matches('/'))).body(body);
         for (k, v) in &headers { rb = rb.header(k.as_str(), v.as_str()); }
         if !s(p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(p, "apiKey"))); }
         let sent = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = rb.send() => x };
@@ -277,7 +320,7 @@ async fn oa_upstream(hub: &Arc<dyn AiHub>, user: &str, p: &Value, body: Vec<u8>,
         Ok((resp.status().as_u16(), hs, Up::Http(resp)))
     } else {
         let (host, pid) = (s(p, "hostId"), s(p, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default());
-        let sent = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = hub.ai().provider_fetch_for(user, "api", &host, &pid, "/chat/completions", "POST", headers, body) => x };
+        let sent = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = hub.ai().provider_fetch_for(user, "api", &host, &pid, path, "POST", headers, body) => x };
         match sent { Ok(x) => Ok((x.status, x.headers, Up::Host(x.body))), Err(e) => Err(err_resp(f, e.status, &e.msg)) }
     }
 }
@@ -287,10 +330,10 @@ fn sse_error(m: &str) -> Bytes { Bytes::from(format!("event: error\ndata: {}\n\n
 /// the real model id the routing resolved; `b` the request's parsed JSON.
 pub async fn messages(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: &openai::KeyCtx, prov: &Value, model: &str, b: Value) -> Resp {
     let p = full_provider(hub, user, prov); // the full record: the provider's own key is in it
-    let kind = s(&p, "kind");
+    let t = tally(&p, model);
     if let Some(e) = preflight(hub, &p, Fmt::Ant) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(true, key, openai::max_concurrent(&**hub, key)) };
-    openai::count_use(&**hub, user, key);
+    count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
     let cancel = run.cancel.clone();
     let (status, rheaders, up) = match ant_upstream(hub, user, &p, request_headers(&r.headers, stream), upstream_body(&b, model), &cancel, Fmt::Ant).await { Ok(x) => x, Err(e) => return e };
@@ -304,19 +347,19 @@ pub async fn messages(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: &openai::K
     }
     if !stream {
         let Some(bytes) = read_all(up, &cancel).await else { return failure(499, "cancelled") };
-        note_usage(hub, user, key, &kind, &UsageReader::from_json(&bytes));
+        note_usage(hub, user, key, &t, &UsageReader::from_json(&bytes));
         drop(run);
         return raw(status, &ct, &out_h, pgm_net_internal::http::full(bytes));
     }
     // streamed: bytes go on as they come; the slot is held by the task until the stream ends or the caller hangs up
-    streamed(hub, user, key, &kind, up, Box::new(RawAnt(UsageReader::default())), run, status, if ct.is_empty() { "text/event-stream" } else { &ct }, &out_h)
+    streamed(hub, user, key, &t, up, Box::new(RawAnt(UsageReader::default())), run, status, if ct.is_empty() { "text/event-stream" } else { &ct }, &out_h)
 }
 /// Starts the pump of a stream and answers with its body.
 #[allow(clippy::too_many_arguments)]
-fn streamed(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, kind: &str, up: Up, pump: Box<dyn Pump>, run: Running, status: u16, ct: &str, out_h: &[(String, String)]) -> Resp {
+fn streamed(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, up: Up, pump: Box<dyn Pump>, run: Running, status: u16, ct: &str, out_h: &[(String, String)]) -> Resp {
     let (tx, rx) = mpsc::unbounded_channel::<Result<Bytes, String>>();
     let cancel = run.cancel.clone();
-    tokio::spawn(forward(hub.clone(), user.to_string(), key.clone(), kind.to_string(), up, pump, tx, run, cancel));
+    tokio::spawn(forward(hub.clone(), user.to_string(), key.clone(), t.clone(), up, pump, tx, run, cancel));
     use http_body_util::BodyExt;
     let st = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|x| (x.map(hyper::body::Frame::data).map_err(Box::<dyn std::error::Error + Send + Sync>::from), rx)) });
     raw(status, ct, out_h, http_body_util::StreamBody::new(st).boxed())
@@ -325,7 +368,7 @@ fn streamed(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, kind: &str, 
 /// one), the usage read on the way. Ends when the upstream does, when the caller hangs up (the channel closes: the upstream
 /// is dropped, which closes it) or when the answer is cancelled.
 #[allow(clippy::too_many_arguments)]
-async fn forward(hub: Arc<dyn AiHub>, user: String, key: openai::KeyCtx, kind: String, mut up: Up, mut pump: Box<dyn Pump>, tx: mpsc::UnboundedSender<Result<Bytes, String>>, run: Running, cancel: Arc<openai::Cancel>) {
+async fn forward(hub: Arc<dyn AiHub>, user: String, key: openai::KeyCtx, t: Tally, mut up: Up, mut pump: Box<dyn Pump>, tx: mpsc::UnboundedSender<Result<Bytes, String>>, run: Running, cancel: Arc<openai::Cancel>) {
     let send = |tx: &mpsc::UnboundedSender<Result<Bytes, String>>, v: Vec<Bytes>| v.into_iter().all(|b| tx.send(Ok(b)).is_ok());
     loop {
         tokio::select! {
@@ -340,7 +383,7 @@ async fn forward(hub: Arc<dyn AiHub>, user: String, key: openai::KeyCtx, kind: S
     }
     drop(up); // closes the upstream
     let (model, native) = pump.usage();
-    note_native(&hub, &user, &key, &kind, &model, &native);
+    note_native(&hub, &user, &key, &t, &model, &native);
     drop(run); // frees the key's slot
 }
 
@@ -351,11 +394,11 @@ async fn forward(hub: Arc<dyn AiHub>, user: String, key: openai::KeyCtx, kind: S
 /// answers JSON to a streaming request is streamed from that JSON.
 pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, prov: &Value, model: &str, b: Value) -> Resp {
     let p = full_provider(hub, user, prov);
-    let kind = s(&p, "kind");
+    let t = tally(&p, model);
     if let Some(m) = crate::toolconv::check_tools(&b) { return err_resp(Fmt::Oa, 400, &m); } // a malformed tools field is refused here, as it always was
     if let Some(e) = preflight(hub, &p, Fmt::Oa) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
-    openai::count_use(&**hub, user, key);
+    count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
     let asked_usage = b["stream_options"]["include_usage"] == json!(true);
     let mut added = stream && b["stream_options"]["include_usage"] != json!(false);
@@ -364,7 +407,7 @@ pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, pr
     if added { if !body["stream_options"].is_object() { body["stream_options"] = json!({}); } body["stream_options"]["include_usage"] = json!(true); }
     let cancel = run.cancel.clone();
     let (status, rheaders, up) = loop {
-        let (st, hs, up) = match oa_upstream(hub, user, &p, serde_json::to_vec(&body).unwrap_or_default(), stream, &cancel, Fmt::Oa).await { Ok(x) => x, Err(e) => return e };
+        let (st, hs, up) = match oa_upstream(hub, user, &p, CHAT, serde_json::to_vec(&body).unwrap_or_default(), stream, &cancel, Fmt::Oa).await { Ok(x) => x, Err(e) => return e };
         if added && (st == 400 || st == 422) {
             let Some(bytes) = read_all(up, &cancel).await else { return err_resp(Fmt::Oa, 499, "cancelled") };
             let t = String::from_utf8_lossy(&bytes).to_lowercase();
@@ -380,17 +423,17 @@ pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, pr
     }
     if !stream {
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(Fmt::Oa, 499, "cancelled") };
-        let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &kind, &ur.model, &ur.native);
+        let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &t, &ur.model, &ur.native);
         drop(run);
         return raw(status, &ct, &out_h, pgm_net_internal::http::full(bytes));
     }
-    if ct.to_ascii_lowercase().contains("text/event-stream") { return streamed(hub, user, key, &kind, up, Box::new(RawOa(OaUsage::default())), run, status, &ct, &out_h); }
+    if ct.to_ascii_lowercase().contains("text/event-stream") { return streamed(hub, user, key, &t, up, Box::new(RawOa(OaUsage::default())), run, status, &ct, &out_h); }
     let Some(bytes) = read_all(up, &cancel).await else { return err_resp(Fmt::Oa, 499, "cancelled") };
     let j: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     if !j["choices"].is_array() { drop(run); return raw(status, &ct, &out_h, pgm_net_internal::http::full(bytes)); } // not a completion: as it is
-    if !asked_usage { let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &kind, &ur.model, &ur.native); } // the stream below will not carry the usage
+    if !asked_usage { let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &t, &ur.model, &ur.native); } // the stream below will not carry the usage
     let sse = crate::xlate::oa_whole_as_sse(&j, asked_usage);
-    streamed(hub, user, key, &kind, Up::Mem(Some(Bytes::from(sse))), Box::new(RawOa(OaUsage::default())), run, 200, "text/event-stream", &out_h)
+    streamed(hub, user, key, &t, Up::Mem(Some(Bytes::from(sse))), Box::new(RawOa(OaUsage::default())), run, 200, "text/event-stream", &out_h)
 }
 
 /// `POST /v1/chat/completions` to an Anthropic-speaking provider (G3): the OpenAI request is translated to Messages
@@ -403,10 +446,10 @@ pub async fn chat_via_anthropic(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: 
     let f = Fmt::Oa;
     let req = match crate::xlate::oa_to_ant_request(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
     let p = full_provider(hub, user, prov);
-    let kind = s(&p, "kind");
+    let t = tally(&p, model);
     if let Some(e) = preflight(hub, &p, f) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
-    openai::count_use(&**hub, user, key);
+    count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
     let cancel = run.cancel.clone();
     let (status, rheaders, up) = match ant_upstream(hub, user, &p, request_headers(&r.headers, stream), serde_json::to_vec(&req).unwrap_or_default(), &cancel, f).await { Ok(x) => x, Err(e) => return e };
@@ -420,12 +463,12 @@ pub async fn chat_via_anthropic(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: 
     if !stream {
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
         let Ok(j) = serde_json::from_slice::<Value>(&bytes) else { return err_resp(f, 502, "Anthropic's answer was not JSON.") };
-        let ur = UsageReader::from_json(&bytes); note_usage(hub, user, key, &kind, &ur);
+        let ur = UsageReader::from_json(&bytes); note_usage(hub, user, key, &t, &ur);
         drop(run);
         return openai::cors(pgm_net_internal::http::json(200, &crate::xlate::ant_to_oa_whole(&j, &cid, created, model)));
     }
     let pump = AntToOaPump(crate::xlate::AntToOa::new(&cid, model, created, b["stream_options"]["include_usage"] == json!(true)));
-    streamed(hub, user, key, &kind, up, Box::new(pump), run, 200, "text/event-stream", &out_h)
+    streamed(hub, user, key, &t, up, Box::new(pump), run, 200, "text/event-stream", &out_h)
 }
 
 /// `POST /v1/messages` to an OpenAI-speaking provider (G3): the Anthropic request is translated to chat completions
@@ -438,13 +481,13 @@ pub async fn messages_via_openai(hub: &Arc<dyn AiHub>, user: &str, key: &openai:
     let f = Fmt::Ant;
     let req = match crate::xlate::ant_to_oa_request(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
     let p = full_provider(hub, user, prov);
-    let kind = s(&p, "kind");
+    let t = tally(&p, model);
     if let Some(e) = preflight(hub, &p, f) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(true, key, openai::max_concurrent(&**hub, key)) };
-    openai::count_use(&**hub, user, key);
+    count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
     let cancel = run.cancel.clone();
-    let (status, rheaders, up) = match oa_upstream(hub, user, &p, serde_json::to_vec(&req).unwrap_or_default(), stream, &cancel, f).await { Ok(x) => x, Err(e) => return e };
+    let (status, rheaders, up) = match oa_upstream(hub, user, &p, CHAT, serde_json::to_vec(&req).unwrap_or_default(), stream, &cancel, f).await { Ok(x) => x, Err(e) => return e };
     let mid = format!("msg_{}", pgm_core_internal::crypto::random_hex(12));
     if !(200..300).contains(&status) {
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
@@ -454,7 +497,7 @@ pub async fn messages_via_openai(hub: &Arc<dyn AiHub>, user: &str, key: &openai:
     if !stream {
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
         let Ok(j) = serde_json::from_slice::<Value>(&bytes) else { return err_resp(f, 502, "The endpoint's answer was not JSON.") };
-        let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &kind, &ur.model, &ur.native);
+        let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &t, &ur.model, &ur.native);
         drop(run);
         return openai::cors(pgm_net_internal::http::json(200, &crate::xlate::oa_to_ant_whole(&j, &mid, model)));
     }
@@ -464,12 +507,168 @@ pub async fn messages_via_openai(hub: &Arc<dyn AiHub>, user: &str, key: &openai:
         if !j["choices"].is_array() { return err_resp(f, 502, "The endpoint answered a streaming request with something that is not a chat completion."); }
         Up::Mem(Some(Bytes::from(crate::xlate::oa_whole_as_sse(&j, true))))
     };
-    streamed(hub, user, key, &kind, up, Box::new(OaToAntPump(crate::xlate::OaToAnt::new(&mid, model))), run, 200, "text/event-stream", &out_h)
+    streamed(hub, user, key, &t, up, Box::new(OaToAntPump(crate::xlate::OaToAnt::new(&mid, model))), run, 200, "text/event-stream", &out_h)
+}
+
+// ---------- G5: the Responses API (Codex) ----------
+
+/// Does this provider speak OpenAI's Responses API itself? An OpenAI-compatible endpoint at api.openai.com, or one its admin
+/// marked `responses: true` (the optional provider field, add-only in providers.json; Settings → AI providers or
+/// `/api/providers/add|update`). A host's ChatGPT / Codex login (`host-codex`) speaks it too ([`responses`] takes it apart).
+/// A host's own OpenAI-compatible server (`host-openai`) is not asked: it gets the translation.
+pub fn speaks_responses(p: &Value) -> bool {
+    if s(p, "kind") != "openai" { return false; }
+    if p["responses"] == json!(true) { return true; }
+    let u = s(p, "baseUrl").to_ascii_lowercase();
+    u.split("://").nth(1).unwrap_or("").split(['/', ':']).next().unwrap_or("") == "api.openai.com"
+}
+fn resp_id() -> (String, u64) { (format!("resp_{}", pgm_core_internal::crypto::random_hex(16)), pgm_core_internal::now_ms() / 1000) }
+
+/// `POST /v1/responses` (OpenAI's Responses API, what Codex speaks with `wire_api = "responses"`), routed by `model` like the
+/// other endpoints. State this hub does not keep (`previous_response_id`, `conversation`, `background`, `item_reference`) is
+/// refused with a 400 whatever the provider. Then:
+/// - a provider that speaks Responses itself ([`speaks_responses`], and a host's ChatGPT / Codex login) gets the request raw
+///   ([`responses_native`]) and its answer comes back byte for byte;
+/// - another OpenAI-speaking provider gets it as chat completions ([`responses_via_chat`]);
+/// - an Anthropic-speaking one as Messages ([`responses_via_anthropic`]; a Claude subscription login's refusal is the plain
+///   message of [`SUBSCRIPTION_MESSAGE`]);
+///
+/// and a translated answer comes back as the Responses API's events or object ([`crate::xlate::RespStream`]). Providers that
+/// speak neither (this hub's own Claude, a Claude Code login) are refused with a 400 that says where they answer.
+pub async fn responses(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: &openai::KeyCtx, prov: &Value, model: &str, b: Value) -> Resp {
+    if let Err(m) = crate::xlate::responses_stateless(&b) { return err_resp(Fmt::Oa, 400, &m); }
+    let p = full_provider(hub, user, prov);
+    if s(&p, "kind") == "host-codex" || speaks_responses(&p) { return responses_native(hub, user, key, &p, model, b).await; }
+    if speaks_openai(&p) { return responses_via_chat(hub, user, key, &p, model, b).await; }
+    if speaks_anthropic(&p) { return responses_via_anthropic(hub, r, user, key, &p, model, b).await; }
+    err_resp(Fmt::Oa, 400, &format!("The provider \"{}\" cannot answer the Responses API: /v1/responses reaches OpenAI-compatible, Anthropic and ChatGPT / Codex providers. Ask it through /v1/chat/completions or /v1/messages, or pick another model.", s(&p, "label")))
+}
+/// Raw to a provider that speaks Responses: the body as parsed with `model` swapped and `store: false` (this hub keeps nothing
+/// and refuses `previous_response_id`, so nothing is stored upstream either; a ChatGPT / Codex login takes nothing else), the
+/// provider's own auth (an endpoint's bearer, or the host's Codex login added on the host), the answer as it came: SSE byte for
+/// byte, JSON as sent, errors with their status. A ChatGPT / Codex login answers streams only: a whole answer asked of it is
+/// made from its stream (the response of its `response.completed`). The usage goes to the ledger and the key's counters.
+async fn responses_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, p: &Value, model: &str, b: Value) -> Resp {
+    let f = Fmt::Oa;
+    let t = tally(p, model);
+    let codex = s(p, "kind") == "host-codex";
+    if let Some(e) = preflight(hub, p, f) { return e; }
+    let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
+    count_call(hub, user, key, &t);
+    let stream = b["stream"] == json!(true);
+    let mut body = b;
+    if !model.is_empty() { body["model"] = json!(model); }
+    body["store"] = json!(false);
+    if codex { body["stream"] = json!(true); }
+    let bytes = serde_json::to_vec(&body).unwrap_or_default();
+    let cancel = run.cancel.clone();
+    let (status, rheaders, up) = if codex {
+        let (host, pid) = (s(p, "hostId"), s(p, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default());
+        let headers = vec![("content-type".to_string(), "application/json".to_string()), ("accept".into(), "text/event-stream".into())];
+        let sent = tokio::select! { _ = cancel.woke() => return err_resp(f, 499, "cancelled"), x = hub.ai().login_fetch_for(user, "api", &host, &pid, "/responses", "POST", headers, bytes) => x };
+        match sent { Ok(x) => (x.status, x.headers, Up::Host(x.body)), Err(e) => return err_resp(f, e.status, &e.msg) }
+    } else {
+        match oa_upstream(hub, user, p, "/responses", bytes, stream, &cancel, f).await { Ok(x) => x, Err(e) => return e }
+    };
+    let ct = ct_of(&rheaders); let out_h = oa_response_headers(&rheaders);
+    if !(200..300).contains(&status) {
+        let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
+        return raw(status, &ct, &out_h, pgm_net_internal::http::full(bytes)); // the provider's own error, as it came
+    }
+    if !stream {
+        let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
+        if !codex && !ct.to_ascii_lowercase().contains("text/event-stream") {
+            let rr = crate::xlate::RespReader::from_json(&bytes); note_native(hub, user, key, &t, &rr.model, &rr.native);
+            drop(run);
+            return raw(status, &ct, &out_h, pgm_net_internal::http::full(bytes));
+        }
+        let mut rr = crate::xlate::RespReader::default(); rr.push(&bytes); rr.push(b"\n\n");
+        note_native(hub, user, key, &t, &rr.model, &rr.native);
+        drop(run);
+        return match rr.done {
+            Some(x) if x["status"] == json!("failed") => err_resp(f, 502, x["error"]["message"].as_str().unwrap_or("The provider's answer failed.")),
+            Some(x) => openai::cors(pgm_net_internal::http::json(200, &x)),
+            None => err_resp(f, 502, "The provider's stream ended before its response was complete."),
+        };
+    }
+    streamed(hub, user, key, &t, up, Box::new(RawResp(crate::xlate::RespReader::default())), run, status, if ct.is_empty() { "text/event-stream" } else { &ct }, &out_h)
+}
+/// To an OpenAI-speaking provider that does not speak Responses: as chat completions ([`crate::xlate::responses_to_chat`]),
+/// the answer back as a response object or Responses events; what cannot be carried is a 400 naming it.
+async fn responses_via_chat(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, p: &Value, model: &str, b: Value) -> Resp {
+    let f = Fmt::Oa;
+    let req = match crate::xlate::responses_to_chat(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
+    let t = tally(p, model);
+    if let Some(e) = preflight(hub, p, f) { return e; }
+    let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
+    count_call(hub, user, key, &t);
+    let stream = b["stream"] == json!(true);
+    let cancel = run.cancel.clone();
+    let (status, rheaders, up) = match oa_upstream(hub, user, p, CHAT, serde_json::to_vec(&req).unwrap_or_default(), stream, &cancel, f).await { Ok(x) => x, Err(e) => return e };
+    if !(200..300).contains(&status) {
+        let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
+        return with_retry(err_resp(f, status, &upstream_message(status, &bytes)), &rheaders);
+    }
+    let out_h = oa_response_headers(&rheaders);
+    let (rid, created) = resp_id();
+    let em = crate::xlate::RespStream::new(&rid, created, model, crate::xlate::response_base(&b));
+    if !stream {
+        let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
+        let Ok(j) = serde_json::from_slice::<Value>(&bytes) else { return err_resp(f, 502, "The endpoint's answer was not JSON.") };
+        let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &t, &ur.model, &ur.native);
+        drop(run);
+        return openai::cors(pgm_net_internal::http::json(200, &crate::xlate::chat_to_response_whole(&j, em)));
+    }
+    let up = if ct_of(&rheaders).to_ascii_lowercase().contains("text/event-stream") { up } else { // an endpoint that answers JSON to a streaming request
+        let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
+        let j: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        if !j["choices"].is_array() { return err_resp(f, 502, "The endpoint answered a streaming request with something that is not a chat completion."); }
+        Up::Mem(Some(Bytes::from(crate::xlate::oa_whole_as_sse(&j, true))))
+    };
+    streamed(hub, user, key, &t, up, Box::new(ChatToRespPump(crate::xlate::ChatToResp::new(em))), run, 200, "text/event-stream", &out_h)
+}
+/// To an Anthropic-speaking provider (an API key, a host's Claude login): as Messages ([`crate::xlate::responses_to_ant`]),
+/// the answer back as a response object or Responses events. The login is sent the request as it is (never as Claude Code);
+/// its subscription refusal is the plain message of [`SUBSCRIPTION_MESSAGE`].
+async fn responses_via_anthropic(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: &openai::KeyCtx, p: &Value, model: &str, b: Value) -> Resp {
+    let f = Fmt::Oa;
+    let req = match crate::xlate::responses_to_ant(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
+    let t = tally(p, model);
+    if let Some(e) = preflight(hub, p, f) { return e; }
+    let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
+    count_call(hub, user, key, &t);
+    let stream = b["stream"] == json!(true);
+    let cancel = run.cancel.clone();
+    let (status, rheaders, up) = match ant_upstream(hub, user, p, request_headers(&r.headers, stream), serde_json::to_vec(&req).unwrap_or_default(), &cancel, f).await { Ok(x) => x, Err(e) => return e };
+    if !(200..300).contains(&status) {
+        let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
+        if is_login(p) && is_subscription_refusal(status, &rheaders, &bytes) { return err_resp(f, 403, SUBSCRIPTION_MESSAGE); }
+        return with_retry(err_resp(f, status, &upstream_message(status, &bytes)), &rheaders);
+    }
+    let out_h = response_headers(&rheaders);
+    let (rid, created) = resp_id();
+    let em = crate::xlate::RespStream::new(&rid, created, model, crate::xlate::response_base(&b));
+    if !stream {
+        let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
+        let Ok(j) = serde_json::from_slice::<Value>(&bytes) else { return err_resp(f, 502, "Anthropic's answer was not JSON.") };
+        note_usage(hub, user, key, &t, &UsageReader::from_json(&bytes));
+        drop(run);
+        return openai::cors(pgm_net_internal::http::json(200, &crate::xlate::ant_to_response_whole(&j, em)));
+    }
+    streamed(hub, user, key, &t, up, Box::new(AntToRespPump(crate::xlate::AntToResp::new(em))), run, 200, "text/event-stream", &out_h)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn which_providers_speak_responses() {
+        assert!(speaks_responses(&json!({ "kind": "openai", "baseUrl": "https://api.openai.com/v1" })));
+        assert!(speaks_responses(&json!({ "kind": "openai", "baseUrl": "http://127.0.0.1:9/oai", "responses": true })));
+        assert!(!speaks_responses(&json!({ "kind": "openai", "baseUrl": "https://api.openai.com.evil.test/v1" })));
+        assert!(!speaks_responses(&json!({ "kind": "openai", "baseUrl": "http://localhost:11434/v1" })));
+        for k in ["host-openai", "anthropic", "host-claude", "host-codex", "host"] { assert!(!speaks_responses(&json!({ "kind": k, "responses": true, "baseUrl": "https://api.openai.com/v1" })), "{k}"); }
+    }
     fn hm(v: &[(&str, &str)]) -> hyper::HeaderMap { let mut h = hyper::HeaderMap::new(); for (k, x) in v { h.append(hyper::header::HeaderName::from_bytes(k.as_bytes()).unwrap(), x.parse().unwrap()); } h }
 
     #[test]

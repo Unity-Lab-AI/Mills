@@ -45,13 +45,13 @@
         'name = "VibeRoller"',
         `base_url = "${base}"`,
         'env_key = "VIBEROLLER_API_KEY"',
-        'wire_api = "chat"',
+        'wire_api = "responses"',
         '',
         '# then, in the shell you start codex from:',
         `export VIBEROLLER_API_KEY=${key}                 # bash`,
         `$env:VIBEROLLER_API_KEY = "${key}"               # PowerShell`,
       ].join('\n'),
-      note: 'Uses the chat completions API (wire_api = "chat"). The Responses API that Codex prefers comes later.' });
+      note: 'Uses the Responses API (wire_api = "responses"), the one Codex prefers, with tools; send the whole conversation each time (the hub keeps no response state). wire_api = "chat" works too.' });
     list.push({ id: 'jcode', title: 'jcode / Jcode PGM', lang: 'shell',
       text: [
         '# bash',

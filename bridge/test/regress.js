@@ -191,6 +191,31 @@ function fakeOpenAI(req, res, body) {
   fakeOa.json = JSON.stringify(whole); res.writeHead(200, { 'Content-Type': 'application/json', ...rid }); res.end(fakeOa.json);
 }
 
+// R586-R590 (T-369, G5): a fake native Responses API upstream: the person's "openai" provider marked responses: true (at
+// /oai/responses, its bearer k-r586) and the AI host's ChatGPT / Codex login relay (at /codex/responses, the host's own login).
+// It records the request as it arrived and answers like OpenAI: a stream of Responses events (numbered, a message item,
+// response.completed with usage and cached tokens), a whole response object, its own 429.
+const fakeResp = { calls: [], stream: '', json: '' };
+const R586_KEY = 'k-r586';
+function fakeResponses(req, res, body, via) {
+  const b = JSON.parse(body || '{}'), h = req.headers;
+  if (via === 'api' && h.authorization !== 'Bearer ' + R586_KEY) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'Incorrect API key provided', type: 'invalid_request_error', code: 'invalid_api_key' } })); }
+  fakeResp.calls.push({ via, headers: h, body: b, url: req.url });
+  if (body.includes('R586-LIMIT')) { res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '4', 'x-request-id': 'req_r586' }); return res.end(JSON.stringify({ error: { message: 'Rate limit reached for requests (r586)', type: 'requests', param: null, code: 'rate_limit_exceeded' } })); }
+  const usage = { input_tokens: 100, input_tokens_details: { cached_tokens: 40 }, output_tokens: 7, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 107 };
+  const msg = { id: 'msg_f586', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'native ok', annotations: [] }] };
+  const resp = (status, output, u) => ({ id: 'resp_fake586', object: 'response', created_at: 1, status, model: b.model, output, usage: u, store: false });
+  if (b.stream) {
+    let n = 0; const ev = (t, o) => `event: ${t}\ndata: ${JSON.stringify({ type: t, sequence_number: n++, ...o })}\n\n`;
+    const parts = [ev('response.created', { response: resp('in_progress', [], null) }), ev('response.output_item.added', { output_index: 0, item: { ...msg, status: 'in_progress', content: [] } }),
+      ev('response.output_text.delta', { item_id: 'msg_f586', output_index: 0, content_index: 0, delta: 'native ' }), ev('response.output_text.delta', { item_id: 'msg_f586', output_index: 0, content_index: 0, delta: 'ok' }),
+      ev('response.output_item.done', { output_index: 0, item: msg }), ev('response.completed', { response: resp('completed', [msg], usage) })];
+    fakeResp.stream = parts.join(''); res.writeHead(200, { 'Content-Type': 'text/event-stream', 'x-ratelimit-remaining-requests': '66', 'x-internal-note': 'must-not-pass' });
+    let i = 0; const next = () => { if (i < parts.length) { res.write(parts[i++]); setTimeout(next, 15); } else res.end(); }; return next();
+  }
+  fakeResp.json = JSON.stringify(resp('completed', [msg], usage)); res.writeHead(200, { 'Content-Type': 'application/json', 'x-request-id': 'req_r586' }); res.end(fakeResp.json);
+}
+
 let RUST_BACK = 0;
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null, FAKE_LINUX = ''; // FAKE_LINUX: R159's stand-in Linux accounts (ignored by git: under bridge/profiles)
 // read a zip like an unzipper would (the Download packages): the central directory names every entry and points at its
@@ -316,6 +341,7 @@ function startFakeOllama() {
       }
       if (req.url.startsWith('/codex/responses')) {
         if (req.headers.authorization !== 'Bearer fake-codex-token' || req.headers['chatgpt-account-id'] !== 'acct-1') { res.writeHead(401); return res.end('{"error":"bad codex auth"}'); }
+        if (body.includes('R586')) return fakeResponses(req, res, body, 'codex'); // R586-R590 (G5): the host's Codex login, raw
         const b = JSON.parse(body || '{}'), txt = 'codex says: ' + JSON.stringify(b.input || []).match(/"text":"([^"]*)"/)[1];
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         for (const w of txt.split(' ')) res.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: w + ' ' }) + '\n\n');
@@ -323,6 +349,7 @@ function startFakeOllama() {
       }
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
       if ((req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') && body.includes('R580')) return fakeOpenAI(req, res, body); // R580-R585 (G3)
+      if (req.url === '/oai/responses') return fakeResponses(req, res, body, 'api'); // R586-R590 (G5): a native Responses endpoint
       if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
@@ -886,6 +913,7 @@ async function run() {
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   if (process.argv.includes('--only-r575') && RUST_HUB) await r575Check(); // development: just R575 to R579 (with --stop-after R579)
   if (process.argv.includes('--only-r580') && RUST_HUB) await r580Check(); // development: just R580 to R585 (with --stop-after R585)
+  if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
   if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
@@ -3088,6 +3116,7 @@ async function run() {
     if (RUST_HUB) await r560Check(); else skip('R560', 'the API gateway keys, routing and concurrency (T-369)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r575Check(); else skip('R575', 'the API gateway passes Anthropic requests through raw (T-369, G2)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r580Check(); else skip('R580', 'the API gateway passes OpenAI requests through raw and translates between the formats (T-369, G3)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r586Check(); else skip('R586', 'the API gateway serves the Responses API (Codex) and shows each key\'s usage by day and model (T-369, G5)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
     const asrc551 = fs.readFileSync(path.join(BRIDGE, 'assistant.js'), 'utf8'), eng551 = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
@@ -7640,6 +7669,188 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     await call('/api/providers/remove', A, { id: pAnt.id }); await call('/api/providers/remove', A, { id: pOai.id });
   }
 
+  // R586-R590 (T-369, G5 of the API gateway): POST /v1/responses (OpenAI's Responses API, what Codex speaks with wire_api =
+  // "responses"): translated to an Anthropic provider and to an OpenAI chat provider and streamed back as Responses events,
+  // raw to a native Responses endpoint and to the AI host's Codex login; refusals; whole answers; the per-key usage by day and
+  // model (the roll-up file and GET /api/apikey/usage) and the page's Usage toggle. G2's fake Anthropic upstream, G3's fake
+  // OpenAI endpoint and fakeResponses record what arrives.
+  async function r586Check() {
+    const http = require('http'), assert = require('assert');
+    const same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json, retry: r.headers.get('retry-after'), ct: r.headers.get('content-type') || '', h: r.headers }; };
+    const lastOa = () => fakeOa.calls[fakeOa.calls.length - 1] || {}, lastAnt = () => fakeAnt.calls[fakeAnt.calls.length - 1] || {}, lastResp = () => fakeResp.calls[fakeResp.calls.length - 1] || {};
+    const keysFile = () => ((JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-admin'] || {});
+    const keyRec = (id) => (keysFile().keys || []).find((k) => k.id === id) || {};
+    const by = async (kind) => ((((await call('/api/usage', A)).data || {}).answers || {}).by || {})[kind] || { turns: 0, input: 0, output: 0, cached: 0, written: 0 };
+    const mk = async (body, tok = A) => (await call('/api/apikey/create', tok, body)).data;
+    // a Responses stream: [{ ev, d }], the event line and the data's type must agree
+    const rframes = (text) => text.split('\n\n').filter((f) => f.trim()).map((f) => { const m = /^event: (.+)\ndata: (.*)$/s.exec(f) || []; let d = {}; try { d = JSON.parse(m[2]); } catch {} return { ev: m[1], d }; });
+    const numbered = (fr) => fr.length > 0 && fr.every((f, i) => f.d.type === f.ev && f.d.sequence_number === i);
+    const th = (await call('/api/hosts/new', A, {})).data.host || {}, thCfg = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const pChat = (await call('/api/providers/add', A, { kind: 'openai', label: 'R586 Chat', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: R580_KEY, models: 'm-r580-c586' })).data.provider || {};
+    const pNat = (await call('/api/providers/add', A, { kind: 'openai', label: 'R586 Native', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: R586_KEY, models: 'm-r586-native', responses: true })).data.provider || {};
+    const pAnt = (await call('/api/providers/add', A, { kind: 'anthropic', label: 'R586 Anthropic', apiKey: R575_KEY, models: 'claude-r586' })).data.provider || {};
+    await call('/api/hosts/remove', A, { id: th.id });
+    const plist = (await call('/api/providers', A)).data.providers || [];
+    const hostCodex = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-codex') || {}, hostClaude = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-claude') || {};
+    const kAll = await mk({ label: 'r586 all', providers: [pChat.id, pNat.id, pAnt.id] }), kCx = await mk({ label: 'r586 codex', providers: [hostCodex.id] }), kRelay = await mk({ label: 'r586 relay', providers: [hostClaude.id], models: ['claude-haiku-5-5'] });
+    const tool = { type: 'function', name: 'get_weather', description: 'Weather of a city', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }, strict: false };
+    // what Codex sends: instructions, input items (a developer note, the user's text and a picture, an earlier turn's reasoning, the
+    // assistant's words and its call, the call's output, the next question), a function tool, store / include / reasoning
+    const codexReq = (model, extra = {}) => ({ model, instructions: 'You are Codex R586', stream: true, store: true, include: ['reasoning.encrypted_content'], reasoning: { effort: 'medium' }, prompt_cache_key: 'pk-r586',
+      parallel_tool_calls: false, max_output_tokens: 300, tools: [tool], tool_choice: 'auto',
+      input: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'dev note R586' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Weather in Zürich? R580 R586' }, { type: 'input_image', image_url: 'data:image/png;base64,iVBORw0KGgo=' }] },
+        { type: 'reasoning', id: 'rs_r586', summary: [], encrypted_content: 'opaque' },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Checking Bern first' }] },
+        { type: 'function_call', id: 'fc_prev', call_id: 'call_prev', name: 'get_weather', arguments: '{"city":"Bern"}' },
+        { type: 'function_call_output', call_id: 'call_prev', output: 'sunny' },
+        { type: 'message', role: 'user', content: 'and now? R580' }], ...extra });
+
+    // R586: to an Anthropic provider, translated both ways
+    const sA = await g('/v1/responses', kAll.key, codexReq('claude-r586')), cA = lastAnt(), fA = rframes(sA.text);
+    const doneA = (fA[fA.length - 1] || { d: {} }).d.response || {}, fcA = fA.filter((f) => f.ev === 'response.function_call_arguments.delta');
+    const sub = await g('/v1/responses', kRelay.key, { model: 'claude-haiku-5-5', input: 'R575-SUB', tools: [tool] });
+    check('R586', 'a Responses request (Codex\'s shape: instructions, input items with a developer note, text and a picture, an earlier reasoning item, the assistant\'s words and its function_call, the function_call_output, a function tool, store, include, reasoning) to an Anthropic provider arrives as Messages: instructions and the developer note in system, the picture as a base64 block, the call as tool_use and its output as tool_result in one user turn with the next question, the tool with its schema, tool_choice auto with parallel calls off, max_output_tokens as max_tokens, the provider\'s own key; reasoning, store, include and the cache key dropped; the answer streams back as Responses events (each named as its type, sequence_number 0, 1, 2 ... in order): response.created, response.in_progress, a function_call item (output_item.added with call_id and name, the arguments in the pieces they came, function_call_arguments.done, output_item.done), and response.completed with the whole response (id resp_..., status completed, the call in output, usage 28 in with 5 cached, 17 out, 45 total); a Claude subscription login\'s refusal is a plain 403 in OpenAI\'s error shape',
+      sA.status === 200 && /^text\/event-stream/.test(sA.ct) && cA.via === 'api' && cA.headers['x-api-key'] === R575_KEY && !cA.headers.authorization && !JSON.stringify(cA.headers).includes(kAll.key)
+      && same(Object.keys(cA.body).sort(), ['max_tokens', 'messages', 'model', 'stream', 'system', 'tool_choice', 'tools']) && cA.body.model === 'claude-r586' && cA.body.system === 'You are Codex R586\n\ndev note R586' && cA.body.max_tokens === 300 && cA.body.stream === true
+      && same(cA.body.messages, [{ role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580 R586' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'Checking Bern first' }, { type: 'tool_use', id: 'call_prev', name: 'get_weather', input: { city: 'Bern' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_prev', content: 'sunny' }, { type: 'text', text: 'and now? R580' }] }])
+      && same(cA.body.tools, [{ name: 'get_weather', description: 'Weather of a city', input_schema: tool.parameters }]) && same(cA.body.tool_choice, { type: 'auto', disable_parallel_tool_use: true })
+      && numbered(fA) && same(fA.map((f) => f.ev), ['response.created', 'response.in_progress', 'response.output_item.added', 'response.function_call_arguments.delta', 'response.function_call_arguments.delta', 'response.function_call_arguments.done', 'response.output_item.done', 'response.completed'])
+      && fA[0].d.response.status === 'in_progress' && fA[2].d.item.type === 'function_call' && fA[2].d.item.call_id === 'toolu_r575' && fA[2].d.item.name === 'get_weather' && same(fcA.map((f) => f.d.delta), ['{"city":', '"Zürich"}']) && fcA.every((f) => f.d.item_id === fA[2].d.item.id)
+      && fA[5].d.arguments === '{"city":"Zürich"}' && fA[6].d.item.status === 'completed' && fA[6].d.item.arguments === '{"city":"Zürich"}'
+      && /^resp_/.test(doneA.id) && doneA.object === 'response' && doneA.status === 'completed' && doneA.model === 'claude-r586' && doneA.output.length === 1 && doneA.output[0].call_id === 'toolu_r575' && doneA.instructions === 'You are Codex R586' && doneA.store === false
+      && same(doneA.usage, { input_tokens: 28, input_tokens_details: { cached_tokens: 5 }, output_tokens: 17, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 45 })
+      && sub.status === 403 && sub.json && sub.json.error.type === 'permission_error' && /Claude subscription login: it serves Claude Code/.test(sub.json.error.message),
+      `stream ${sA.status} ${sA.ct} up ${JSON.stringify(cA.body || {}).slice(0, 600)} events ${fA.map((f) => f.ev + '#' + f.d.sequence_number)} done ${JSON.stringify(doneA).slice(0, 400)}; sub ${sub.status} ${sub.text.slice(0, 160)}`);
+
+    // R587: to an OpenAI chat provider, translated; to a native Responses endpoint and to the host's Codex login, raw
+    const sC = await g('/v1/responses', kAll.key, codexReq('m-r580-c586')), cC = lastOa(), fC = rframes(sC.text), doneC = (fC[fC.length - 1] || { d: {} }).d.response || {};
+    const textC = fC.filter((f) => f.ev === 'response.output_text.delta').map((f) => f.d.delta).join(''), argsC = fC.filter((f) => f.ev === 'response.function_call_arguments.delta').map((f) => f.d.delta);
+    const natReq = codexReq('m-r586-native', { input: [{ role: 'user', content: 'native R586' }], tools: [tool, { type: 'web_search' }] });
+    const sN = await g('/v1/responses', kAll.key, natReq), cN = lastResp(), streamN = fakeResp.stream;
+    const wN = await g('/v1/responses', kAll.key, { ...natReq, stream: false }), cWN = lastResp(), jsonN = fakeResp.json;
+    const limN = await g('/v1/responses', kAll.key, { ...natReq, stream: false, input: 'R586-LIMIT' });
+    const cxReq = { model: 'gpt-test', instructions: 'Codex R586', stream: true, store: true, input: [{ role: 'user', content: [{ type: 'input_text', text: 'codex R586' }] }], tools: [{ type: 'local_shell' }] };
+    const sX = await g('/v1/responses', kCx.key, cxReq), cX = lastResp(), streamX = fakeResp.stream;
+    const wX = await g('/v1/responses', kCx.key, { ...cxReq, stream: false }), cWX = lastResp();
+    let r587 = {};
+    const expectedC = ['response.created', 'response.in_progress', 'response.output_item.added', 'response.content_part.added', 'response.output_text.delta', 'response.output_text.delta', 'response.output_text.done', 'response.content_part.done', 'response.output_item.done',
+      'response.output_item.added', 'response.function_call_arguments.delta', 'response.function_call_arguments.delta', 'response.function_call_arguments.done', 'response.output_item.done', 'response.completed'];
+    check('R587', 'a Responses request to an OpenAI chat provider arrives as chat completions (instructions and the developer note as system messages, the picture as an image_url part, the assistant\'s words with its call as tool_calls, the output as a tool message, the tool nested under function, tool_choice, parallel_tool_calls false, max_tokens, stream_options.include_usage, the provider\'s own bearer; store, include, reasoning and the reasoning item dropped) and streams back as Responses events: a message item (content_part.added, the text deltas, output_text.done, content_part.done, output_item.done), then the function_call item with its argument pieces, then response.completed with both items and usage 40 in, 12 out; to an endpoint marked as speaking Responses the request goes raw (only the model swapped and store false, hosted tools included, its own bearer) and the stream, the whole JSON answer and its 429 (status, body, retry-after) come back exactly as sent; to the AI host\'s Codex login the same, through the host (its own login, never the caller\'s key): the stream byte for byte, and a whole answer asked of it is made from its stream (store false and stream true upstream)',
+      Object.values(r587 = {
+      chatUp: sC.status === 200 && /^text\/event-stream/.test(sC.ct) && cC.headers.authorization === 'Bearer ' + R580_KEY && cC.url === '/oai/chat/completions'
+      && same(cC.body, { model: 'm-r580-c586', messages: [{ role: 'system', content: 'You are Codex R586' }, { role: 'system', content: 'dev note R586' }, { role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580 R586' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: 'Checking Bern first', tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'call_prev', content: 'sunny' }, { role: 'user', content: 'and now? R580' }],
+        max_tokens: 300, stream: true, stream_options: { include_usage: true }, tools: [{ type: 'function', function: { name: 'get_weather', description: 'Weather of a city', parameters: tool.parameters, strict: false } }], tool_choice: 'auto', parallel_tool_calls: false }),
+      chatEvents: numbered(fC) && same(fC.map((f) => f.ev), expectedC) && textC === 'Let me check ' && fC[8].d.item.content[0].text === 'Let me check ' && fC[9].d.item.call_id === 'call_r580' && same(argsC, ['{"city":', '"Zürich"}']),
+      chatDone: doneC.status === 'completed' && doneC.output.map((o) => o.type).join() === 'message,function_call' && doneC.output[1].arguments === '{"city":"Zürich"}' && same(doneC.usage, { input_tokens: 40, input_tokens_details: { cached_tokens: 0 }, output_tokens: 12, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 52 }),
+      native: sN.status === 200 && sN.text === streamN && /^text\/event-stream/.test(sN.ct) && sN.h.get('x-ratelimit-remaining-requests') === '66' && !sN.h.get('x-internal-note') && cN.via === 'api' && cN.url === '/oai/responses' && cN.headers.authorization === 'Bearer ' + R586_KEY,
+      nativeUp: same(cN.body, { ...natReq, store: false }),
+      nativeWhole: wN.status === 200 && wN.text === jsonN && /application\/json/.test(wN.ct) && same(cWN.body, { ...natReq, stream: false, store: false }),
+      nativeLimit: limN.status === 429 && limN.retry === '4' && limN.json && limN.json.error.type === 'requests' && /r586/.test(limN.json.error.message),
+      codex: sX.status === 200 && sX.text === streamX && cX.via === 'codex' && cX.headers.authorization === 'Bearer fake-codex-token' && !JSON.stringify(cX.headers).includes(kCx.key) && same(cX.body, { ...cxReq, store: false }),
+      codexWhole: wX.status === 200 && !!wX.json && wX.json.object === 'response' && wX.json.status === 'completed' && wX.json.output[0].content[0].text === 'native ok' && wX.json.usage.input_tokens === 100 && cWX.body.stream === true && cWX.body.store === false,
+      }).every(Boolean),
+      `failing: ${Object.keys(r587).filter((k) => !r587[k]).join(', ') || 'none'}; native ${sN.ct} ${sN.h.get('x-ratelimit-remaining-requests')}/${sN.h.get('x-internal-note')} ${cN.via} ${cN.url} ${cN.headers && cN.headers.authorization}; chat ${sC.status} up ${JSON.stringify(cC.body || {}).slice(0, 500)} events ${fC.map((f) => f.ev)} done ${JSON.stringify(doneC.usage)}; native ${sN.status} same ${sN.text === streamN} up ${JSON.stringify(cN.body || {}).slice(0, 200)} whole ${wN.status} ${wN.text === jsonN}; limit ${limN.status} ${limN.retry} ${limN.text.slice(0, 100)}; codex ${sX.status} same ${sX.text === streamX} ${sX.text.slice(0, 120)} up ${JSON.stringify(cX.body || {}).slice(0, 200)}; codex whole ${wX.status} ${wX.text.slice(0, 200)}`);
+
+    // R588: refusals in OpenAI's error shape before anything goes out; the slot held for the stream and freed on hang-up
+    const ref0 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, resp: fakeResp.calls.length, key: keyRec(kAll.id).calls };
+    const e400 = (r, re) => r.status === 400 && r.json && r.json.error && r.json.error.type === 'invalid_request_error' && re.test(r.json.error.message);
+    const refusals = {
+      webChat: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x R580', tools: [{ type: 'web_search' }] }),
+      fileAnt: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', tools: [tool, { type: 'file_search', vector_store_ids: ['vs'] }] }),
+      computer: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', tools: [{ type: 'computer_use_preview', display_width: 1, display_height: 1 }] }),
+      interp: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x', tools: [{ type: 'code_interpreter', container: { type: 'auto' } }] }),
+      mcp: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', tools: [{ type: 'mcp', server_label: 's', server_url: 'https://x.test' }] }),
+      image: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x', tools: [{ type: 'image_generation' }] }),
+      prevChat: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x', previous_response_id: 'resp_old' }),
+      prevNative: await g('/v1/responses', kAll.key, { model: 'm-r586-native', input: 'x', previous_response_id: 'resp_old' }),
+      prevCodex: await g('/v1/responses', kCx.key, { model: 'gpt-test', input: 'x', previous_response_id: 'resp_old' }),
+      schemaAnt: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', text: { format: { type: 'json_schema', name: 'w', schema: { type: 'object' } } } }),
+      notJson: await (async () => { const r = await fetch(H + '/v1/responses', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + kAll.key }, body: '{"model": "claude-r586", "input": ' }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json }; })(),
+    };
+    const ref1 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, resp: fakeResp.calls.length, key: keyRec(kAll.id).calls };
+    const kOne = await mk({ label: 'r586 one', providers: [pChat.id], maxConcurrent: 1 });
+    const closed0 = fakeOa.hangClosed;
+    const hangOn = (key, body) => new Promise((resolve) => { const rq = http.request(H + '/v1/responses', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key } }, (res) => { res.once('data', (d) => resolve({ rq, res, first: d.toString() })); }); rq.on('error', () => {}); rq.end(JSON.stringify(body)); });
+    const hang = await hangOn(kOne.key, { model: 'm-r580-c586', stream: true, input: 'R580-HANG responses' });
+    const busy = await g('/v1/responses', kOne.key, { model: 'm-r580-c586', input: 'while one is open R580' });
+    hang.rq.destroy();
+    for (let i = 0; i < 50 && !(fakeOa.hangClosed > closed0); i++) await sleep(100);
+    let freed = null; for (let i = 0; i < 50 && !freed; i++) { const r = await g('/v1/responses', kOne.key, { model: 'm-r580-c586', input: 'after hang-up R580' }); if (r.status === 200) freed = r; else await sleep(100); }
+    check('R588', 'what /v1/responses cannot carry is refused with a 400 in OpenAI\'s error shape naming it, before anything reaches a provider or is counted: a hosted tool that is not a function (web_search, file_search, computer_use, code_interpreter, mcp, image_generation) to a translated provider, previous_response_id to every provider ("this hub keeps no response state; send the whole input"; a native one and the Codex login included), json_schema output to an Anthropic one, a body that is not JSON; the key\'s slot is held for the whole translated stream (a second request on a one-at-a-time key is a 429 with retry-after) and the caller hanging up closes the upstream and frees the slot',
+      e400(refusals.webChat, /"web_search"/) && e400(refusals.fileAnt, /"file_search"/) && e400(refusals.computer, /computer_use/) && e400(refusals.interp, /code_interpreter/) && e400(refusals.mcp, /"mcp"/) && e400(refusals.image, /image_generation/)
+      && e400(refusals.prevChat, /this hub keeps no response state; send the whole input/) && e400(refusals.prevNative, /keeps no response state/) && e400(refusals.prevCodex, /keeps no response state/) && e400(refusals.schemaAnt, /json_schema/) && e400(refusals.notJson, /not JSON/)
+      && same(ref0, ref1)
+      && /response\.created/.test(hang.first) && busy.status === 429 && !!busy.retry && busy.json && busy.json.error.type === 'rate_limit_error' && fakeOa.hangClosed - closed0 === 1 && !!freed && freed.json && freed.json.object === 'response',
+      `${Object.entries(refusals).map(([k, r]) => k + ' ' + r.status + ' ' + ((r.json && r.json.error && r.json.error.message) || r.text).slice(0, 70)).join('; ')}; calls ${JSON.stringify(ref0)}→${JSON.stringify(ref1)}; hang ${hang.first.slice(0, 40).replace(/\n/g, ' ')} busy ${busy.status} ${busy.retry} closed ${fakeOa.hangClosed - closed0} freed ${freed && freed.status}`);
+
+    // R589: whole (non-stream) answers are response objects; a max-tokens stop is incomplete; a tool output round-trips to text
+    const wA = await g('/v1/responses', kAll.key, { ...codexReq('claude-r586'), stream: false }), cWA = lastAnt();
+    const wC = await g('/v1/responses', kAll.key, { ...codexReq('m-r580-c586'), stream: false }), cWC = lastOa();
+    const trip = { model: 'm-r580-c586', input: [{ role: 'user', content: 'Weather? R580' }, { type: 'function_call', call_id: 'call_r580', name: 'get_weather', arguments: '{"city":"Zürich"}' }, { type: 'function_call_output', call_id: 'call_r580', output: 'forty-two' }], tools: [tool] };
+    const tW = await g('/v1/responses', kAll.key, trip), cT = lastOa(), tS = await g('/v1/responses', kAll.key, { ...trip, stream: true }), tFr = rframes(tS.text);
+    const maxW = await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'R580-TEXT-max_tokens' }), maxS = await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'R580-TEXT-max_tokens', stream: true }), mFr = rframes(maxS.text);
+    const lenS = await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'R580-TEXT-end_turn', stream: true }), lFr = rframes(lenS.text);
+    check('R589', 'a whole (non-stream) Responses answer is a response object: from an Anthropic provider (object response, an id resp_..., status completed, the model, output = the message item with its output_text and the function_call item with call_id and its arguments as JSON text, usage 12 in with 3 cached and 4 out, the request\'s tools and instructions echoed, store false) and from an OpenAI chat provider (the message and the call, usage 30 in with 10 cached, 8 out); a function_call_output turn reaches the chat provider as a tool message and comes back as the final text, whole and streamed; an answer stopped by max tokens is status incomplete with incomplete_details.reason max_output_tokens (whole, and streamed ending with response.incomplete), one that ended normally is completed',
+      wA.status === 200 && /application\/json/.test(wA.ct) && cWA.body.stream === undefined && wA.json && wA.json.object === 'response' && /^resp_/.test(wA.json.id) && wA.json.status === 'completed' && wA.json.model === 'claude-r586'
+      && same(wA.json.output.map((o) => o.type), ['message', 'function_call']) && same(wA.json.output[0].content, [{ type: 'output_text', text: 'checking', annotations: [] }]) && wA.json.output[0].role === 'assistant' && wA.json.output[1].call_id === 'toolu_r575' && same(JSON.parse(wA.json.output[1].arguments), { city: 'Zürich' })
+      && same(wA.json.usage, { input_tokens: 12, input_tokens_details: { cached_tokens: 3 }, output_tokens: 4, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 16 }) && wA.json.tools[0].name === 'get_weather' && wA.json.instructions === 'You are Codex R586' && wA.json.store === false && typeof wA.json.created_at === 'number'
+      && wC.status === 200 && cWC.body.stream === undefined && cWC.body.stream_options === undefined && wC.json.status === 'completed' && same(wC.json.output.map((o) => o.type), ['message', 'function_call']) && wC.json.output[0].content[0].text === 'Let me check' && wC.json.output[1].call_id === 'call_r580' && wC.json.usage.input_tokens === 30 && wC.json.usage.input_tokens_details.cached_tokens === 10 && wC.json.usage.output_tokens === 8
+      && tW.status === 200 && same(cT.body.messages.slice(-2), [{ role: 'assistant', content: null, tool_calls: [{ id: 'call_r580', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Zürich"}' } }] }, { role: 'tool', tool_call_id: 'call_r580', content: 'forty-two' }]) && tW.json.output[0].content[0].text === 'R580 final: forty-two'
+      && tS.status === 200 && numbered(tFr) && tFr.filter((f) => f.ev === 'response.output_text.delta').map((f) => f.d.delta).join('') === 'R580 final: forty-two' && (tFr.find((f) => f.ev === 'response.output_text.done') || { d: {} }).d.text === 'R580 final: forty-two' && tFr[tFr.length - 1].ev === 'response.completed'
+      && maxW.status === 200 && maxW.json.status === 'incomplete' && same(maxW.json.incomplete_details, { reason: 'max_output_tokens' }) && maxW.json.output[0].content[0].text === 'Hello wörld'
+      && numbered(mFr) && mFr[mFr.length - 1].ev === 'response.incomplete' && mFr[mFr.length - 1].d.response.status === 'incomplete' && !mFr.some((f) => f.ev === 'response.completed')
+      && lFr[lFr.length - 1].ev === 'response.completed' && lFr[lFr.length - 1].d.response.output[0].content[0].text === 'Hello wörld',
+      `anthropic ${wA.status} ${wA.text.slice(0, 300)}; chat ${wC.status} ${wC.text.slice(0, 200)}; trip ${tW.status} ${tW.text.slice(0, 150)} stream ${tFr.map((f) => f.ev).slice(-3)}; max ${maxW.status} ${maxW.text.slice(0, 160)} stream ${mFr.map((f) => f.ev).slice(-2)}; end ${lFr.map((f) => f.ev).slice(-1)}`);
+
+    // R590: usage to the ledger, the key's counters and the day roll-up; GET /api/apikey/usage (the caller's own keys only); the page
+    const kUse = await mk({ label: 'r586 usage', providers: [pAnt.id, pNat.id] }), a0 = await by('anthropic'), o0 = await by('openai');
+    const u1 = await g('/v1/responses', kUse.key, codexReq('claude-r586')), u2 = await g('/v1/responses', kUse.key, { ...natReq, stream: false }), u3 = await g('/v1/responses', kUse.key, { ...natReq, stream: true });
+    await sleep(300); // the stream's usage is noted when its pump ends
+    const a1 = await by('anthropic'), o1 = await by('openai'), rec = keyRec(kUse.id);
+    const today = new Date().toISOString().slice(0, 10), rollFile = path.join(SB, 'profiles', 't-admin', 'apikey-usage.json');
+    let roll = {}; try { roll = JSON.parse(fs.readFileSync(rollFile, 'utf8')); } catch {}
+    const rDay = ((roll[kUse.id] || {})[today]) || {}, rModels = rDay.models || {};
+    const view = (await call('/api/apikey/usage?days=30', A)).data || {}, v7 = (await call('/api/apikey/usage?days=7', A)).data || {};
+    const vk = (view.keys || []).find((k) => k.id === kUse.id) || {}, vDay = (vk.byDay || [])[(vk.byDay || []).length - 1] || {};
+    const kUser = await mk({ label: 'r586 t-user key' }, U), viewU = (await call('/api/apikey/usage', U)).data || {}, adminIds = (view.keys || []).map((k) => k.id);
+    const modelOf = (m, p) => (vk.byModel || []).find((x) => x.model === m && x.provider === p) || {};
+    // the page: the Usage toggle beside each key and the usage panel's code on a plain element stand-in
+    const page = await (await fetch(H + '/')).text(), sp = {};
+    try {
+      const mkEl = (tag) => { const e = { tag, children: [], text: '', className: '', attrs: {}, style: {}, title: '', append(...xs) { for (const x of xs) this.children.push(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); }, setAttribute(k, v) { this.attrs[k] = v; } }; Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } }); return e; };
+      const all = (e, f, out = []) => { if (f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
+      const src = (page.match(/\n(function renderApiUsage\([\s\S]*?\n\})/) || [])[1] || '';
+      const ctx = { document: { createElement: mkEl }, providerList: [{ id: pAnt.id, label: 'R586 Anthropic' }], Math, Number };
+      require('vm').runInNewContext(src + '\nthis.renderApiUsage = renderApiUsage;', ctx);
+      const panel = mkEl('div'); ctx.renderApiUsage(panel, vk, 30);
+      const bars = all(panel, (e) => e.className === 'apiBar'), heights = bars.map((b) => b.children[0].style.height);
+      sp.bars = bars.length === 30 && heights[29] === '100%' && heights.slice(0, 29).every((h) => h === '0%') && /calls/.test(bars[29].title) && bars[29].title.startsWith(today);
+      sp.totals = /Last 30 days: 3 calls/.test(panel.textContent) && /R586 Anthropic/.test(panel.textContent) && /claude-r586/.test(panel.textContent) && /m-r586-native/.test(panel.textContent);
+      const empty = mkEl('div'); ctx.renderApiUsage(empty, undefined, 30); sp.empty = /No usage recorded/.test(empty.textContent);
+    } catch (e) { sp.err = e.message; }
+    sp.toggle = /function renderApiUsage/.test(page) && /\/api\/apikey\/usage\?days=30/.test(page) && /<use href="#i-chart"\/><\/svg>'; ub\.append\(' Usage'\)/.test(page) && /<symbol id="i-chart"/.test(page) && /aria-expanded/.test(page);
+    const cxNote = (await (await fetch(H + '/apisetup.js')).text()); sp.codex = /wire_api = "responses"/.test(cxNote) && !/comes later/.test(cxNote);
+    check('R590', 'the usage of /v1/responses lands where it belongs and the person sees it per key: an Anthropic stream (28 in with 5 cached and 2 written, 17 out) and two native answers (100 in with 40 cached, 7 out each) add to the answer ledger (anthropic +1 turn, openai +2), to the key\'s counters (3 calls, 228 tokens in, 31 out) and to a new day roll-up in the person\'s profile folder (today: 3 calls, the same tokens, per provider and model); GET /api/apikey/usage?days=30 gives each of the caller\'s own keys with its totals, 30 days oldest first ending today and the calls and tokens per model and provider (days=7 gives 7), and never another person\'s keys; the page has a Usage toggle (SVG icon) beside each key whose panel shows the period\'s totals, one plain bar per day and the models; the Codex setup says wire_api = "responses"',
+      u1.status === 200 && u2.status === 200 && u3.status === 200 && a1.turns - a0.turns === 1 && a1.input - a0.input === 21 && a1.cached - a0.cached === 5 && a1.written - a0.written === 2 && a1.output - a0.output === 17 && o1.turns - o0.turns === 2 && o1.input - o0.input === 120 && o1.cached - o0.cached === 80 && o1.output - o0.output === 14
+      && rec.calls === 3 && rec.tokensIn === 228 && rec.tokensOut === 31
+      && rDay.calls === 3 && rDay.tokensIn === 228 && rDay.tokensOut === 31 && same(rModels[pAnt.id + ' claude-r586'], { provider: pAnt.id, model: 'claude-r586', calls: 1, tokensIn: 28, tokensOut: 17 }) && same(rModels[pNat.id + ' m-r586-native'], { provider: pNat.id, model: 'm-r586-native', calls: 2, tokensIn: 200, tokensOut: 14 })
+      && view.days === 30 && view.to === today && vk.label === 'r586 usage' && vk.calls === 3 && vk.tokensIn === 228 && (vk.byDay || []).length === 30 && vDay.day === today && vDay.calls === 3 && vDay.tokensIn === 228 && vk.period.calls === 3
+      && same(vk.byModel.map((m) => m.model), ['m-r586-native', 'claude-r586']) && modelOf('claude-r586', pAnt.id).tokensOut === 17 && modelOf('m-r586-native', pNat.id).calls === 2
+      && (v7.keys || []).every((k) => k.byDay.length === 7) && adminIds.includes(kAll.id) && !adminIds.includes(kUser.id) && (viewU.keys || []).some((k) => k.id === kUser.id) && !(viewU.keys || []).some((k) => adminIds.includes(k.id) && k.id !== 'default')
+      && Object.values(sp).every((x) => x === true),
+      `ledger anthropic +${a1.turns - a0.turns} in ${a1.input - a0.input} cached ${a1.cached - a0.cached} written ${a1.written - a0.written} out ${a1.output - a0.output}; openai +${o1.turns - o0.turns} in ${o1.input - o0.input} cached ${o1.cached - o0.cached} out ${o1.output - o0.output}; key ${JSON.stringify({ calls: rec.calls, in: rec.tokensIn, out: rec.tokensOut })}; roll ${JSON.stringify(rDay).slice(0, 400)}; view ${JSON.stringify(vk).slice(0, 300)} days ${view.days}/${view.to}; user keys ${(viewU.keys || []).map((k) => k.id)}; page ${JSON.stringify(sp)}`);
+
+    for (const k of [kAll, kCx, kRelay, kOne, kUse]) await call('/api/apikey/revoke', A, { id: k.id });
+    await call('/api/apikey/revoke', U, { id: kUser.id });
+    for (const p of [pChat, pNat, pAnt]) await call('/api/providers/remove', A, { id: p.id });
+  }
+
   // R488 (T-261, Mills' UI for plans/presence.md): what the page shows, driven over HTTP against the scratch hub, and the page's own
   // presence script evaluated in node (its pure helpers: one shape per label, do not disturb, the hover card's lines, nothing on a hub without presence)
   async function r488Check() {
@@ -7880,8 +8091,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.ids = withKey.map((s) => s.id).join(',');
       seen.cc = cc.includes('export ANTHROPIC_BASE_URL=https://hub.example.org\n') && cc.includes('export ANTHROPIC_AUTH_TOKEN=mills_SECRET123') && cc.includes('export ANTHROPIC_MODEL=claude-opus-5-5')
         && cc.includes('$env:ANTHROPIC_BASE_URL = "https://hub.example.org"') && cc.includes('$env:ANTHROPIC_AUTH_TOKEN = "mills_SECRET123"') && cc.includes('$env:ANTHROPIC_MODEL = "claude-opus-5-5"');
-      seen.cx = cx.includes('model_provider = "viberoller"') && cx.includes('[model_providers.viberoller]') && cx.includes('base_url = "https://hub.example.org/v1"') && cx.includes('env_key = "VIBEROLLER_API_KEY"') && cx.includes('wire_api = "chat"') && cx.includes('mills_SECRET123') && cx.includes('model = "claude-opus-5-5"')
-        && /Responses API/.test((withKey.find((s) => s.id === 'codex') || {}).note || '');
+      seen.cx = cx.includes('model_provider = "viberoller"') && cx.includes('[model_providers.viberoller]') && cx.includes('base_url = "https://hub.example.org/v1"') && cx.includes('env_key = "VIBEROLLER_API_KEY"') && cx.includes('wire_api = "responses"') && !cx.includes('wire_api = "chat"') && cx.includes('mills_SECRET123') && cx.includes('model = "claude-opus-5-5"')
+        && /Responses API/.test((withKey.find((s) => s.id === 'codex') || {}).note || '') && !/comes later/.test((withKey.find((s) => s.id === 'codex') || {}).note || ''); // G5: the hub serves /v1/responses
       seen.jc = jc.includes('jcode provider add viberoller') && jc.includes('--base-url https://hub.example.org/v1') && jc.includes('--model claude-opus-5-5') && jc.includes('mills_SECRET123') && jc.includes('--api-key-stdin');
       let oj = {}; try { oj = JSON.parse(oc); } catch {}
       seen.oc = ((((oj.provider || {}).viberoller || {}).options || {}).baseURL === 'https://hub.example.org/v1') && oj.provider.viberoller.options.apiKey === 'mills_SECRET123' && !!oj.provider.viberoller.models['claude-opus-5-5'];
@@ -7892,7 +8103,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.pick = A.pickModel('', ['m1', 'm2']) === 'm1' && A.pickModel('x', ['m1']) === 'x' && A.pickModel('', []) === '' && A.originOf('https://h.org/v1') === 'https://h.org';
       ok = seen.ids === 'claude-code,codex,jcode,opencode,openai,curl-openai,curl-anthropic' && seen.cc && seen.cx && seen.jc && seen.oc && seen.oa && seen.curl && seen.noKey && seen.pick;
     }
-    check('R568', 'the "Connect a tool" setups (web/apisetup.js) give, for Claude Code, Codex, jcode, opencode, Cursor / Continue / any OpenAI client and curl (both APIs), a ready-to-paste text with the hub address, the key and the model filled in and the right names (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL in bash and PowerShell forms, a Codex model_providers block with base_url, env_key and wire_api "chat", a jcode provider add, an opencode baseURL, the two curl calls), the address never doubles /v1, and with no key every one says <your key> and never a real-looking key', ok && !!A, JSON.stringify(seen));
+    check('R568', 'the "Connect a tool" setups (web/apisetup.js) give, for Claude Code, Codex, jcode, opencode, Cursor / Continue / any OpenAI client and curl (both APIs), a ready-to-paste text with the hub address, the key and the model filled in and the right names (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL in bash and PowerShell forms, a Codex model_providers block with base_url, env_key and wire_api "responses" (the Responses API, G5), a jcode provider add, an opencode baseURL, the two curl calls), the address never doubles /v1, and with no key every one says <your key> and never a real-looking key', ok && !!A, JSON.stringify(seen));
     const i = page.indexOf('<h3>API access</h3>'), sec = i < 0 ? '' : page.slice(i, page.indexOf('</section>', page.indexOf('id="apiConnect"', i)) + 10);
     const s2 = {
       served: jsr.status === 200 && /<script src="apisetup\.js(\?[^"]*)?"><\/script>/.test(page),
@@ -7912,7 +8123,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         return e;
       };
       const all = (e, f, out = []) => { if (f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
-      const from = page.indexOf('function apiKeyLimits'), to = page.indexOf('// Connect a tool: ready-to-paste');
+      const from = page.indexOf('function apiKeyLimits'), to = page.indexOf('// One key\'s usage (GET /api/apikey/usage)') > 0 ? page.indexOf('// One key\'s usage (GET /api/apikey/usage)') : page.indexOf('// Connect a tool: ready-to-paste');
       const calls = [], rendered = [];
       const ctx = { document: { createElement: mkEl }, providerList: [{ id: 'host', label: 'Host', models: ['m-a'] }, { id: 'p2', label: 'Mine', models: ['m-b'] }], Date, Number, JSON,
         json: async (u, o) => { calls.push(u + ' ' + (o && o.body)); return { key: 'mills_new' }; }, renderApiAccess: (k) => rendered.push(k || '') };
@@ -7921,7 +8132,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       ctx.renderApiKeys(box, { keys: [{ id: 'k1', label: 'Laptop', prefix: 'mills_ab', createdAt: 1, expiresDays: 30, lastUsed: 0, calls: 3, enabled: true, models: ['m-a'], maxConcurrent: 2 }, { id: 'k2', label: 'Old', prefix: 'mills_cd', createdAt: 1, calls: 0 }] }, info);
       const rows = all(box, (e) => /^apiKeyRow/.test(e.className));
       s3.rows = rows.length === 2 && /Laptop/.test(rows[0].textContent) && /mills_ab/.test(rows[0].textContent) && /3 calls/.test(rows[0].textContent) && /models: m-a/.test(rows[0].textContent) && /2 at once/.test(rows[0].textContent) && /never used/.test(rows[1].textContent);
-      const rv = all(rows[0], (e) => e.tag === 'button')[0];
+      const rv = all(rows[0], (e) => e.tag === 'button' && e.textContent === 'Revoke')[0]; // (G5 put a Usage toggle next to it)
       await rv.onclick(); s3.confirm = calls.length === 0 && /again/.test(rv.textContent);
       await rv.onclick(); await new Promise((r) => setTimeout(r, 0)); s3.revoked = calls.join('|') === '/api/apikey/revoke {"id":"k1"}' && rendered.length === 1;
       const lab = all(box, (e) => e.tag === 'input' && e.attrs['aria-label'] === 'Key label')[0], go = all(box, (e) => e.tag === 'button' && e.textContent === 'Create key')[0];
