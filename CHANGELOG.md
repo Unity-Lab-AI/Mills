@@ -7,6 +7,30 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.60.0 — 2026-11-12
+
+MINOR: **the API gateway speaks the Responses API (Codex), and each key shows its usage** (T-369 slice G5; with this
+the gateway of plans/api-gateway.md is complete).
+
+- **`POST /v1/responses`** (what Codex uses with `wire_api = "responses"`), routed by `model` like the other
+  endpoints:
+  - a provider that speaks it natively (an `openai` provider on api.openai.com, one marked with the new optional
+    provider field `responses: true`, or the host's ChatGPT / Codex login) gets it raw, the answer byte for byte (only
+    the model is swapped; `store` is forced off, since nothing is kept);
+  - any other OpenAI-compatible provider gets it translated to chat completions, and an Anthropic provider (an API
+    key, a host's Claude login) translated to Messages; the answer streams back as Responses events
+    (`response.created`, the message and `function_call` items with their text and argument deltas, numbered by
+    `sequence_number`, then `response.completed`, or `response.incomplete` at the output limit, or `response.failed`);
+  - refused with a 400 in OpenAI's error shape: anything that needs stored state (`previous_response_id`,
+    `conversation`, `background`, item references: "this hub keeps no response state; send the whole input"), and on
+    translated paths hosted tools (web search, file search, computer use, code interpreter, MCP, image generation) and
+    file inputs. A Claude subscription login's refusal is the same plain 403 as elsewhere.
+- **Each key's usage**: `GET /api/apikey/usage?days=N` (1–90, default 30) gives the caller's own keys with calls and
+  tokens per day and per model; kept per person in `profiles/<user>/apikey-usage.json` (120 days). Settings → API
+  access has a Usage toggle on each key (bars per day, a table by day and by model).
+- The Codex setup in Connect a tool uses `wire_api = "responses"` now. web/index.html 1.47.0, web/apisetup.js 1.0.1.
+- Checks R586–R590 (R568 and R570 follow the page).
+
 ## 5.59.0 — 2026-11-12
 
 MINOR: **the API gateway speaks both formats to every provider, and several Work sessions starting at once no longer
