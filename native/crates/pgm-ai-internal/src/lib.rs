@@ -10,6 +10,8 @@
 //!   capped)
 //! - [`openai`]: providers (keys, endpoints, logins; admin-only kinds) and the inference APIs: OpenAI- and
 //!   Anthropic-compatible /v1 (plain + streaming, format conversion), per-person API keys
+//! - [`gateway`], [`xlate`]: the API gateway's raw passthroughs (Anthropic `/v1/messages`, OpenAI `/v1/chat/completions`) and
+//!   the cross-format translation between the two (requests, answers, streams, tool calls)
 //! - [`work`]: AI coding runs (Claude Code here, relayed to a host's login, or on an older host), their log + attach /
 //!   follow, the MCP tool relays (pc / board / team), shared sessions, projects, past sessions
 //! - [`planner`]: planner mode's deterministic helpers (parse an idea list, find what already exists, roles and owners,
@@ -58,3 +60,4 @@ pub mod unity_time;
 pub mod unity_web;
 pub mod usage;
 pub mod work;
+pub mod xlate;

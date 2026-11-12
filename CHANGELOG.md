@@ -7,6 +7,34 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.59.0 — 2026-11-12
+
+MINOR: **the API gateway speaks both formats to every provider, and several Work sessions starting at once no longer
+fail now and then** (T-369 slice G3; T-333).
+
+- **OpenAI chat, raw (G3).** `POST /v1/chat/completions` to an OpenAI-speaking provider (an OpenAI-compatible endpoint,
+  an Ollama host) is forwarded as it is, with only the model alias swapped for the real id and the provider's own auth
+  put on: tools, tool_choice, response_format and the rest arrive intact, the SSE comes back byte for byte, errors keep
+  their status (a 429 with retry-after too). `stream_options.include_usage` is asked for unless the caller sent
+  `false` (retried once without it if the endpoint objects), so usage reaches the ledger and the key's counters
+  (`tokensIn`, `tokensOut`). An endpoint that answers JSON to a streaming request is re-streamed as chunks.
+- **Across formats, with tools and streaming (G3).** An OpenAI request to an Anthropic provider (an API key, or a host's
+  Claude login) is translated and streamed back as `chat.completion.chunk` events with `delta.tool_calls` (arguments
+  arriving in pieces) and the right `finish_reason`; system messages, images, tool calls and tool results are carried.
+  An Anthropic request to an OpenAI provider is translated and streamed back as Anthropic SSE (text and `tool_use`
+  blocks with `input_json_delta`, `stop_reason`, usage). What would change meaning is refused with a 400 that names it
+  (`n` above 1, logprobs, audio, files, `json_schema` response format, document blocks, server tools, MCP servers);
+  what is harmless is dropped (`cache_control`, thinking blocks to an OpenAI provider, penalties, `seed`). A Claude
+  subscription login's refusal of another harness is the same plain 403 as in the Anthropic direction, in the caller's
+  error shape; nothing makes another harness pass as Claude Code. New module `xlate.rs` (table-driven, both
+  directions); `gateway.rs` has the three flows on one stream pump (G2's Anthropic path runs on it too). Checks R580–R585.
+- **A real race in starting sessions (T-333).** The flaky check R280 turned out to be a hub bug: preparing a session's
+  worktree ran `git worktree prune` before every `git worktree add`, so when many first messages arrived at once (a
+  page restore, an agent wave) one add could delete another's half-made folder, and a session could answer "Could not
+  prepare your worktree" at random (sending again worked). Worktree registry changes are now one at a time per hub,
+  the prune runs only when git says something is prunable, and the git work runs off the async threads (it could also
+  stall other calls, host polls included). A unit test starts 17 sessions at once, six rounds.
+
 ## 5.58.0 — 2026-11-11
 
 MINOR: **the API gateway, first slices: several keys, model routing across providers, concurrent requests, and a setup
