@@ -461,6 +461,14 @@ const NATIVE_BIN = (() => {
 let nativeBuilt = null;
 function buildNative() { // → '' when built, else why not (once per run)
   if (nativeBuilt !== null) return nativeBuilt;
+  if (process.env.VR_NATIVE_PREBUILT) { // development only: copy the binaries of an earlier build of this same tree instead of building (a loop of R280 runs needs one build, not one each)
+    try {
+      const from = path.join(process.env.VR_NATIVE_PREBUILT, 'release'), to = path.join(NATIVE_TARGET, 'release'); fs.mkdirSync(path.join(to, 'examples'), { recursive: true });
+      for (const f of ['vr-host', 'vr-hub', 'vr-host.exe', 'vr-hub.exe']) if (fs.existsSync(path.join(from, f))) { fs.copyFileSync(path.join(from, f), path.join(to, f)); fs.chmodSync(path.join(to, f), 0o755); }
+      if (fs.existsSync(path.join(from, 'examples', 'interop'))) { fs.copyFileSync(path.join(from, 'examples', 'interop'), path.join(to, 'examples', 'interop')); fs.chmodSync(path.join(to, 'examples', 'interop'), 0o755); }
+      return (nativeBuilt = buildResult({ status: 0 }));
+    } catch (e) { return (nativeBuilt = 'VR_NATIVE_PREBUILT: ' + e.message); }
+  }
   const home = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
   const env = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET, VR_RELEASE_PUBKEY: TEST_RELEASE_KEY.public, VR_VERSION: (() => { try { return JSON.parse(fs.readFileSync(path.join(MILLS, 'versions.json'), 'utf8')).project; } catch { return ''; } })() };
   env.PATH = path.join(env.CARGO_HOME, 'bin') + path.delimiter + (env.PATH || '');
@@ -828,6 +836,7 @@ async function run() {
   const A = (await login('T-Admin', 'pw-t-admin-0001', devA)).data.token;
   const U = (await login('t-user', 'pw-t-user-0001', devB)).data.token;
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
+  if (process.argv.includes('--only-r280') && RUST_HUB && NATIVE_BIN.host) await r280Check(); // development: just R280 to R284 (with --stop-after R280)
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   if (process.argv.includes('--only-r575') && RUST_HUB) await r575Check(); // development: just R575 to R579 (with --stop-after R579)
@@ -5409,7 +5418,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R203', 'a shared Work session shows the session that was shared (POST /api/work/share {session}): its lines reach the watchers, another session\'s do not; the watch answer names it',
       seen.share === c203 && seen.has && !seen.leak && seen.session === c203, `shared ${seen.share} · watcher sees it ${seen.has}, the first session\'s ${seen.leak} · watch names ${seen.session}`);
   } else skip('R203', 'a share shows the shared session', 'the Rust hub\'s: --rust-hub runs it');
-  if (RUST_HUB && NATIVE_BIN.host) { // R280-R284 (T-290 = T-282 · 8/8): several people, two native hosts, many sessions: limits, restarts, a share and an older page, in one run
+  async function r280Check() { // R280-R284 (T-290 = T-282 · 8/8): several people, two native hosts, many sessions: limits, restarts, a share and an older page, in one run
     const until280 = async (fn, ms = 20000) => { const end = Date.now() + ms; let v; while (Date.now() < end) { v = await fn(); if (v) return v; await sleep(100); } return v; };
     const list280 = async (tok) => (await call('/api/work/sessions', tok)).data || {};
     const sum280 = async (tok, id) => ((await list280(tok)).sessions || []).find((x) => x.id === id) || {};
@@ -5472,7 +5481,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       S.perHost = [(perHost[h1.id] || {}).used, (perHost[h2.id] || {}).used].join('/');
       S.refusedIdle = [(await sum280(U, uC[3])).state, (await sum280(U, uX)).state, (await sum280(U, primary.id)).state !== 'working'].join('/');
       const done = await Promise.all(wave);
-      S.waveOk = done.every(ran280); S.waveBad = done.map((r, i) => (ran280(r) ? '' : i + ':' + r.status)).filter(Boolean).join(',');
+      S.waveOk = done.every(ran280); S.waveBad = done.map((r, i) => (ran280(r) ? '' : i + ':' + r.status + ' ' + (texts(r.events).match(/relay=[^|]*/) || ['no relay'])[0] + ' ' + JSON.stringify(r.events.map((e) => [e.type, String(e.text || e.error || e.subtype || '').slice(0, 500)])).slice(0, 700))).filter(Boolean).join(','); // a failed run says what it did
 
       // ---- 1b. the owner of a host is limited on it only when that host says so (the limits control)
       const lim = (tok, h, limits) => call('/api/hosts/control', tok, { id: h.id, action: 'limits', limits });
@@ -5582,7 +5591,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R284', 'T-290 an older page (calls without a session) keeps meaning the first session while other sessions run: it reads that conversation and queue (not another session\'s), runs it (attach finds the run), a second message is 409, Stop ends only that run, and the other session of the same person finishes untouched',
       !S.err && S.oldSees && S.oldAttach && S.oldBusy === 409 && S.states === 'working/working' && S.oldStop === 200 && S.oldStopped && S.otherLeft === 'working' && S.otherRan,
       `sees its own ${S.oldSees} · attach ${S.oldAttach} · second message ${S.oldBusy} · states ${S.states} · stop ${S.oldStop} ended without an answer ${S.oldStopped} · the other still ${S.otherLeft}, finished ${S.otherRan}${E}`);
-  } else for (const [id, what] of [['R280', 'three people on two native hosts: caps and owners'], ['R281', 'a hub restart mid-run keeps every session'], ['R282', 'a host restart mid-run'], ['R283', 'a shared session across a restart'], ['R284', 'an older page next to the sessions']]) skip(id, what + ' (T-290)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
+  }
+  if (RUST_HUB && NATIVE_BIN.host) { if (!process.argv.includes('--only-r280')) await r280Check(); } else for (const [id, what] of [['R280', 'three people on two native hosts: caps and owners'], ['R281', 'a hub restart mid-run keeps every session'], ['R282', 'a host restart mid-run'], ['R283', 'a shared session across a restart'], ['R284', 'an older page next to the sessions']]) skip(id, what + ' (T-290)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
   if (RUST_HUB) { // R210-R214 (T-245 = T-195 · 1/4): the AI asks its person (team note plans/question-protocol.md); the fake Claude's "ASKTOOL" calls ask_user like the team MCP relay
     const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
     const sessionsOf = async () => ((await call('/api/work/sessions', U)).data.sessions) || [];
