@@ -869,7 +869,8 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let pj = w.project_in(a, &sx);
     // each session its own worktree (T-292): the first one the person's, the others <user>.<id> on work/<user>.<id>
     let none = pj == NO_PROJECT;
-    let wd = match w.session_wt(a, &sx) { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
+    // (git work, one registry change at a time: off the async threads, so a wave of first messages never stalls the hub's other calls)
+    let wd = match { let (w2, a2, sx2) = (w.clone(), a.clone(), sx.clone()); tokio::task::spawn_blocking(move || w2.session_wt(&a2, &sx2)).await.unwrap_or_else(|e| Err(e.to_string())) } { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
     // a new message answers whatever the session waited for (T-288)
     { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); m.remove("waiting"); }); }

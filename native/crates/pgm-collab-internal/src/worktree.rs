@@ -9,6 +9,12 @@ pub const HUB_PROJECT: &str = "VibeRoller";
 /// What a session with no project is called in lists and the run's state (T-238); not a valid project name.
 pub const NO_PROJECT: &str = "(none)";
 const REPO_DIR: &str = "_repo";
+/// One change to the worktree registry (`git worktree add` / `prune`) at a time in this process (T-333). Git reads every registered
+/// worktree's admin folder when it adds one, and `prune` deletes the ones whose files are not there yet, so a wave of adds (R280: 17
+/// first messages at once) failed now and then with "could not open .git/worktrees/<name>/gitdir for writing" or "failed to read
+/// .git/worktrees/<name>/commondir" (another add's half-made folder). Callers run it off the async threads (spawn_blocking).
+static REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn prune(repo: &Path) { let _l = REGISTRY.lock().unwrap_or_else(|e| e.into_inner()); let _ = git(repo, &["worktree", "prune"]); }
 
 #[derive(Clone, Debug)]
 pub struct Project { pub name: String, pub hub: bool, pub repo: PathBuf, pub root: PathBuf, pub main: String }
@@ -92,6 +98,7 @@ impl Worktrees {
     pub fn session_path(&self, user: &str, sid: &str, project: &str) -> Option<(PathBuf, String, PathBuf)> { let p = self.project(project).ok()?; Some((p.root.join(format!("{user}.{sid}")), format!("work/{user}.{sid}"), p.repo)) }
     fn ensure_at(&self, p: &Project, name: &str, branch: &str, base: &str) -> Result<Wt, String> {
         let dir = p.root.join(name); let branch = branch.to_string();
+        let _one = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
         let listed = git(&p.repo, &["worktree", "list", "--porcelain"]).unwrap_or_default();
         let mut cur: Option<(PathBuf, String)> = None; let mut found: Option<String> = None;
         for line in listed.lines().chain(std::iter::once("")) {
@@ -106,7 +113,7 @@ impl Worktrees {
         }
         if dir.exists() { return Err(format!("{} exists but is not a git worktree of {}. Move it away first.", dir.display(), p.name)); }
         let _ = std::fs::create_dir_all(&p.root);
-        let _ = git(&p.repo, &["worktree", "prune"]);
+        if listed.lines().any(|l| l.starts_with("prunable")) { let _ = git(&p.repo, &["worktree", "prune"]); } // only a registration whose folder is gone needs it (git 2.31+ says so)
         let d = dir.display().to_string();
         if Self::branch_exists(&p.repo, &branch) { git(&p.repo, &["worktree", "add", &d, &branch])?; } else { git(&p.repo, &["worktree", "add", "-b", &branch, &d, base])?; }
         Ok(mk(branch))
@@ -126,8 +133,8 @@ impl Worktrees {
         let unmerged = Self::branch_exists(&repo, &branch) && git(&repo, &["rev-list", "--count", &format!("{base}..{branch}")]).map(|n| n != "0").unwrap_or(true);
         let kept = if unmerged { let r = format!("refs/viberoller/sessions/{user}/{sid}"); git(&repo, &["update-ref", &r, &branch]).ok().map(|_| r) } else { None };
         if unmerged && kept.is_none() { return format!("kept {} (its branch could not be saved elsewhere)", dir.display()); }
-        if dir.exists() { let _ = git(&repo, &["worktree", "remove", "--force", &dir.display().to_string()]); }
-        let _ = git(&repo, &["worktree", "prune"]);
+        if dir.exists() { let _l = REGISTRY.lock().unwrap_or_else(|e| e.into_inner()); let _ = git(&repo, &["worktree", "remove", "--force", &dir.display().to_string()]); }
+        prune(&repo);
         let _ = git(&repo, &["branch", "-D", &branch]);
         match kept { Some(r) => format!("its unmerged work is kept as {r}"), None => "removed (everything on it was merged)".into() }
     }
@@ -164,8 +171,8 @@ impl Worktrees {
         let tip = git(&p.repo, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap_or_default();
         if !head.is_empty() && head != tip && unmerged(&head) { keep.push((format!("refs/viberoller/removed/{user}/{stamp}-head"), head)); }
         for (r, to) in &keep { git(&p.repo, &["update-ref", r, to]).map_err(|e| format!("Could not keep your unmerged work as {r}, so nothing was removed: {e}"))?; notes.push(format!("unmerged work kept as {r}")); }
-        git(&p.repo, &["worktree", "remove", "--force", &dir.display().to_string()]).map_err(|e| format!("Could not remove the worktree: {e}"))?;
-        let _ = git(&p.repo, &["worktree", "prune"]);
+        { let _l = REGISTRY.lock().unwrap_or_else(|e| e.into_inner()); git(&p.repo, &["worktree", "remove", "--force", &dir.display().to_string()]).map_err(|e| format!("Could not remove the worktree: {e}"))?; }
+        prune(&p.repo);
         if Self::branch_exists(&p.repo, &branch) { let _ = git(&p.repo, &["branch", "-D", &branch]); }
         if keep.is_empty() { notes.push("everything on it was already merged".into()); }
         Ok(format!("Removed your worktree of {} ({}).", p.name, notes.join("; ")))
@@ -196,4 +203,26 @@ impl Worktrees {
 fn same(a: &Path, b: &Path) -> bool {
     let n = |p: &Path| std::path::absolute(p).map(|x| x.display().to_string().to_lowercase()).unwrap_or_default();
     n(a) == n(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// T-333: a wave of first messages makes many session worktrees of one repository at the same moment (R280: 17 runs). Each must get
+    /// its own, whatever else the machine is doing: git's repository locks are not a promise that many `worktree add` at once all succeed.
+    #[test]
+    fn many_sessions_at_once_each_get_a_worktree() {
+        let base = std::env::temp_dir().join(format!("vr-wt-race-{}", std::process::id())); let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("repo"); std::fs::create_dir_all(&repo).unwrap();
+        let g = |a: &[&str]| git(&repo, a).unwrap_or_else(|e| panic!("git {a:?}: {e}"));
+        g(&["init", "-q", "-b", "develop"]);
+        for i in 0..400 { let d = repo.join(format!("d{}", i % 20)); std::fs::create_dir_all(&d).unwrap(); std::fs::write(d.join(format!("f{i}.txt")), format!("file {i}\n").repeat(50)).unwrap(); }
+        g(&["add", "-A"]); g(&["-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "-m", "base"]);
+        let wt = std::sync::Arc::new(Worktrees { repo: repo.clone(), wt_root: base.join("wt"), projects_root: base.join("projects"), node: "node".into(), script: base.join("worktree.js") });
+        for round in 0..6 {
+            let hs: Vec<_> = (0..17).map(|i| { let w = wt.clone(); std::thread::spawn(move || w.ensure_session(&format!("u{}", i % 3), &format!("{:x}{:02x}", round + 10, i), HUB_PROJECT)) }).collect();
+            for (i, h) in hs.into_iter().enumerate() { let r = h.join().unwrap(); assert!(r.is_ok(), "round {round} session {i}: {:?}", r.err()); assert!(r.unwrap().dir.join("d0").exists()); }
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
