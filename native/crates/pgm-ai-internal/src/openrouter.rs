@@ -31,6 +31,16 @@
 //! **Fallback (opt-in).** A person may turn on "use OpenRouter when Claude is unavailable" with a pair: when the session's
 //! Claude (an AI host) is offline or at its usage cap, the run uses that pair through Jcode PGM and the transcript says so
 //! in one line ([`fallback_for`]). Off by default (OpenRouter costs money).
+//!
+//! **A person's own key (T-372, plans/pgm-accounts-keys-app.md section 2).** A person may keep their own OpenRouter key on
+//! the hub (`<root>/profiles/<user>/openrouter-key.json` `{ apiKey, pairs? }`, owner-only, never returned: the page only
+//! learns `hasKey` and the last four characters). It shows to that person alone as the virtual provider `or-me:<user>`
+//! ("my OpenRouter", `personal: true`, same kind as the team's) with the team's pairs unless they listed their own
+//! (`pairs`), is routed on /v1/* as `my/<pair id>` (and by the plain pair id when no team pair has it), runs Work through the
+//! same per-run relay, and is a fallback choice. It carries no hub budget (they pay): its answers add to the `mine` counter
+//! of the same month file and never to the team-key spend. A request OpenRouter refuses with 401 / 403 says so in plain
+//! words ([`REFUSED`]) and nothing falls back to the team key. Config `openrouter.personalKeys` (default true; an admin
+//! switch, `POST /api/openrouter/personal`) forbids it: such providers are not offered, stored keys stay unused.
 use chrono::Datelike;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -52,6 +62,11 @@ pub const DEFAULT_MONTHLY_USD: f64 = 20.0;
 /// What Work says when the server has no Jcode PGM to run these providers with.
 pub const NO_JCODE: &str = "OpenRouter models (and the other API models this hub calls itself) run Work through Jcode PGM on the server, and this hub has none set up: an admin installs jcodepgm and sets jcode.command in the hub's config. Pick a Claude in the dropdown, or use this model through Settings → API access.";
 const RELAY: &str = "/or-relay/";
+/// What a person gets when OpenRouter refused their own key (revoked, wrong, out of credit): never the team's key instead.
+pub const REFUSED: &str = "Your own OpenRouter key was refused by OpenRouter (revoked, or out of credit?). Nothing was sent with the team's key instead: replace your key in Settings → OpenRouter budget, or remove it to use the team's models.";
+/// What creating a personal key says when an admin switched them off.
+pub const PERSONAL_OFF: &str = "Personal OpenRouter keys are switched off on this hub: an admin can allow them in Settings → OpenRouter budget.";
+const PERSONAL: &str = "or-me:";
 const MAX_PAIRS: usize = 30;
 
 /// Where OpenRouter is: `https://openrouter.ai/api/v1`, or config `openrouter.baseUrl` (the regression runner's fake).
@@ -111,6 +126,98 @@ pub fn post(hub: &dyn AiHub, p: &Value, path: &str, body: &[u8]) -> reqwest::Req
         .header("HTTP-Referer", hub.public_url()).header("X-Title", "VibeRoller").body(serde_json::to_vec(&b).unwrap_or_default())
 }
 
+// ---------- a person's own key: <root>/profiles/<user>/openrouter-key.json ----------
+/// The id of a person's own OpenRouter provider.
+pub fn personal_id(u: &str) -> String { format!("{PERSONAL}{u}") }
+/// Is this provider a person's own (no hub budget, their key)?
+pub fn is_personal(p: &Value) -> bool { p["personal"] == json!(true) }
+/// Does config allow personal keys (`openrouter.personalKeys`, default true)? Read fresh: an admin's switch needs no restart.
+pub fn personal_on(root: &Path) -> bool { pgm_core_internal::config::Config::load(root).get("openrouter").and_then(|o| o["personalKeys"].as_bool()).unwrap_or(true) }
+/// The admin's switch: `openrouter.personalKeys` into the machine's own config.local.json (add-only; keeps its permissions).
+fn set_personal_on(root: &Path, on: bool) -> Result<(), String> {
+    let f = root.join("config.local.json");
+    let mut c = read_json(&f).filter(Value::is_object).unwrap_or_else(|| json!({}));
+    if !c["openrouter"].is_object() { c["openrouter"] = json!({}); }
+    c["openrouter"]["personalKeys"] = json!(on);
+    let mode = std::fs::metadata(&f).ok().map(|m| m.permissions());
+    write_json(&f, &c);
+    if let Some(m) = mode { let _ = std::fs::set_permissions(&f, m); }
+    if personal_on(root) == on { Ok(()) } else { Err("Could not save the setting (config.local.json).".into()) }
+}
+fn key_file(root: &Path, u: &str) -> PathBuf { root.join("profiles").join(u).join("openrouter-key.json") }
+fn key_rec(root: &Path, u: &str) -> Value { if !pgm_identity_internal::valid_username(u) { return json!({}); } read_json(&key_file(root, u)).filter(Value::is_object).unwrap_or_else(|| json!({})) }
+/// A key as OpenRouter issues them: `sk-or-…`, letters, digits, - and _, a plausible length. No call is made.
+pub fn key_ok(k: &str) -> bool { k.starts_with("sk-or-") && (20..=400).contains(&k.len()) && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') }
+/// `…abcd`: the last four characters, all the page ever learns of a key.
+pub fn last4(k: &str) -> String { let n: Vec<char> = k.chars().collect(); format!("…{}", n[n.len().saturating_sub(4)..].iter().collect::<String>()) }
+/// The person's own provider: their key, and their own pairs else the team's (`team` = the team's shared OpenRouter
+/// provider). None when they have no key, personal keys are off, or there are no pairs at all.
+pub fn personal_provider(root: &Path, team: Option<&Value>, u: &str) -> Option<Value> {
+    if u.is_empty() || !pgm_identity_internal::valid_username(u) || !key_file(root, u).is_file() { return None; }
+    let rec = key_rec(root, u); let k = s(&rec, "apiKey");
+    if k.is_empty() || !personal_on(root) { return None; }
+    let own = pairs_of(&rec); let ps = if own.is_empty() { team.map(pairs_of).unwrap_or_default() } else { own };
+    if ps.is_empty() { return None; }
+    Some(json!({ "id": personal_id(u), "kind": KIND, "label": "my OpenRouter", "owner": u, "shared": false, "personal": true, "apiKey": k, "models": ps.iter().map(|x| x["id"].clone()).collect::<Vec<_>>(), "pairs": ps, "createdAt": rec["createdAt"] }))
+}
+/// What the pickers get of a personal provider: no key.
+pub fn personal_public(p: &Value) -> Value { json!({ "id": p["id"], "kind": KIND, "label": p["label"], "owner": p["owner"], "shared": false, "personal": true, "models": p["models"], "hasKey": true, "createdAt": p["createdAt"], "baseUrl": BASE, "pairs": p["pairs"] }) }
+/// A 401 / 403 from OpenRouter on a person's own key: the plain message (None for the team's provider and other statuses).
+pub fn refused(p: &Value, status: u16) -> Option<String> { (is_personal(p) && (status == 401 || status == 403)).then(|| REFUSED.to_string()) }
+/// The person's key settings as the page shows them (never the key).
+pub fn mykey_view(hub: &dyn AiHub, u: &str) -> Value {
+    let root = hub.root(); let rec = key_rec(root, u); let k = s(&rec, "apiKey");
+    let team = hub.work().team_provider();
+    json!({ "personalKeys": personal_on(root), "hasKey": !k.is_empty(), "last4": if k.is_empty() { Value::Null } else { json!(last4(&k)) }, "providerId": personal_id(u),
+        "pairs": pairs_of(&rec), "teamPairs": team.map(|t| pairs_of(&t)).unwrap_or_default(), "offered": hub.work().provider_get(hub.ai(), &personal_id(u), u).is_some() })
+}
+fn set_mykey(hub: &dyn AiHub, u: &str, b: &Value) -> Result<(), (u16, String)> {
+    let root = hub.root();
+    if !personal_on(root) { return Err((403, PERSONAL_OFF.into())); }
+    let mut rec = key_rec(root, u);
+    if let Some(k) = b.get("apiKey").filter(|v| !v.is_null()) {
+        let k = k.as_str().unwrap_or("").trim().to_string();
+        if !key_ok(&k) { return Err((400, "That does not look like an OpenRouter key (sk-or-…, letters, digits, - and _).".into())); }
+        rec["apiKey"] = json!(k); rec["createdAt"] = json!(pgm_core_internal::time::iso_now());
+    }
+    if s(&rec, "apiKey").is_empty() { return Err((400, "Paste your OpenRouter key (sk-or-…) first.".into())); }
+    if let Some(p) = b.get("pairs") {
+        if p.is_null() || p.as_array().map(|a| a.is_empty()).unwrap_or(false) { if let Some(o) = rec.as_object_mut() { o.remove("pairs"); } }
+        else { rec["pairs"] = json!(clean_pairs(p).map_err(|e| (400, e))?); }
+    }
+    if pairs_of(&rec).is_empty() && hub.work().team_provider().is_none() { return Err((400, "The team has no OpenRouter models to share: list your own pairs (id, model, providers) too.".into())); }
+    if let Some(d) = key_file(root, u).parent() { let _ = std::fs::create_dir_all(d); }
+    write_json(&key_file(root, u), &rec);
+    Ok(())
+}
+fn remove_mykey(hub: &dyn AiHub, u: &str) { let _ = std::fs::remove_file(key_file(hub.root(), u)); }
+/// GET OpenRouter's key endpoint (through the configurable base) with the person's key: the optional "test" button.
+pub async fn test_mykey(hub: &Arc<dyn AiHub>, u: &str) -> Resp {
+    let k = s(&key_rec(hub.root(), u), "apiKey");
+    if k.is_empty() { return answer(400, json!({ "error": "No key of yours is stored." })); }
+    if !personal_on(hub.root()) { return answer(403, json!({ "error": PERSONAL_OFF })); }
+    let r = crate::openai::self_http(&**hub).get(format!("{}/key", base_url(&**hub))).header("authorization", format!("Bearer {k}")).header("HTTP-Referer", hub.public_url()).header("X-Title", "VibeRoller").send().await;
+    match r {
+        Err(e) => answer(502, json!({ "ok": false, "error": format!("OpenRouter could not be reached: {}", e.to_string().replace(&k, "…")) })),
+        Ok(x) if matches!(x.status().as_u16(), 401 | 403) => answer(200, json!({ "ok": false, "error": REFUSED })),
+        Ok(x) if !x.status().is_success() => answer(502, json!({ "ok": false, "error": format!("OpenRouter answered {}.", x.status().as_u16()) })),
+        Ok(x) => { let j: Value = x.json().await.unwrap_or(Value::Null); let d = &j["data"]; answer(200, json!({ "ok": true, "label": d["label"].as_str().map(|l| l.chars().take(60).collect::<String>().replace(&k, "…")), "usage": d["usage"], "limit": d["limit"] })) }
+    }
+}
+/// The plain refusal when the person is at or over the team cap, for a provider the team pays for; None for a person's own.
+pub fn guard(hub: &dyn AiHub, u: &str, p: &Value) -> Option<String> { if is_personal(p) { None } else { refusal(hub, u) } }
+/// An answer's cost: the team key's counts against the month budget, a person's own in their `mine` counter.
+pub fn note_for(hub: &dyn AiHub, u: &str, personal: bool, usage: &Value) { if personal { note_mine(hub, u, usage) } else { note_cost(hub, u, usage) } }
+fn cost_of(usage: &Value) -> f64 { usage["cost"].as_f64().or_else(|| usage["cost"].as_str().and_then(|t| t.trim().parse().ok())).filter(|c: &f64| c.is_finite() && *c > 0.0).unwrap_or(0.0) }
+/// Adds one answer of the person's own key to their month's `mine` counter (information only: no cap applies).
+pub fn note_mine(hub: &dyn AiHub, u: &str, usage: &Value) {
+    if !pgm_identity_internal::valid_username(u) || !usage.is_object() { return; }
+    let cost = cost_of(usage); let m = month();
+    edit(hub, u, |r| { let e = &mut r["months"][m.as_str()]["mine"]; e["usd"] = json!(usd(e["usd"].as_f64().unwrap_or(0.0) + cost)); e["calls"] = json!(e["calls"].as_u64().unwrap_or(0) + 1); });
+}
+/// (this month's USD on the person's own key, answers)
+pub fn mine_of(hub: &dyn AiHub, u: &str) -> (f64, u64) { let r = rec(hub, u); let m = &r["months"][month()]["mine"]; (m["usd"].as_f64().unwrap_or(0.0), m["calls"].as_u64().unwrap_or(0)) }
+
 // ---------- the month budget: <root>/profiles/<user>/openrouter.json ----------
 static LOCK: Mutex<()> = Mutex::new(());
 fn rec_file(hub: &dyn AiHub, u: &str) -> PathBuf { hub.root().join("profiles").join(u).join("openrouter.json") }
@@ -151,8 +258,8 @@ pub fn note_cost(hub: &dyn AiHub, u: &str, usage: &Value) {
 }
 /// The person's month as the page shows it.
 pub fn month_view(hub: &dyn AiHub, u: &str) -> Value {
-    let (spent, calls) = spent_of(hub, u); let (cap, own) = cap_of(hub, u);
-    json!({ "month": month(), "spentUsd": usd(spent), "capUsd": cap, "ownCap": own, "defaultCapUsd": default_cap(hub), "calls": calls, "leftUsd": usd((cap - spent).max(0.0)), "over": spent >= cap, "resetsAt": format!("{}T00:00:00Z", resets_on()), "fallback": fallback_of(hub, u) })
+    let (spent, calls) = spent_of(hub, u); let (cap, own) = cap_of(hub, u); let (mine, mine_calls) = mine_of(hub, u);
+    json!({ "mineUsd": usd(mine), "mineCalls": mine_calls, "personalKeys": personal_on(hub.root()), "hasOwnKey": key_file(hub.root(), u).is_file() && !s(&key_rec(hub.root(), u), "apiKey").is_empty(), "month": month(), "spentUsd": usd(spent), "capUsd": cap, "ownCap": own, "defaultCapUsd": default_cap(hub), "calls": calls, "leftUsd": usd((cap - spent).max(0.0)), "over": spent >= cap, "resetsAt": format!("{}T00:00:00Z", resets_on()), "fallback": fallback_of(hub, u) })
 }
 /// Everyone's month (admins).
 pub fn all_view(hub: &dyn AiHub) -> Value {
@@ -190,7 +297,7 @@ pub fn fallback_for(hub: &dyn AiHub, u: &str, chosen: Option<&Value>) -> Option<
     if f["on"] != json!(true) { return None; }
     let p = hub.work().provider_get(hub.ai(), &s(&f, "provider"), u).filter(|p| p["kind"] == json!(KIND))?;
     let pr = pair(&p, &s(&f, "pair"))?;
-    if jcode_cmd(hub).is_err() || refusal(hub, u).is_some() { return None; }
+    if jcode_cmd(hub).is_err() || guard(hub, u, &p).is_some() { return None; }
     Some((p, s(&pr, "id"), format!("{why}, so this run uses OpenRouter ({}) through Jcode PGM on the server, as your setting \"use OpenRouter when Claude is unavailable\" says.", s(&pr, "label"))))
 }
 
@@ -215,11 +322,11 @@ pub fn work_off(hub: &dyn AiHub, p: &Value) -> Option<String> { if direct_kind(p
 pub struct WorkPlan { pub prov: Value, pub model: String, pub routed: String, pub env: Vec<(String, String)>, pub label: String }
 pub fn work_plan(hub: &dyn AiHub, u: &str, p: &Value, state_model: &str) -> Result<WorkPlan, String> {
     let (cmd, args) = jcode_cmd(hub)?;
-    if refusal(hub, u).is_some() { return Err(refusal(hub, u).unwrap_or_default()); }
+    if let Some(m) = guard(hub, u, p) { return Err(m); }
     if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in Settings → My AIs.".into()); }
     let ps = pairs_of(p);
     let Some(pr) = ps.iter().find(|x| s(x, "id") == state_model).or(ps.first()).cloned() else { return Err("This OpenRouter provider offers no models.".into()) };
-    let (routed, model, label, order, fallbacks) = (s(&pr, "id"), s(&pr, "model"), format!("OpenRouter · {}", s(&pr, "label")), list_of(&pr["providers"]), pr["allowFallbacks"] == json!(true));
+    let (routed, model, label, order, fallbacks) = (s(&pr, "id"), s(&pr, "model"), format!("{} · {}", if is_personal(p) { "my OpenRouter" } else { "OpenRouter" }, s(&pr, "label")), list_of(&pr["providers"]), pr["allowFallbacks"] == json!(true));
     let mut env: Vec<(String, String)> = vec![
         // jcode needs a key to start its OpenRouter provider; this is not one: the run's relay adds the hub's own, so the key
         // never enters the run's command line or environment
@@ -292,6 +399,22 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             pgm_core_internal::audit::record(u, "openrouter.cap", &who, json!({ "capUsd": cap }), "");
             answer(200, all_view(&**hub))
         }
+        // T-372: the person's own key. The key itself is never in an answer: hasKey and the last four characters.
+        "/api/openrouter/mykey" if get => answer(200, mykey_view(&**hub, u)),
+        "/api/openrouter/mykey" if post => match set_mykey(&**hub, u, &r.json()) {
+            Ok(()) => { pgm_core_internal::audit::record(u, "openrouter.mykey.set", u, json!({}), ""); answer(200, mykey_view(&**hub, u)) }
+            Err((st, e)) => answer(st, json!({ "error": e })),
+        },
+        "/api/openrouter/mykey/remove" if post => { remove_mykey(&**hub, u); pgm_core_internal::audit::record(u, "openrouter.mykey.remove", u, json!({}), ""); answer(200, mykey_view(&**hub, u)) }
+        "/api/openrouter/mykey" if r.method == hyper::Method::DELETE => { remove_mykey(&**hub, u); pgm_core_internal::audit::record(u, "openrouter.mykey.remove", u, json!({}), ""); answer(200, mykey_view(&**hub, u)) }
+        "/api/openrouter/personal" if post => {
+            if !hub.is_admin(u) { return Some(answer(403, json!({ "error": "Admins only." }))); }
+            let b = r.json();
+            let Some(on) = b["on"].as_bool() else { return Some(answer(400, json!({ "error": "on is true or false." }))) };
+            if let Err(e) = set_personal_on(hub.root(), on) { return Some(answer(500, json!({ "error": e }))); }
+            pgm_core_internal::audit::record(u, "openrouter.personal", "", json!({ "on": on }), "");
+            answer(200, json!({ "personalKeys": personal_on(hub.root()) }))
+        }
         "/api/openrouter/fallback" if post => match set_fallback(&**hub, u, &r.json()) { Ok(v) => answer(200, json!({ "fallback": v })), Err(e) => answer(400, json!({ "error": e })) },
         _ => return None,
     })
@@ -318,6 +441,34 @@ mod tests {
         assert_eq!(b["tools"][0]["type"], "function"); assert_eq!(b["stream"], true); // everything else as it came
         let mut q = json!({ "model": "or/qwen" }); shape(&p, &mut q); assert_eq!(q["provider"], json!({ "allow_fallbacks": true })); assert_eq!(q["model"], "qwen/qwen3-coder");
         let mut other = json!({ "model": "openai/gpt-5" }); shape(&p, &mut other); assert_eq!(other["model"], "anthropic/claude-sonnet-4.5"); // an unlisted model never goes
+    }
+    #[test]
+    fn a_personal_key_is_checked_shown_as_four_characters_and_its_refusal_is_plain() {
+        assert!(key_ok("sk-or-v1-abcdef0123456789abcd") && key_ok("sk-or-v1-r606_mine-0123456789"));
+        for bad in ["", "sk-ant-api03-abcdefghijklmnop", "sk-or-short", "sk-or-v1-has space-0123456789", "sk-or-v1-0123456789abcdef\n", "sk-or-v1-ünï-0123456789abcdef"] { assert!(!key_ok(bad), "{bad:?}"); }
+        assert_eq!(last4("sk-or-v1-abcdef0123456789wxyz"), "…wxyz");
+        let mine = json!({ "kind": "openrouter", "personal": true }); let team = json!({ "kind": "openrouter" });
+        assert!(refused(&mine, 401).is_some() && refused(&mine, 403).is_some() && refused(&mine, 429).is_none() && refused(&mine, 200).is_none() && refused(&team, 401).is_none());
+        assert!(refused(&mine, 401).unwrap().contains("Your own OpenRouter key was refused"));
+        assert_eq!(personal_id("mills"), "or-me:mills"); assert!(is_personal(&mine) && !is_personal(&team));
+    }
+    #[test]
+    fn a_personal_provider_has_the_team_pairs_unless_the_person_listed_their_own_and_hides_nothing_it_should_not() {
+        let dir = std::env::temp_dir().join(format!("vr-or-me-{}", std::process::id())); let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("profiles").join("ann")).unwrap();
+        let team = json!({ "kind": "openrouter", "pairs": [{ "id": "or/sonnet", "model": "anthropic/claude-sonnet-4.5", "providers": [], "allowFallbacks": false }] });
+        assert!(personal_provider(&dir, Some(&team), "ann").is_none(), "no key, no provider");
+        std::fs::write(key_file(&dir, "ann"), r#"{"apiKey":"sk-or-v1-unit-0123456789abcdef"}"#).unwrap();
+        let p = personal_provider(&dir, Some(&team), "ann").unwrap();
+        assert_eq!(p["id"], "or-me:ann"); assert_eq!(p["models"], json!(["or/sonnet"])); assert_eq!(p["personal"], true);
+        assert!(personal_provider(&dir, None, "ann").is_none(), "no pairs at all");
+        std::fs::write(key_file(&dir, "ann"), r#"{"apiKey":"sk-or-v1-unit-0123456789abcdef","pairs":[{"id":"mine/q","model":"qwen/qwen3-coder","providers":[],"allowFallbacks":false}]}"#).unwrap();
+        assert_eq!(personal_provider(&dir, Some(&team), "ann").unwrap()["models"], json!(["mine/q"]));
+        assert!(!personal_public(&personal_provider(&dir, Some(&team), "ann").unwrap()).to_string().contains("unit-0123"));
+        std::fs::write(dir.join("config.local.json"), r#"{"openrouter":{"personalKeys":false}}"#).unwrap();
+        assert!(personal_provider(&dir, Some(&team), "ann").is_none(), "an admin forbade them");
+        assert!(personal_provider(&dir, Some(&team), "../x").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn months_and_names() {

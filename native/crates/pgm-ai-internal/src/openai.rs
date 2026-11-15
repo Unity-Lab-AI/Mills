@@ -281,8 +281,9 @@ fn responses_native(u: &Value) -> Value {
 async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, system: &str, messages: &[(String, String)], on_token: Tok, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<Answer, ApiErr> {
     let an = complete_inner(hub, user, provider, model, system, messages, on_token, cancel, max_tokens).await?;
     let (w, ai) = (hub.work(), hub.ai());
-    let kind = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).map(|p| s(&p, "kind")).unwrap_or_default();
-    if kind == crate::openrouter::KIND { crate::openrouter::note_cost(&**hub, user, &an.native); } // the month budget
+    let pv = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user));
+    let kind = pv.as_ref().map(|p| s(p, "kind")).unwrap_or_default();
+    if kind == crate::openrouter::KIND { crate::openrouter::note_for(&**hub, user, pv.as_ref().map(crate::openrouter::is_personal).unwrap_or(false), &an.native); } // the month budget (a person's own key: their own counter)
     if let Some(u) = normalise(&an.native) { ai.usage.note_answer(user, &kind, &an.model, &u); }
     Ok(an)
 }
@@ -299,7 +300,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
     let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, ai.with_peer_note(NO_AI)))?;
     let kind = s(&p, "kind");
     if kind == "host-jcode" { return Err(err(400, "That AI is a Jcode PGM host: it runs Work, not API answers. Pick a Claude, API or local-model provider for answers.")); }
-    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::refusal(&**hub, user) { return Err(err(429, m)); } }
+    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::guard(&**hub, user, &p) { return Err(err(429, m)); } }
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     let m = pick_model(&p, model);
     let streaming = on_token.is_some();
@@ -322,6 +323,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
                 (r.status, r.headers.iter().find(|(k, _)| k == "content-type").map(|x| x.1.clone()).unwrap_or_default(), Src::Host(r.body))
             };
             let who = if kind == "openai" { "The endpoint".to_string() } else if kind == "openrouter" { "OpenRouter".to_string() } else { format!("{nick}'s endpoint") };
+            if kind == "openrouter" { if let Some(m) = crate::openrouter::refused(&p, status) { return Err(err(502, m)); } }
             if !(200..300).contains(&status) { return Err(fail_text(who, status, src.all().await, false)); }
             let used = s(&body, "model");
             if !streaming || (kind == "host-openai" && !ct.to_lowercase().contains("text/event-stream")) {
@@ -417,7 +419,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
     let w = hub.work(); let ai = hub.ai();
     let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, ai.with_peer_note(NO_AI)))?;
     let kind = s(&p, "kind");
-    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::refusal(&**hub, user) { return Err(err(429, m)); } }
+    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::guard(&**hub, user, &p) { return Err(err(429, m)); } }
     if (kind == "host" || kind == "claude-cli" || kind == "host-claude") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     let m = pick_model(&p, model);
     let host = s(&p, "hostId"); let pid = s(&p, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default(); let nick = s(&p, "nickname");
@@ -437,6 +439,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
                 let r = ai.provider_fetch_for(user, "", &host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
                 (r.status, Src::Host(r.body))
             };
+            if kind == "openrouter" { if let Some(m) = crate::openrouter::refused(&p, status) { return Err(err(502, m)); } }
             let raw = read_all(src, &cancel).await?;
             if !(200..300).contains(&status) { return Err(err(502, format!("{} answered {status}: {}", if kind == "openai" { "The endpoint".to_string() } else if kind == "openrouter" { "OpenRouter".to_string() } else { format!("{nick}'s endpoint") }, String::from_utf8_lossy(&raw).chars().take(300).collect::<String>()))); }
             let j: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
@@ -470,7 +473,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
         }
         _ => return Err(err(400, "That provider cannot carry tools: tool calls go through an OpenAI-compatible endpoint or an Anthropic one (an API key or a host's Claude login). Ask without tools for a text answer.")),
     };
-    if kind == crate::openrouter::KIND { crate::openrouter::note_cost(&**hub, user, &ans.1); }
+    if kind == crate::openrouter::KIND { crate::openrouter::note_for(&**hub, user, crate::openrouter::is_personal(&p), &ans.1); }
     if let Some(u) = normalise(&ans.1) { ai.usage.note_answer(user, &kind, &ans.0.model, &u); }
     Ok(ans.0)
 }
@@ -720,7 +723,7 @@ fn api_offers(hub: &Arc<dyn AiHub>, user: &str, a: &Value, key: &KeyCtx) -> Vec<
     }
     if !key.named && head.is_empty() { if let Some(p) = w.default_for(ai, user) { head.push(all.iter().find(|x| x["id"] == p["id"]).cloned().unwrap_or(p)); } }
     all.retain(|x| !head.iter().any(|h| h["id"] == x["id"]));
-    all.sort_by_key(|x| x["owner"] != json!(user)); // stable: own first, shared after
+    all.sort_by_key(|x| (x["personal"] == json!(true), x["owner"] != json!(user))); // stable: own first, shared after; a person's own OpenRouter key last, so a team pair id still goes to the team (T-372)
     // the default key bound to a provider (Settings → API access) answers from that one alone, as it always did; a key
     // with no binding, and every named key, route across everything they may use
     if key.named || s(a, "provider").is_empty() || head.is_empty() { head.extend(all); }
@@ -740,6 +743,8 @@ fn route_model(offers: &[Value], asked: &str) -> Option<(Value, String)> {
     let has = |p: &Value, m: &str| p["models"].as_array().map(|a| a.iter().any(|x| x == &json!(m))).unwrap_or(false);
     let first = |v: Vec<&Value>| v.iter().find(|p| is_usable(p)).or(v.first()).map(|p| (*p).clone());
     if let Some(p) = first(offers.iter().filter(|p| has(p, asked)).collect()) { return Some((p, asked.to_string())); }
+    // `my/<pair id>`: the person's own OpenRouter key (T-372)
+    if let Some(m) = asked.strip_prefix("my/") { if let Some(p) = first(offers.iter().filter(|p| p["personal"] == json!(true) && has(p, m)).collect()) { return Some((p, m.to_string())); } }
     let (pre, m) = asked.split_once('/')?;
     let pre = slug(pre);
     first(offers.iter().filter(|p| has(p, m) && (alias_of(p) == pre || slug(&s(p, "label")) == pre || slug(&s(p, "id")) == pre)).collect()).map(|p| (p, m.to_string()))
@@ -750,7 +755,9 @@ fn list_models(offers: &[Value]) -> Vec<(String, String)> {
     let owned = |p: &Value| if p["kind"] == json!("host") { "mills".to_string() } else { s(p, "label") };
     let mut seen: Vec<String> = vec![]; let mut out = vec![];
     for p in offers { for m in p["models"].as_array().cloned().unwrap_or_default().iter().filter_map(|m| m.as_str()) { if !seen.iter().any(|x| x == m) { seen.push(m.to_string()); out.push((m.to_string(), owned(p))); } } }
-    for m in seen.iter() { let who: Vec<&Value> = offers.iter().filter(|p| p["models"].as_array().map(|a| a.iter().any(|x| x == &json!(m))).unwrap_or(false)).collect(); if who.len() > 1 { for p in who { out.push((format!("{}/{m}", alias_of(p)), owned(p))); } } }
+    for m in seen.iter() { let who: Vec<&Value> = offers.iter().filter(|p| p["personal"] != json!(true) && p["models"].as_array().map(|a| a.iter().any(|x| x == &json!(m))).unwrap_or(false)).collect(); if who.len() > 1 { for p in who { out.push((format!("{}/{m}", alias_of(p)), owned(p))); } } }
+    // a person's own OpenRouter key answers to `my/<pair id>` (T-372)
+    for p in offers.iter().filter(|p| p["personal"] == json!(true)) { for m in p["models"].as_array().cloned().unwrap_or_default().iter().filter_map(|m| m.as_str()) { out.push((format!("my/{m}"), owned(p))); } }
     out
 }
 async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Resp {
