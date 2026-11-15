@@ -9796,6 +9796,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   async function r600Check() {
     const b64u = (b) => Buffer.from(b).toString('base64url'), sha = (s) => crypto.createHash('sha256').update(s).digest();
     const AUDIT = path.join(SB, 'security', 'audit.jsonl');
+    const made = []; // the devices these checks sign in: all revoked at the end (R237 counts the person's devices later)
     const secrets = []; // every code, verifier and token this check makes: none may reach the security log
     const REDIR = 'http://127.0.0.1:51734/cb', DEVICE = 'R600 Laptop (test)';
     const newReq = (over = {}) => { const verifier = b64u(crypto.randomBytes(32)); secrets.push(verifier); return { verifier, client: 'jcodepgm', device: DEVICE, redirect: REDIR, state: b64u(crypto.randomBytes(12)), ...over, challenge: over.challenge || b64u(sha(verifier)) }; };
@@ -9803,7 +9804,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const IPC = { v: '198.51.100.60' }; // the address a section's requests come from (CF-Connecting-IP): one rate-limit bucket per section
     const chk = (r, ip = IPC.v) => call('/api/app-signin/check?' + qs(r), null, undefined, { 'CF-Connecting-IP': ip });
     const auth = async (tok, r, ip = IPC.v) => { const x = await call('/api/app-signin/authorize', tok, { client: r.client, device: r.device, redirect: r.redirect, state: r.state, challenge: r.challenge }, { 'CF-Connecting-IP': ip }); const u = new URL((x.data && x.data.redirectTo) || 'http://x/'); x.code = u.searchParams.get('code') || ''; x.back = u; if (x.code) secrets.push(x.code); return x; };
-    const exch = async (r, code, ip = '198.51.100.61', over = {}) => { const x = await call('/api/app-signin/exchange', null, { code, verifier: r.verifier, redirect: r.redirect, client: r.client, device: r.device, ...over }, { 'CF-Connecting-IP': ip }); if (x.data && x.data.token) secrets.push(x.data.token); return x; };
+    const exch = async (r, code, ip = '198.51.100.61', over = {}) => { const x = await call('/api/app-signin/exchange', null, { code, verifier: r.verifier, redirect: r.redirect, client: r.client, device: r.device, ...over }, { 'CF-Connecting-IP': ip }); if (x.data && x.data.token) { secrets.push(x.data.token); made.push(x.data.deviceId); } return x; };
     const devices = async (t = U) => ((await call('/api/devices', t)).data || {}).devices || [];
     const hex64 = /^[0-9a-f]{64}$/;
     const seen = {};
@@ -9889,6 +9890,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           s.first10 && s.limited && s.otherAddress === 400 && s.afterGood.join() === '200,400' && s.logged.join() === 'true,true,200' && ['expired', 'mismatch', 'rate', 'reused', 'unknown'].every((x) => s.reasons.split(',').includes(x)) && s.noSecrets && s.fieldsOnly, JSON.stringify(s));
       }
     }
+    for (const id of made) await call('/api/devices/revoke', U, { id });
     // ---- R605: the page
     {
       const html = fs.readFileSync(path.join(MILLS, 'web', 'appsignin.html'), 'utf8'), js = fs.readFileSync(path.join(MILLS, 'web', 'appsignin.js'), 'utf8'), sw = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8');
@@ -9921,7 +9923,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         st.behaviourOk = b.asked && b.navigated.join() === `1,${REDIR},true,200,false` && b.cancel && b.bad.join() === 'false,0,true' && b.anon.join() === 'false,true,0';
         st.servedOk = st.served === `200,true,no-store,true,200,true`;
       }
-      check('R605', 'the /app-signin page (T-371): one small plain page and script of its own (SVG icon, no emoji, no images, a strict content policy with no inline script, not in the service worker\'s cache list); it asks check first, shows "Link <device> (<client>) to your account <username>?" with Approve and Cancel, signs the person in with the normal password sign-in when the tab has no session, goes back only to the redirect check accepted (with the code when approved, with error=access_denied&state=... when cancelled), never shows the code, and shows an error without navigating for a bad redirect' + (RUST_HUB ? '' : ' (static; the served page and its behaviour run with --rust-hub)'),
+      for (const id of made) await call('/api/devices/revoke', U, { id });
+      check('R605','the /app-signin page (T-371): one small plain page and script of its own (SVG icon, no emoji, no images, a strict content policy with no inline script, not in the service worker\'s cache list); it asks check first, shows "Link <device> (<client>) to your account <username>?" with Approve and Cancel, signs the person in with the normal password sign-in when the tab has no session, goes back only to the redirect check accepted (with the code when approved, with error=access_denied&state=... when cancelled), never shows the code, and shows an error without navigating for a bad redirect' + (RUST_HUB ? '' : ' (static; the served page and its behaviour run with --rust-hub)'),
         st.plainFiles && st.svg && st.noImages && st.noCache && st.buttons && st.csp && st.wiring && st.onlyValidated && (!RUST_HUB || (st.servedOk && st.behaviourOk)), JSON.stringify(st));
     }
   }
