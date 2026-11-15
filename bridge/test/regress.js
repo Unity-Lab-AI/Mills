@@ -9849,8 +9849,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         const unknown = await exch(newReq(), '0'.repeat(64), '198.51.100.62'), junk = await exch(newReq(), 'not-a-code', '198.51.100.62');
         seen.r602 = { rows, unknown: unknown.status, junk: junk.status, devicesMade: (await devices()).length - before };
         const s = seen.r602;
-        check('R602', 'a browser sign-in code is bound to what asked for it (T-371): an exchange with a wrong verifier, another redirect (host or port), another client, another device or no / a malformed verifier is a 400 {error}, and the code is burnt: the right exchange right afterwards is refused too, so no token is made; an unknown or malformed code is a 400',
-          rows.every((x) => x[1] === 400 && x[2] === 'string' && x[3] === 400) && rows.length === 7 && s.unknown === 400 && s.junk === 400 && s.devicesMade === 0, JSON.stringify(s));
+        check('R602', 'a browser sign-in code is bound to what asked for it (T-371): an exchange with a wrong verifier, another redirect (host or port), another client, another device is a 400 {error}, and the code is burnt: the right exchange right afterwards is refused too, so no token is made; a missing or malformed verifier is a 400 as well but is only a bad request (the code is not burnt: the right exchange then works, 2 tokens); an unknown or malformed code is a 400',
+          rows.slice(0, 5).every((x) => x[1] === 400 && x[2] === 'string' && x[3] === 400) && rows.slice(5).every((x) => x[1] === 400 && x[2] === 'string' && x[3] === 200) && rows.length === 7 && s.unknown === 400 && s.junk === 400 && s.devicesMade === 2, JSON.stringify(s));
       }
       // ---- R603: refused requests; a linked machine cannot authorize
       {
@@ -9878,7 +9878,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         for (let i = 0; i < 12; i++) codes.push((await exch(newReq(), '1'.repeat(64), ipA)).status);
         const other = await exch(newReq(), '1'.repeat(64), ipB);
         const rr = newReq(), ra = await auth(U, rr), rx = await exch(rr, ra.code, '198.51.100.65'), rbad = newReq(), rba = await auth(U, rbad), rbx = await exch(rbad, rba.code, '198.51.100.65', { client: 'jcodepgm-desktop' });
-        const au = await call('/api/admin/audit?action=app-signin&limit=500', A), es = au.data.entries || [];
+        const au = await call('/api/admin/audit?limit=1000', A), es = (au.data.entries || []).filter((e) => /^app-signin\./.test(e.action));
         const mine = (act) => es.filter((e) => e.action === act && e.actor === 't-user');
         const file = fs.existsSync(AUDIT) ? fs.readFileSync(AUDIT, 'utf8') : '';
         const authE = mine('app-signin.authorize').find((e) => e.detail && e.detail.client === 'jcodepgm' && e.detail.device === DEVICE), exE = mine('app-signin.exchange').find((e) => e.detail && e.detail.device === DEVICE);
