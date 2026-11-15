@@ -487,7 +487,7 @@ async function setup() {
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, api: { ...(real.api || {}), anthropicBase: `http://127.0.0.1:${OLLAMA_PORT}/aapi` }, openrouter: { baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/orapi` }, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, api: { ...(real.api || {}), anthropicBase: `http://127.0.0.1:${OLLAMA_PORT}/aapi` }, openrouter: { baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/orapi` }, jcode: { command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')] } /* T-370: the Jcode PGM an OpenRouter Work session runs on the server: the fake one */, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -8094,6 +8094,109 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && all.defaultCapUsd === 20 && mine.capUsd === 1 && mine.ownCap === true && Math.abs(mine.spentUsd - atCap.spentUsd) < 1e-9 && mine.over === true && adm.over === false && adm.ownCap === false
       && capUp.status === 200 && again.status === 200 && capDefault.status === 200 && after.capUsd === 20 && after.ownCap === false && after.over === false,
       `caps ${capNotAdmin.status}/${allNotAdmin.status}/${capBad.status}/${capNobody.status}/${capSet.status}; at cap ${JSON.stringify(atCap)}; refused ${rChat.status} "${msg(rChat).slice(0, 160)}" stream ${rStream.status} ant ${rAnt.status} resp ${rResp.status}; fake calls ${fakeOr.calls.length}; all ${JSON.stringify(mine)} ${JSON.stringify(adm)}; raised ${again.status}; default ${JSON.stringify(after)}`);
+    // R595-R598 (stage 3, the router): the engine follows the provider. An OpenRouter session runs Jcode PGM on the server (the fake
+    // jcodepgm, config jcode.command) in the session's worktree; the hub's per-run relay stands between it and OpenRouter
+    const nodeOnline = async () => ((await call('/api/check', A)).data.aiNodes || []).some((h) => h.id === 'test-node' && h.online);
+    const waitNode = async (want) => { for (let i = 0; i < 80 && (await nodeOnline()) !== want; i++) await sleep(250); return (await nodeOnline()) === want; };
+    const kinds = (evs) => ({ info: evs.filter((e) => e.type === 'bridge_info').map((e) => e.text).join(' | '), init: evs.find((e) => e.type === 'system' && e.subtype === 'init') || {}, res: evs.find((e) => e.type === 'result') || {}, done: evs.find((e) => e.type === 'bridge_done') || {}, err: evs.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ') });
+    const pickOr = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    fakeOr.calls.length = 0;
+    const a0 = await bud(A);
+    const run1 = await chat(A, 'hello ORCALL MCP TOOL', { fresh: true }), t1 = texts(run1.events), k1 = kinds(run1.events);
+    const orCall = fakeOr.calls[0] || { body: {}, headers: {} };
+    const base1 = (/or\[base=(\S+) /.exec(t1) || [])[1] || '';
+    const toolUse = run1.events.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.name === 'bash')), toolRes = run1.events.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.tool_use_id === 't1'));
+    const a1 = await settle(a0.calls + 1, A);
+    const late = base1 ? await fetch(base1 + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'x', messages: [{ role: 'user', content: 'late' }] }) }) : { status: 0 };
+    const stray = await fetch(H + '/or-relay/' + '0'.repeat(48) + '/chat/completions', { method: 'POST', body: '{}' }), noTok = await fetch(H + '/or-relay/chat/completions', { method: 'POST', body: '{}' });
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: 0 });
+    const run2 = await chat(A, 'refused at the cap', { fresh: true }), k2 = kinds(run2.events);
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: null });
+    check('R595', 'a Work session whose provider is an OpenRouter one runs Jcode PGM on the server instead of Claude Code (jcode.command = the fake jcodepgm): `run --ndjson` in the session\'s own worktree with the pair\'s OpenRouter model (-m) and `-p openrouter`, its events reach the page stream in the usual shape (init, tool use and result, text, result, bridge_done 0), the team tools answer through its mcp.json; the hub\'s OpenRouter key is NOT in its command line or environment (a dummy key and a per-run relay address are), the pair\'s provider order and fallback switch are in its environment and pgm-proxy\'s shared pool is off; its model call through the relay reaches OpenRouter with the pair\'s model and routing, the usage flag and the real key, and is counted in the person\'s month; the relay is for that run only (gone when it ends, nothing for a stray or missing token); at the month cap the session is refused in plain words before anything runs',
+      pickOr.status === 200 && k1.init.harness === 'jcode' && /^fakej-/.test(k1.init.session_id || '') && /jcode-answer model=anthropic\/claude-sonnet-4\.5 provider=openrouter cwd=.*worktrees[\\/]t-admin/.test(t1) && /resume=no/.test(t1) && /overlay:yes/.test(t1) && /MCP:\{"ok":true/.test(t1)
+      && /^http:\/\/127\.0\.0\.1:\d+\/or-relay\/[0-9a-f]{48}$/.test(base1) && /key=viberoller-relay /.test(t1) && /order=anthropic,amazon-bedrock fallbacks=false shared=off leak=false/.test(t1) && /argv=.*run --ndjson --no-update -p openrouter -m anthropic\/claude-sonnet-4\.5 /.test(t1) && !t1.includes(R591_KEY)
+      && /orcall=200:or says: hello ORCALL/.test(t1) && orCall.body.model === 'anthropic/claude-sonnet-4.5' && same(orCall.body.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && same(orCall.body.usage, { include: true }) && orCall.headers.authorization === 'Bearer ' + R591_KEY && fakeOr.calls.length === 1
+      && toolUse && toolRes && k1.res.is_error === false && k1.res.harness === 'jcode' && k1.done.code === 0 && /Using Jcode PGM \(OpenRouter · Sonnet\)/.test(k1.info)
+      && a1.calls === a0.calls + 1 && Math.abs(a1.spentUsd - a0.spentUsd - 0.01) < 1e-9
+      && late.status === 401 && stray.status === 401 && noTok.status === 401
+      && k2.err && /budget/i.test(k2.err) && !k2.init.harness && fakeOr.calls.length === 1,
+      `pick ${pickOr.status}; init ${JSON.stringify(k1.init).slice(0, 100)}; text "${t1.slice(0, 420)}"; call ${JSON.stringify(orCall.body.provider)} ${orCall.body.model}; events ${toolUse}/${toolRes} ${k1.res.is_error} code ${k1.done.code}; info "${k1.info}"; month ${JSON.stringify(a0)} -> ${a1.spentUsd}/${a1.calls}; relay after ${late.status}/${stray.status}/${noTok.status}; capped "${k2.err.slice(0, 100)}"`);
+
+    // R596: Stop ends the run (the process dies, the session is free again); a Claude provider of an AI host still runs Claude Code
+    await call('/api/model', A, { provider: pv.id, model: 'or/qwen' });
+    const slow = chat(A, 'SLOW stop me r596'); await sleep(1500);
+    const tStop = Date.now(), stopped = await call('/api/stop', A, {}), rs = await slow, ks = kinds(rs.events), took = Date.now() - tStop;
+    const next596 = await chat(A, 'free again r596'), ka = kinds(next596.events), ta = texts(next596.events);
+    startAiNode(); const up1 = await waitNode(true);
+    const pickCl = await call('/api/model', A, { provider: 'h:test-node/claude', model: 'claude-haiku-5-5' });
+    const callsBefore = fakeOr.calls.length;
+    const runCl = await chat(A, 'claude path r596', { fresh: true }), kc = kinds(runCl.events), tc = texts(runCl.events);
+    check('R596', 'Stop works on an OpenRouter session (the jcodepgm process is killed, the run ends without a result and not with 0, and the session takes the next message at once); the router follows the provider: a Claude provider of an AI host runs Claude Code exactly as before (the relayed run here, its model call through the host, no jcode, no OpenRouter), the OpenRouter pair runs Jcode PGM',
+      stopped.status === 200 && ks.done.code !== 0 && !ks.res.type && took < 3000 && next596.status === 200 && ka.done.code === 0 && /jcode-answer model=qwen\/qwen3-coder provider=openrouter/.test(ta)
+      && up1 && pickCl.status === 200 && /echo: claude path r596/.test(tc) && /relay=200:upstream ok/.test(tc) && !/jcode-answer/.test(tc) && kc.init.harness !== 'jcode' && /work happens here on the server/.test(kc.info) && fakeOr.calls.length === callsBefore,
+      `stop ${stopped.status} code ${JSON.stringify(ks.done.code)} result ${!!ks.res.type} took ${took}ms; next "${ta.slice(0, 80)}" ${ka.done.code}; node ${up1}; claude pick ${pickCl.status} "${tc.slice(0, 160)}" info "${kc.info}"; or calls ${fakeOr.calls.length}/${callsBefore}`);
+
+    // R597: the opt-in fallback: Claude's host is offline, the person said "use OpenRouter then", the run uses the pair and says so
+    const fb0 = (await bud(A)).fallback;
+    const fbBadPair = await call('/api/openrouter/fallback', A, { on: true, provider: pv.id, pair: 'no/such' }), fbBadProv = await call('/api/openrouter/fallback', A, { on: true, provider: 'host', pair: 'or/qwen' });
+    stopAiNode(); const down = await waitNode(false);
+    const offRun = await chat(A, 'host is down, fallback off', { fresh: true }), ko = kinds(offRun.events);
+    const fbSet = await call('/api/openrouter/fallback', A, { on: true, provider: pv.id, pair: 'or/qwen' });
+    fakeOr.calls.length = 0;
+    const fbRun = await chat(A, 'host is down, fallback on ORCALL', { fresh: true }), kf = kinds(fbRun.events), tf = texts(fbRun.events);
+    const fbCall = fakeOr.calls[0] || { body: {}, headers: {} };
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: 0 });
+    const fbCap = await chat(A, 'fallback but over the cap', { fresh: true }), kcap = kinds(fbCap.events);
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: null });
+    startAiNode(); const up2 = await waitNode(true);
+    const backRun = await chat(A, 'host is back r597', { fresh: true }), kb = kinds(backRun.events), tb = texts(backRun.events);
+    const fbOffOk = await call('/api/openrouter/fallback', A, { on: false }), fbEnd = (await bud(A)).fallback;
+    check('R597', 'the opt-in fallback: off by default (the setting is { on: false }); a pair of an OpenRouter provider the person may use is required (an unknown pair or a provider that is not OpenRouter is refused); with the AI host offline and the fallback off the session is refused as before ("is offline right now"); with it on the same message runs through Jcode PGM on the server with the chosen pair (its OpenRouter model, routing and key at OpenRouter) and the transcript says so in one line naming the host and the pair; at the month cap there is no fallback (the plain offline refusal stands, nothing is spent); with the host back the session runs Claude Code again',
+      fb0.on === false && fbBadPair.status === 400 && fbBadProv.status === 400 && down
+      && /is offline right now/.test(ko.err) && !ko.init.harness
+      && fbSet.status === 200 && fbSet.data.fallback.on === true && fbSet.data.fallback.pair === 'or/qwen'
+      && kf.init.harness === 'jcode' && /jcode-answer model=qwen\/qwen3-coder provider=openrouter/.test(tf) && /orcall=200:or says: host is down, fallback on ORCALL/.test(tf)
+      && kf.info.split(' | ').filter((l) => /^Claude \(test-node\) is offline, so this run uses OpenRouter \(Qwen\) through Jcode PGM on the server/.test(l)).length === 1
+      && fbCall.body.model === 'qwen/qwen3-coder' && same(fbCall.body.provider, { allow_fallbacks: true, order: ['cerebras'] }) && fbCall.headers.authorization === 'Bearer ' + R591_KEY
+      && /is offline right now/.test(kcap.err) && !kcap.init.harness
+      && up2 && /echo: host is back r597/.test(tb) && !/jcode-answer/.test(tb) && fbOffOk.status === 200 && fbEnd.on === false,
+      `default ${JSON.stringify(fb0)}; bad ${fbBadPair.status}/${fbBadProv.status}; down ${down}; off "${ko.err.slice(0, 90)}"; on ${fbSet.status}; run "${tf.slice(0, 120)}" info "${kf.info.slice(0, 200)}"; call ${fbCall.body.model}; capped "${kcap.err.slice(0, 80)}"; back ${up2} "${tb.slice(0, 60)}"; end ${JSON.stringify(fbEnd)}`);
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+
+    // R598: jcode.command empty (or not there) = an OpenRouter model is not offered for Work, and the page says why; the API still serves it
+    const cfgFile = path.join(SB, 'config.json'), cfgOrig = fs.readFileSync(cfgFile, 'utf8');
+    const setJcode = (j) => { const c = JSON.parse(cfgOrig); if (j === undefined) delete c.jcode; else c.jcode = j; fs.writeFileSync(cfgFile, JSON.stringify(c, null, 2)); };
+    const workOffOf = async () => ((await call('/api/providers', A)).data.providers.find((p) => p.id === pv.id) || {}).workOff;
+    const onNow = { pick: (await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' })).status, off: await workOffOf() };
+    setJcode({ command: '' });
+    const emptyOff = await workOffOf(), emptyPick = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    const emptyRun = await chat(A, 'no jcode here', { fresh: true }), ke = kinds(emptyRun.events);
+    const emptyApi = await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'api still serves r598' }] });
+    setJcode({ command: '/nonexistent/jcodepgm' });
+    const goneOff = await workOffOf(), gonePick = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    setJcode(undefined);
+    const noneOff = await workOffOf();
+    fs.writeFileSync(cfgFile, cfgOrig);
+    const backOff = await workOffOf(), backPick = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    check('R598', 'with jcode.command empty, missing from the config or pointing at nothing, an OpenRouter model is not offered for Work and says why in plain words (the provider list carries workOff with the reason, picking it is a 400 with the same reason, a session already on it is refused with it before anything starts), while the same pair still answers through the API; setting the command again (no restart) offers it again',
+      onNow.pick === 200 && onNow.off === undefined
+      && /jcode\.command/.test(emptyOff || '') && /Jcode PGM/.test(emptyOff || '') && emptyPick.status === 400 && emptyPick.data.error === emptyOff && /jcode\.command/.test(ke.err) && !ke.init.harness && emptyApi.status === 200
+      && /\/nonexistent\/jcodepgm/.test(goneOff || '') && /not there/.test(goneOff || '') && gonePick.status === 400 && /jcode\.command/.test(noneOff || '') && backOff === undefined && backPick.status === 200,
+      `on ${JSON.stringify(onNow)}; empty "${(emptyOff || '').slice(0, 100)}" pick ${emptyPick.status} run "${ke.err.slice(0, 80)}" api ${emptyApi.status}; gone "${(goneOff || '').slice(0, 80)}" ${gonePick.status}; none ${!!noneOff}; back ${backOff} ${backPick.status}`);
+    // R599: the page: the provider form for an admin (key field and the pairs editor), the Work picker's two groups, the budget box
+    const pageOr = await (await fetch(H + '/')).text();
+    const blkPick = pageOr.slice(pageOr.indexOf('function showModels(d)'), pageOr.indexOf('// The project picker (Work header)'));
+    const blkOr = pageOr.slice(pageOr.indexOf('function pairsEditor('), pageOr.indexOf('// ── Settings → My AIs: providers'));
+    const blkProv = pageOr.slice(pageOr.indexOf('async function renderProviders()'), pageOr.indexOf('function sysSettings('));
+    const orIcons = (blkOr + blkProv).match(/href="#(i-[a-z-]+)"/g) || [], symbols = pageOr.match(/<symbol id="(i-[a-z-]+)"/g) || [];
+    check('R599', 'the page: Settings → My AIs offers an admin the OpenRouter kind (the key field, a pairs editor with id, label, OpenRouter model, provider order and allow-fallbacks per row, add and remove a pair; the owner can edit the pairs and replace the key later, the key is never filled back in); the Work AI picker shows two kinds of group, "Claude (<host>)" and "OpenRouter" (a pair shows its label, a provider the server cannot run is greyed with its reason); Settings has an OpenRouter budget box (the month\'s spend against the cap with a meter, the opt-in fallback switch with its pair, and for admins everyone\'s month with a cap field per person); only SVG icons from the page\'s own set, no emoji',
+      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /\['openrouter', 'OpenRouter \(the team key/.test(blkProv) && /me\.admin \? \[\['openrouter'/.test(blkProv) && /body\.pairs = pe\.get\(\)/.test(blkProv) && /pairsEditor\(p\.pairs/.test(blkProv) && /body\.apiKey = nk\.value/.test(blkProv) && !/nk\.value = p/.test(blkProv)
+      && /allow fallbacks/.test(blkOr) && /OpenRouter model, e\.g\./.test(blkOr) && /providers in order/.test(blkOr) && /Add a pair/.test(blkOr)
+      && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
+      && /\/api\/openrouter\/budget'\)/.test(blkOr) && /\/api\/openrouter\/fallback/.test(blkOr) && /\/api\/openrouter\/budget\/all/.test(blkOr) && /\/api\/openrouter\/budget\/cap/.test(blkOr) && /Use OpenRouter when Claude is unavailable/.test(blkOr) && /'orMeter'/.test(blkOr)
+      && orIcons.length >= 3 && orIcons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blkOr),
+      `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
     await call('/api/providers/remove', A, { id: pv.id });
     for (const k of [kA, kU, kOne]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
   }
@@ -8152,7 +8255,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
     seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
-    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance,Desktop Unity' && seen.connGroups === 8
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance,Desktop Unity' && seen.connGroups === 9
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
       && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
       && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.wired

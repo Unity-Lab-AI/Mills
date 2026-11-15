@@ -527,6 +527,8 @@
   .apiSnip pre { margin: .4rem 0; padding: .5rem; overflow-x: auto; white-space: pre; font-size: .78rem; background: color-mix(in srgb, var(--text) 8%, transparent); border-radius: 6px; max-width: 100%; }
   .apiSnip .row small { flex: 1; min-width: 12rem; }
   .apiKeyShow { display: flex; gap: .4rem; align-items: center; } .apiKeyShow input { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
+  .orMeter { height: .5rem; background: var(--line); border-radius: 4px; overflow: hidden; } .orMeter span { display: block; height: 100%; background: var(--text); opacity: .55; }
+  .orPairs .row { margin-bottom: .3rem; } .orPairs .row input[type=text], .orPairs .row input:not([type]) { flex: 1 1 11rem; }
   .provItem { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--line); }
   .provItem:first-child { border-top: 0; } .provItem small { color: var(--muted); }
   .startCard { display: flex; flex-direction: column; gap: .45rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; }
@@ -1307,6 +1309,8 @@
         <div id="srcBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
         <div id="provBox" class="provBox"></div></section>
+      <section class="setGroup" id="sgOpenRouter"><h3>OpenRouter budget</h3><p class="setHint">The team's OpenRouter models cost money, so each person has a monthly budget (US dollars, counted from what OpenRouter charges for each answer). At the cap OpenRouter answers stop until the 1st. You can also let a Work session fall back to an OpenRouter model when its Claude host is offline or at its cap.</p>
+        <div id="orBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
         <div id="hostBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>API access</h3><p class="setHint">Your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.</p>
@@ -2597,8 +2601,12 @@ function showModels(d) {
   sel.append(def);
   if (d.hubClaude !== false) for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
   for (const p of provs.filter((x) => x.id !== 'host' && !NOT_WORK(x))) {
-    const g = document.createElement('optgroup'); g.label = provName(p) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
-    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = p.online === false; g.append(o); }
+    // two kinds of engine: Claude (Claude Code, through an AI host's login or a key) and OpenRouter (Jcode PGM on the server, T-370)
+    const orp = p.kind === 'openrouter', pairLabel = Object.fromEntries((p.pairs || []).map((x) => [x.id, x.label || x.id]));
+    const g = document.createElement('optgroup');
+    g.label = orp ? 'OpenRouter' + (provs.filter((x) => x.kind === 'openrouter').length > 1 ? ' · ' + p.label : '') + (p.workOff ? ' · not set up on this server' : '')
+      : (p.kind === 'host-claude' ? 'Claude (' + (p.nickname || p.label) + ')' + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '') : provName(p)) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
+    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = orp ? (pairLabel[m] || m) : modelName(m); o.disabled = p.online === false || !!p.workOff; if (p.workOff) o.title = p.workOff; g.append(o); }
     sel.append(g);
   }
   // ChatGPT / Codex and local models (Ollama …) are listed too, so people see what their hosts offer, but greyed out:
@@ -5265,7 +5273,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderDevices(); if (typeof MACHINES !== 'undefined') MACHINES.render(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
+  renderDevices(); if (typeof MACHINES !== 'undefined') MACHINES.render(); renderApiAccess(); renderProviders(); renderOrBudget(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -5352,7 +5360,7 @@ async function renderDevices(prefill) {
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
-const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host · Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
+const KIND_NAMES = { host: 'Host Claude', openrouter: 'OpenRouter', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host · Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
 async function renderApiAccess(freshKey) {
   const box = $('apiBox'); if (!box) return;
   let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
@@ -5512,6 +5520,64 @@ function renderApiConnect(st) {
   };
   sel.onchange = draw; draw();
 }
+// The OpenRouter allow-list as rows: id (what people pick), label, OpenRouter model, providers in order, allow fallbacks.
+// get() gives the rows for /api/providers/add and /update (the hub checks them).
+function pairsEditor(initial) {
+  const wrap = document.createElement('div'); wrap.className = 'orPairs';
+  const list = document.createElement('div'), rows = [];
+  const mkIn = (ph, v) => { const i = document.createElement('input'); i.placeholder = ph; i.value = v || ''; i.setAttribute('aria-label', ph); return i; };
+  const addRow = (p) => {
+    p = p || {};
+    const r = document.createElement('div'); r.className = 'row';
+    const id = mkIn('id people pick, e.g. or/sonnet', p.id), label = mkIn('label', p.label), model = mkIn('OpenRouter model, e.g. anthropic/claude-sonnet-4.5', p.model), prov = mkIn('providers in order, e.g. anthropic, amazon-bedrock', (p.providers || []).join(', '));
+    const fl = document.createElement('label'); fl.className = 'chk'; const fc = document.createElement('input'); fc.type = 'checkbox'; fc.checked = p.allowFallbacks === true; fl.append(fc, ' allow fallbacks');
+    const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.title = 'Remove this pair'; rm.setAttribute('aria-label', 'Remove this pair'); rm.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>';
+    const rec = { get: () => ({ id: id.value.trim(), label: label.value.trim(), model: model.value.trim(), providers: prov.value, allowFallbacks: fc.checked }) };
+    rm.onclick = () => { r.remove(); rows.splice(rows.indexOf(rec), 1); };
+    r.append(id, label, model, prov, fl, rm); list.append(r); rows.push(rec);
+  };
+  (initial && initial.length ? initial : [{}]).forEach(addRow);
+  const add = document.createElement('button'); add.type = 'button'; add.className = 'ghost'; add.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg> Add a pair'; add.onclick = () => addRow();
+  wrap.append(list, add);
+  return { el: wrap, get: () => rows.map((x) => x.get()) };
+}
+// ── Settings → OpenRouter budget (T-370): this person's month, the fallback setting, and for admins everyone's month and caps ──
+async function renderOrBudget() {
+  const box = $('orBox'); if (!box) return;
+  let m; try { m = await json('/api/openrouter/budget'); } catch { const g = $('sgOpenRouter'); if (g) g.hidden = true; return; } // an older hub has none
+  let provs = []; try { provs = ((await json('/api/providers')).providers || []).filter((p) => p.kind === 'openrouter'); } catch {}
+  const g = $('sgOpenRouter'); if (g) g.hidden = !provs.length && !me.admin;
+  box.textContent = '';
+  const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const usd = (n) => '$' + Number(n || 0).toFixed(2);
+  box.append(mk('div', '', 'This month (' + m.month + '): ' + usd(m.spentUsd) + ' of ' + usd(m.capUsd) + (m.ownCap ? ' (your own cap)' : '') + ' · ' + m.calls + ' answer' + (m.calls === 1 ? '' : 's') + ' · resets ' + new Date(m.resetsAt).toLocaleDateString() + (m.over ? ' · used up' : '')));
+  const meter = mk('div', 'orMeter'); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', usd(m.spentUsd) + ' of ' + usd(m.capUsd) + ' used'); const fill = mk('span'); fill.style.width = (m.capUsd > 0 ? Math.min(100, Math.round(m.spentUsd / m.capUsd * 100)) : 100) + '%'; meter.append(fill); box.append(meter);
+  if (provs.length) {
+    const fb = m.fallback || {};
+    const row = mk('div', 'row'); const lab = mk('label', 'chk'); const on = mk('input'); on.type = 'checkbox'; on.checked = fb.on === true; lab.append(on, ' Use OpenRouter when Claude is unavailable');
+    const sel = mk('select'); sel.setAttribute('aria-label', 'OpenRouter model for the fallback');
+    for (const p of provs) for (const pr of p.pairs || []) { const o = mk('option', '', pr.label || pr.id); o.value = p.id + '|' + pr.id; sel.append(o); }
+    sel.value = (fb.provider || '') + '|' + (fb.pair || ''); if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+    const note = mk('span', 'status');
+    const save = () => { const [provider, pair] = sel.value.split('|'); json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: on.checked, provider, pair }) }).then(() => { note.textContent = on.checked ? 'On: a Work session whose Claude host is offline or at its cap runs this model through Jcode PGM, and says so.' : 'Off.'; }).catch((e) => { note.textContent = e.message; on.checked = false; }); };
+    on.onchange = save; sel.onchange = () => { if (on.checked) save(); };
+    row.append(lab, sel, note); box.append(row);
+  }
+  if (me.admin) {
+    let all; try { all = await json('/api/openrouter/budget/all'); } catch { return; }
+    const det = mk('details'); det.append(mk('summary', '', 'Everyone\'s month (admin) · default cap ' + usd(all.defaultCapUsd)));
+    const t = mk('table'), hr = mk('tr'); for (const h of ['Person', 'Spent', 'Cap', '']) hr.append(mk('th', '', h)); t.append(hr);
+    for (const p of all.people || []) {
+      const tr = mk('tr'); const cap = mk('input'); cap.type = 'number'; cap.min = '0'; cap.step = '1'; cap.value = String(p.capUsd); cap.style.width = '6rem'; cap.setAttribute('aria-label', 'Monthly cap of ' + p.username);
+      const set = mk('button', 'ghost', 'Set'); set.type = 'button'; const def = mk('button', 'ghost', 'Default'); def.type = 'button'; def.hidden = !p.ownCap;
+      const send = (v) => json('/api/openrouter/budget/cap', { method: 'POST', body: JSON.stringify({ username: p.username, capUsd: v }) }).then(() => renderOrBudget()).catch((e) => { sysSettings(e.message); });
+      set.onclick = () => send(Number(cap.value)); def.onclick = () => send(null);
+      const c3 = mk('td'); c3.append(cap, set, def);
+      tr.append(mk('td', '', p.name || p.username), mk('td', '', usd(p.spentUsd) + (p.over ? ' · used up' : '')), c3, mk('td', '', p.calls + ' answers')); t.append(tr);
+    }
+    det.append(t); box.append(det);
+  }
+}
 // ── Settings → My AIs: providers this person hooked up (private or shared with the team) ──
 async function renderProviders() {
   const box = $('provBox'); if (!box) return;
@@ -5527,23 +5593,34 @@ async function renderProviders() {
       const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
       rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/providers/remove', { method: 'POST', body: JSON.stringify({ id: p.id }) }).then(() => { renderProviders(); renderApiAccess(); refreshProviders(); }).catch((e) => sysSettings(e.message)); };
       it.append(sh, rm);
+      if (p.kind === 'openrouter') { // the allow-list can be edited, and the key replaced (never shown)
+        const ed = document.createElement('button'); ed.type = 'button'; ed.className = 'ghost'; ed.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg> Edit pairs';
+        const panel = document.createElement('div'); panel.hidden = true; panel.style.flexBasis = '100%';
+        const pe2 = pairsEditor(p.pairs || []); const nk = document.createElement('input'); nk.type = 'password'; nk.autocomplete = 'off'; nk.placeholder = 'new OpenRouter key (leave empty to keep the current one)';
+        const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save'; const m2 = document.createElement('span'); m2.className = 'status';
+        save.onclick = () => { const body = { id: p.id, pairs: pe2.get() }; if (nk.value.trim()) body.apiKey = nk.value; json('/api/providers/update', { method: 'POST', body: JSON.stringify(body) }).then(() => { renderProviders(); renderApiAccess(); refreshProviders(); }).catch((e) => { m2.textContent = e.message; }); };
+        panel.append(pe2.el, nk, save, m2); ed.onclick = () => { panel.hidden = !panel.hidden; };
+        it.append(ed, panel);
+      }
     }
     box.append(it);
   }
   // add one
   const form = document.createElement('div'); form.className = 'row';
   const kind = document.createElement('select');
-  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)'], ['jcode', 'Jcode PGM on the host (jcodepgm binary; runs Work)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
+  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)'], ['jcode', 'Jcode PGM on the host (jcodepgm binary; runs Work)'], ...(me.admin ? [['openrouter', 'OpenRouter (the team key + model / provider pairs; Work runs Jcode PGM on the server)']] : [])]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
   const label = document.createElement('input'); label.placeholder = 'label, e.g. "Sponge\'s Claude"'; label.maxLength = 60;
   const secret = document.createElement('input'); secret.type = 'password'; secret.placeholder = 'API key'; secret.autocomplete = 'off';
   const where = document.createElement('input'); where.placeholder = 'base URL, e.g. https://api.example.com/v1';
   const jprov = document.createElement('input'); jprov.placeholder = 'jcode provider profile to run with (-p), e.g. viberoller (optional)'; jprov.maxLength = 80;
   const models = document.createElement('input'); models.placeholder = 'model ids, comma separated (optional for Claude)';
+  const pe = pairsEditor([]); pe.el.hidden = true; // OpenRouter: the allow-list of model + provider pairs
   const shared = document.createElement('label'); shared.className = 'chk'; const shc = document.createElement('input'); shc.type = 'checkbox'; shared.append(shc, ' share with the team');
   const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
   const msg = document.createElement('span'); msg.className = 'status';
   const sync = () => {
-    secret.hidden = kind.value === 'claude-cli' || kind.value === 'jcode'; where.hidden = kind.value === 'anthropic'; jprov.hidden = kind.value !== 'jcode';
+    secret.hidden = kind.value === 'claude-cli' || kind.value === 'jcode'; where.hidden = kind.value === 'anthropic' || kind.value === 'openrouter'; jprov.hidden = kind.value !== 'jcode';
+    models.hidden = kind.value === 'openrouter'; pe.el.hidden = kind.value !== 'openrouter'; secret.placeholder = kind.value === 'openrouter' ? 'OpenRouter API key (sk-or-…; kept on the hub, never shown again)' : 'API key';
     where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : kind.value === 'jcode' ? 'the jcodepgm binary on the host: a path, or just jcodepgm when it is on PATH' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)';
     models.placeholder = kind.value === 'jcode' ? 'model ids jcode may be asked for, comma separated (empty = jcode\'s own default)' : 'model ids, comma separated (optional for Claude)';
   };
@@ -5553,14 +5630,15 @@ async function renderProviders() {
     if (kind.value !== 'claude-cli' && kind.value !== 'jcode') body.apiKey = secret.value;
     if (kind.value === 'openai') body.baseUrl = where.value; if (kind.value === 'claude-cli') body.configDir = where.value;
     if (kind.value === 'jcode') { body.command = where.value; body.provider = jprov.value; }
+    if (kind.value === 'openrouter') body.pairs = pe.get();
     try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = jprov.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
     catch (e) { msg.textContent = e.message; }
   };
-  form.append(kind, label, secret, where, jprov, models, shared, add, msg); box.append(form);
+  form.append(kind, label, secret, where, jprov, models, pe.el, shared, add, msg); box.append(form);
 }
 function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
 // ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
-const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host, Jcode PGM' };
+const SRC_KINDS = { openrouter: 'OpenRouter (Jcode PGM on the server)', host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host, Jcode PGM' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
   let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }

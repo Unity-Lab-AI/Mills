@@ -59,7 +59,7 @@ pub fn base_url(hub: &dyn AiHub) -> String {
     hub.cfg().get("openrouter").and_then(|o| o["baseUrl"].as_str()).map(|b| b.trim().trim_end_matches('/').to_string()).filter(|b| b.starts_with("http://") || b.starts_with("https://")).unwrap_or_else(|| BASE.into())
 }
 /// The provider kinds a Work run reaches through Jcode PGM on this hub: the ones the hub calls itself over chat completions.
-pub fn direct_kind(kind: &str) -> bool { matches!(kind, KIND | "openai" | "host-openai") }
+pub fn direct_kind(kind: &str) -> bool { kind == KIND }
 fn list_of(v: &Value) -> Vec<String> {
     match v { Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect(), Value::String(t) => t.split(',').map(|x| x.trim().to_string()).filter(|t| !t.is_empty()).collect(), _ => vec![] }
 }
@@ -198,7 +198,8 @@ pub fn fallback_for(hub: &dyn AiHub, u: &str, chosen: Option<&Value>) -> Option<
 /// The Jcode PGM this server runs Work with: config `jcode.command` (a path, or a name on PATH) and `jcode.args`. Err =
 /// why this path is off (empty, or not there).
 pub fn jcode_cmd(hub: &dyn AiHub) -> Result<(String, Vec<String>), String> {
-    let j = hub.cfg().get("jcode").cloned().unwrap_or(Value::Null);
+    // read fresh: an admin who sets jcode.command in the hub's config needs no restart (config.json, config.local.json over it)
+    let j = pgm_core_internal::config::Config::load(hub.root()).get("jcode").cloned().unwrap_or(Value::Null);
     let c = s(&j, "command").trim().to_string();
     if c.is_empty() { return Err(NO_JCODE.into()); }
     let found = if c.contains('/') || c.contains('\\') { Path::new(&c).is_file() } else { std::env::var_os("PATH").map(|p| std::env::split_paths(&p).any(|d| d.join(&c).is_file() || d.join(format!("{c}.exe")).is_file())).unwrap_or(false) };
@@ -214,28 +215,23 @@ pub fn work_off(hub: &dyn AiHub, p: &Value) -> Option<String> { if direct_kind(p
 pub struct WorkPlan { pub prov: Value, pub model: String, pub routed: String, pub env: Vec<(String, String)>, pub label: String }
 pub fn work_plan(hub: &dyn AiHub, u: &str, p: &Value, state_model: &str) -> Result<WorkPlan, String> {
     let (cmd, args) = jcode_cmd(hub)?;
-    let kind = s(p, "kind");
-    let (routed, model, label, order, fallbacks) = if kind == KIND {
-        if let Some(m) = refusal(hub, u) { return Err(m); }
-        if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in Settings → My AIs.".into()); }
-        let ps = pairs_of(p);
-        let Some(pr) = ps.iter().find(|x| s(x, "id") == state_model).or(ps.first()).cloned() else { return Err("This OpenRouter provider offers no models.".into()) };
-        (s(&pr, "id"), s(&pr, "model"), format!("OpenRouter · {}", s(&pr, "label")), list_of(&pr["providers"]), pr["allowFallbacks"] == json!(true))
-    } else {
-        let ms = list_of(&p["models"]);
-        let m = if ms.iter().any(|x| x == state_model) { state_model.to_string() } else { ms.first().cloned().unwrap_or_default() };
-        (m.clone(), m, s(p, "label"), vec![], true)
-    };
-    if model.is_empty() { return Err("This provider lists no model to run Work with.".into()); }
+    if refusal(hub, u).is_some() { return Err(refusal(hub, u).unwrap_or_default()); }
+    if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in Settings → My AIs.".into()); }
+    let ps = pairs_of(p);
+    let Some(pr) = ps.iter().find(|x| s(x, "id") == state_model).or(ps.first()).cloned() else { return Err("This OpenRouter provider offers no models.".into()) };
+    let (routed, model, label, order, fallbacks) = (s(&pr, "id"), s(&pr, "model"), format!("OpenRouter · {}", s(&pr, "label")), list_of(&pr["providers"]), pr["allowFallbacks"] == json!(true));
     let mut env: Vec<(String, String)> = vec![
-        // jcode needs a key to start its OpenRouter provider; this is not one (the relay adds the hub's own)
+        // jcode needs a key to start its OpenRouter provider; this is not one: the run's relay adds the hub's own, so the key
+        // never enters the run's command line or environment
         ("OPENROUTER_API_KEY".into(), "viberoller-relay".into()),
-        ("JCODE_OPENROUTER_PROVIDER_FEATURES".into(), "0".into()), // the hub routes (provider.order) on the relay
         ("JCODE_OPENROUTER_MODEL_CATALOG".into(), "0".into()),
         ("JCODE_OPENROUTER_MODEL".into(), model.clone()),
+        // the routing as jcode names it (the relay applies the same on every call whatever jcode asks for)
+        ("JCODE_OPENROUTER_ALLOW_FALLBACKS".into(), fallbacks.to_string()),
+        // one person's cached answer must never reach another's session: pgm-proxy's shared pool stays off for hub runs
+        ("JCODE_PGM_PROXY_SHARED".into(), "off".into()),
     ];
-    if !order.is_empty() { env.push(("JCODE_OPENROUTER_PROVIDER".into(), order.join(","))); }
-    if !fallbacks { env.push(("JCODE_OPENROUTER_NO_FALLBACK".into(), "1".into())); }
+    if !order.is_empty() { env.push(("JCODE_OPENROUTER_PROVIDER_ORDER".into(), order.join(","))); }
     let prov = json!({ "kind": crate::jcode::KIND, "label": label, "command": cmd, "args": args, "provider": "openrouter", "models": [model] });
     Ok(WorkPlan { prov, model, routed, env, label })
 }
@@ -327,7 +323,7 @@ mod tests {
     fn months_and_names() {
         assert_eq!(month_name("2026-11"), "November 2026"); assert_eq!(month_name("x"), "x");
         assert_eq!(month().len(), 7); assert!(resets_on().ends_with("-01")); assert!(resets_on() > month());
-        assert!(direct_kind("openrouter") && direct_kind("openai") && direct_kind("host-openai") && !direct_kind("host-claude") && !direct_kind("host-codex") && !direct_kind("jcode"));
+        assert!(direct_kind("openrouter") && !direct_kind("openai") && !direct_kind("host-openai") && !direct_kind("host-claude") && !direct_kind("host-codex") && !direct_kind("jcode"));
         assert_eq!(list_of(&json!("a, b,,c")), ["a", "b", "c"]);
     }
 }
