@@ -280,11 +280,10 @@ fn responses_native(u: &Value) -> Value {
 /// /api/usage: per person and provider kind, with the cache hit ratio).
 async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str, system: &str, messages: &[(String, String)], on_token: Tok, cancel: Arc<Cancel>, max_tokens: Option<u64>) -> Result<Answer, ApiErr> {
     let an = complete_inner(hub, user, provider, model, system, messages, on_token, cancel, max_tokens).await?;
-    if let Some(u) = normalise(&an.native) {
-        let (w, ai) = (hub.work(), hub.ai());
-        let kind = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).map(|p| s(&p, "kind")).unwrap_or_default();
-        ai.usage.note_answer(user, &kind, &an.model, &u);
-    }
+    let (w, ai) = (hub.work(), hub.ai());
+    let kind = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).map(|p| s(&p, "kind")).unwrap_or_default();
+    if kind == crate::openrouter::KIND { crate::openrouter::note_cost(&**hub, user, &an.native); } // the month budget
+    if let Some(u) = normalise(&an.native) { ai.usage.note_answer(user, &kind, &an.model, &u); }
     Ok(an)
 }
 /// One answer for a person outside Work and the API (a Hyper Workflows node, T-204): through their provider (`provider`
@@ -300,6 +299,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
     let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, ai.with_peer_note(NO_AI)))?;
     let kind = s(&p, "kind");
     if kind == "host-jcode" { return Err(err(400, "That AI is a Jcode PGM host: it runs Work, not API answers. Pick a Claude, API or local-model provider for answers.")); }
+    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::refusal(&**hub, user) { return Err(err(429, m)); } }
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     let m = pick_model(&p, model);
     let streaming = on_token.is_some();
@@ -417,6 +417,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
     let w = hub.work(); let ai = hub.ai();
     let p = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user)).ok_or_else(|| err(503, ai.with_peer_note(NO_AI)))?;
     let kind = s(&p, "kind");
+    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::refusal(&**hub, user) { return Err(err(429, m)); } }
     if (kind == "host" || kind == "claude-cli" || kind == "host-claude") && hub.root().join("ai-host.off").exists() { return Err(err(503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     let m = pick_model(&p, model);
     let host = s(&p, "hostId"); let pid = s(&p, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default(); let nick = s(&p, "nickname");
@@ -469,6 +470,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
         }
         _ => return Err(err(400, "That provider cannot carry tools: tool calls go through an OpenAI-compatible endpoint or an Anthropic one (an API key or a host's Claude login). Ask without tools for a text answer.")),
     };
+    if kind == crate::openrouter::KIND { crate::openrouter::note_cost(&**hub, user, &ans.1); }
     if let Some(u) = normalise(&ans.1) { ai.usage.note_answer(user, &kind, &ans.0.model, &u); }
     Ok(ans.0)
 }
@@ -902,6 +904,7 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
 
 /// Settings → API access and → AI providers (signed in as `a`).
 pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
+    if r.path.starts_with("/api/openrouter/") { return crate::openrouter::route(hub, r, a); } // the month budget and the fallback (openrouter.rs)
     let api = hub.api(); let u = &a.username; let w = hub.work();
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let b = r.json();

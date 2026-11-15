@@ -271,6 +271,7 @@ fn note_usage(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally,
 /// An answer's usage (the provider's own object, whichever shape) to the ledger (under the model the upstream named) and the
 /// key's counters and day roll-up (under the routed model).
 fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, model: &str, native: &Value) {
+    if t.kind == crate::openrouter::KIND { crate::openrouter::note_cost(&**hub, user, native); } // the month budget: OpenRouter's own cost of the answer
     if let Some(u) = openai::normalise(native) {
         hub.ai().usage.note_answer(user, &t.kind, model, &u);
         openai::count_tokens(&**hub, user, key, &t.prov, &t.model, u.total_input(), u.output);
@@ -279,8 +280,10 @@ fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally
 /// The provider's full record (its own key is in it), else what routing gave.
 fn full_provider(hub: &Arc<dyn AiHub>, user: &str, prov: &Value) -> Value { hub.work().provider_get(hub.ai(), &s(prov, "id"), user).unwrap_or_else(|| prov.clone()) }
 /// Is this provider unable to answer right now (its host paused its AI, it has no key)? The refusal, in the caller's shape.
-fn preflight(hub: &Arc<dyn AiHub>, p: &Value, f: Fmt) -> Option<Resp> {
+fn preflight(hub: &Arc<dyn AiHub>, user: &str, p: &Value, f: Fmt) -> Option<Resp> {
     let kind = s(p, "kind");
+    // OpenRouter costs money: a person at or over their month's cap is refused before OpenRouter is asked (openrouter.rs)
+    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::refusal(&**hub, user) { return Some(err_resp(f, 429, &m)); } }
     if kind == "host-claude" && hub.root().join("ai-host.off").exists() { return Some(err_resp(f, 503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     if kind == "anthropic" && s(p, "apiKey").is_empty() { return Some(err_resp(f, 503, "This provider has no API key set.")); }
     if kind == "openai" && s(p, "baseUrl").is_empty() { return Some(err_resp(f, 503, "This provider has no address set.")); }
@@ -334,7 +337,7 @@ fn sse_error(m: &str) -> Bytes { Bytes::from(format!("event: error\ndata: {}\n\n
 pub async fn messages(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: &openai::KeyCtx, prov: &Value, model: &str, b: Value) -> Resp {
     let p = full_provider(hub, user, prov); // the full record: the provider's own key is in it
     let t = tally(&p, model);
-    if let Some(e) = preflight(hub, &p, Fmt::Ant) { return e; }
+    if let Some(e) = preflight(hub, user, &p, Fmt::Ant) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(true, key, openai::max_concurrent(&**hub, key)) };
     count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
@@ -399,7 +402,7 @@ pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, pr
     let p = full_provider(hub, user, prov);
     let t = tally(&p, model);
     if let Some(m) = crate::toolconv::check_tools(&b) { return err_resp(Fmt::Oa, 400, &m); } // a malformed tools field is refused here, as it always was
-    if let Some(e) = preflight(hub, &p, Fmt::Oa) { return e; }
+    if let Some(e) = preflight(hub, user, &p, Fmt::Oa) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
     count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
@@ -450,7 +453,7 @@ pub async fn chat_via_anthropic(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key: 
     let req = match crate::xlate::oa_to_ant_request(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
     let p = full_provider(hub, user, prov);
     let t = tally(&p, model);
-    if let Some(e) = preflight(hub, &p, f) { return e; }
+    if let Some(e) = preflight(hub, user, &p, f) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
     count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
@@ -485,7 +488,7 @@ pub async fn messages_via_openai(hub: &Arc<dyn AiHub>, user: &str, key: &openai:
     let req = match crate::xlate::ant_to_oa_request(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
     let p = full_provider(hub, user, prov);
     let t = tally(&p, model);
-    if let Some(e) = preflight(hub, &p, f) { return e; }
+    if let Some(e) = preflight(hub, user, &p, f) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(true, key, openai::max_concurrent(&**hub, key)) };
     count_call(hub, user, key, &t);
     let stream = b["stream"].as_bool().unwrap_or(false);
@@ -555,7 +558,7 @@ async fn responses_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx
     let f = Fmt::Oa;
     let t = tally(p, model);
     let codex = s(p, "kind") == "host-codex";
-    if let Some(e) = preflight(hub, p, f) { return e; }
+    if let Some(e) = preflight(hub, user, p, f) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
     count_call(hub, user, key, &t);
     let stream = b["stream"] == json!(true);
@@ -602,7 +605,7 @@ async fn responses_via_chat(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyC
     let f = Fmt::Oa;
     let req = match crate::xlate::responses_to_chat(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
     let t = tally(p, model);
-    if let Some(e) = preflight(hub, p, f) { return e; }
+    if let Some(e) = preflight(hub, user, p, f) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
     count_call(hub, user, key, &t);
     let stream = b["stream"] == json!(true);
@@ -637,7 +640,7 @@ async fn responses_via_anthropic(hub: &Arc<dyn AiHub>, r: &Req, user: &str, key:
     let f = Fmt::Oa;
     let req = match crate::xlate::responses_to_ant(&b, model) { Ok(x) => x, Err(m) => return err_resp(f, 400, &m) };
     let t = tally(p, model);
-    if let Some(e) = preflight(hub, p, f) { return e; }
+    if let Some(e) = preflight(hub, user, p, f) { return e; }
     let Some(run) = openai::start_running(hub, user, key) else { return openai::too_many(false, key, openai::max_concurrent(&**hub, key)) };
     count_call(hub, user, key, &t);
     let stream = b["stream"] == json!(true);
