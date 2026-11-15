@@ -32,8 +32,26 @@ fn products(hub: &Hub) -> Vec<(String, String, String)> {
         Some((p.to_string(), r.to_string(), x["label"].as_str().unwrap_or(p).to_string()))
     }).collect()).unwrap_or_default();
     if !from_cfg.is_empty() { return from_cfg; }
-    [("pgm-shadowchat", "UnityAILab/pgm-shadowchat", "ShaDow Chat"), ("pgm-hyperprodman", "UnityAILab/pgm-hyperprodman", "Hyper Prod Man"), ("pgm-prodsuit", "UnityAILab/pgm-prodsuit", "Prod Suit"), ("jcode-pgm", "UnityAILab/Jcode-PGM-releases", "Jcode PGM")]
-        .iter().map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string())).collect()
+    DEFAULT_PRODUCTS.iter().map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string())).collect()
+}
+/// The products the Downloads list when config "releases" names none: (product, Forgejo repo, label).
+const DEFAULT_PRODUCTS: [(&str, &str, &str); 5] = [
+    ("pgm-shadowchat", "UnityAILab/pgm-shadowchat", "ShaDow Chat"),
+    ("pgm-hyperprodman", "UnityAILab/pgm-hyperprodman", "Hyper Prod Man"),
+    ("pgm-prodsuit", "UnityAILab/pgm-prodsuit", "Prod Suit"),
+    ("jcode-pgm", "UnityAILab/Jcode-PGM-releases", "Jcode PGM"),
+    ("jcode-pgm-desktop", "UnityAILab/Jcode-PGM-Desktop-releases", "Jcode PGM Desktop"),
+];
+
+#[cfg(test)]
+mod default_products_tests {
+    use super::{safe_repo, DEFAULT_PRODUCTS};
+    #[test]
+    fn the_downloads_offer_jcode_pgm_and_its_desktop_app_by_default() {
+        let repos: Vec<&str> = DEFAULT_PRODUCTS.iter().map(|p| p.1).collect();
+        assert!(repos.contains(&"UnityAILab/Jcode-PGM-releases") && repos.contains(&"UnityAILab/Jcode-PGM-Desktop-releases"));
+        assert!(DEFAULT_PRODUCTS.iter().all(|p| safe_repo(p.1) && !p.0.is_empty() && !p.2.is_empty()));
+    }
 }
 /// "Windows", "Linux", "macOS" or "" from a file's name (darwin first: it contains "win").
 pub fn platform(name: &str) -> &'static str {
