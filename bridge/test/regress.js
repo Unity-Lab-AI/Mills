@@ -8350,7 +8350,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const entry = (page.match(/\{ cmd: '\/transfer'[^\n]*\n/) || [''])[0];
     const fnT = (page.match(/async function transferSession\([\s\S]*?\n\}\n/) || [''])[0], fnP = (page.match(/function paintTransfer\(\)[\s\S]*?\n\}\n/) || [''])[0];
     const ask = (page.match(/const TRANSFER_ASK = '[^\n]*/) || [''])[0];
-    const icons = [...(fnT + fnP).matchAll(/ic\('([a-z0-9-]+)'/g)].map((m) => m[1]);
+    const icons = [...(fnT + fnP).matchAll(/\bic\(([^)]*)\)/g)].flatMap((m) => [...m[1].matchAll(/'([a-z0-9-]+)'/g)].map((x) => x[1])).filter((x) => x !== 'lead');
     const seen = {
       entry: /args: '\[focus\]'/.test(entry) && /hint: '/.test(entry) && /confirm: TRANSFER_ASK/.test(entry) && /local: \(a\) => transferSession\(a\)/.test(entry) && /same project and worktree/.test(entry),
       ask: /handoff/.test(ask) && /fresh session/.test(ask) && /same project and worktree/.test(ask) && /switch to it/.test(ask),
