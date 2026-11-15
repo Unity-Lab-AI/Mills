@@ -34,8 +34,10 @@ process.stdin.on('end', async () => {
   // the prompt enhancer (5.35.0, R497): its own system prompt; it answers with what it was given and how it was started
   if (argv.includes('--system-prompt')) {
     const sys = opt('--system-prompt');
+    // the /transfer handoff writer (T-375, R615): "HANDOFFFAIL" in what it gets = it fails (the hub then builds a plain handoff)
+    if (input.includes('HANDOFFFAIL')) { out({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: session, result: 'the fake writer failed' }); return; }
     out({ type: 'result', subtype: 'success', is_error: false, session_id: session, result: 'ENHANCED:' + JSON.stringify({ input, cwd: process.cwd(), files: fs.readdirSync(process.cwd()), tools: argv.includes('--tools') ? opt('--tools') : null,
-      resume: argv.includes('--resume'), mcp: argv.includes('--mcp-config'), noPersist: argv.includes('--no-session-persistence'), keeps: /KEEP EVERYTHING THE PERSON SAID/.test(sys), model }) });
+      resume: argv.includes('--resume'), mcp: argv.includes('--mcp-config'), noPersist: argv.includes('--no-session-persistence'), keeps: /KEEP EVERYTHING THE PERSON SAID/.test(sys), writer: /You are a handoff writer/.test(sys), model }) });
     return;
   }
   if (input.includes('PCTOOL')) {

@@ -316,6 +316,18 @@ fn delete_first(w: &Work, a: &Account, sx: &Sx) -> (String, Option<String>) {
     (first, next)
 }
 
+/// The session that goes on for `sx` (T-375): a session that handed its worktree on with /transfer runs no more, so what
+/// was meant for it (an agent message) goes to the session it was transferred to (along a chain; itself otherwise).
+pub fn follow_transfer(a: &Account, sx: Sx) -> Sx {
+    let mut cur = sx;
+    for _ in 0..10 {
+        if !cur.gave { break; }
+        let v = index(a); let to = s(&v["sessions"][&cur.sid]["transferredTo"], "id");
+        if v["sessions"].get(&to).is_none() { break; }
+        cur = sx_in(a, &v, &to);
+    }
+    cur
+}
 /// A transferred session's title (T-375): "<title> (continued)", then "(continued 2)", "(continued 3)" … for a chain.
 pub(crate) fn continued_title(old: &str) -> String {
     let t = one_line(&json!(old), 120); let t = if t.is_empty() { "Session".to_string() } else { t };

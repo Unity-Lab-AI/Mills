@@ -213,7 +213,7 @@
   function item(s, current) {
     const r = el('div', 'spItem' + (current ? ' current' : '') + (s.hidden ? ' hid' : '')); r.tabIndex = 0; r.dataset.id = s.id;
     const t = el('div', 'spTxt'), meta = [s.noProject ? 'no project' : s.project, providerName(s.provider, me.providers) + (s.model ? ' ' + s.model : ''), hostName(s.host, me.providers, me.username, typeof nickOf === 'function' ? nickOf : null)];
-    t.append(el('b', '', titleOf(s)), el('small', '', meta.filter(Boolean).join(' · ') + (s.queued ? ' · ' + s.queued + ' queued' : '')));
+    t.append(el('b', '', titleOf(s)), el('small', '', meta.filter(Boolean).join(' · ') + (s.queued ? ' · ' + s.queued + ' queued' : '') + (s.transferredTo ? ' · transferred → ' + (s.transferredTo.title || 'Session') : ''))); // T-375
     t.title = titleOf(s) + '\n' + meta.join(' · ') + (s.worktree && s.worktree.branch ? '\n' + s.worktree.branch : '') + (s.mode === 'planner' ? '\nPlanner session' : '');
     const x = el('button', 'spAct'); x.append(ic(s.hidden ? 'eye' : 'close')); x.type = 'button'; x.title = s.hidden ? 'Unhide' : 'Hide (it keeps running; find it under Hidden)'; x.setAttribute('aria-label', x.title);
     x.onclick = (e) => { e.stopPropagation(); act(s, 'hide'); };
