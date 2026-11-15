@@ -7,6 +7,28 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.64.0 — 2026-11-16
+
+MINOR: **sign in to Jcode PGM from the browser** (T-371, hub side; plans/pgm-accounts-keys-app.md § 1; Sponge,
+2026-11-15: link our accounts onto Jcode PGM's TUI and Desktop by signing in to the hub, or through the browser). Jcode
+PGM 0.99.6 is the other half.
+
+- **The flow** (authorization code with PKCE and a loopback redirect): jcode opens `/app-signin?client&device&redirect
+  &state&challenge`; the page (the site's normal sign-in first if needed) asks "Link <device> to your account?";
+  Approve gives jcode a one-time code on its local callback, and jcode exchanges it with its PKCE verifier for a
+  per-device token: the same kind the device-code sign-in makes, listed under Settings → Signed-in devices by the
+  device's name and revocable there.
+- **Routes:** `GET /api/app-signin/check` (the page validates a request before showing it), `POST /api/app-signin/
+  authorize` (signed in; a linked-machine token may not) and `POST /api/app-signin/exchange` (no sign-in). Only
+  `http://127.0.0.1:<port>/cb` or `http://localhost:<port>/cb` are accepted as callbacks, and only the clients
+  `jcodepgm` and `jcodepgm-desktop`. A code is single-use, lives 120 s (`appSignin.codeSeconds`), is tied to the
+  person, challenge, callback, client and device, and is kept in memory only; a wrong verifier, callback, client or
+  device burns it, and a code used twice revokes the token it made. Rate-limited per address. The security log has
+  `app-signin.authorize`, `.exchange` and `.refused` (never the code, verifier, token or callback).
+- **The page** (`web/appsignin.html`, `web/appsignin.js` 1.0.0): plain, no inline script, not cached, no referrer;
+  Cancel sends jcode `error=access_denied` only after the request was validated. The device-code sign-in now shares its
+  token-making code with this flow. Checks R600–R605.
+
 ## 5.63.0 — 2026-11-16
 
 MINOR: **a person's own OpenRouter key next to the team's** (T-372; plans/pgm-accounts-keys-app.md § 2; Sponge,
