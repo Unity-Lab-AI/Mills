@@ -216,6 +216,31 @@ function fakeResponses(req, res, body, via) {
   fakeResp.json = JSON.stringify(resp('completed', [msg], usage)); res.writeHead(200, { 'Content-Type': 'application/json', 'x-request-id': 'req_r586' }); res.end(fakeResp.json);
 }
 
+// R591-R598 (T-370, split routing): a fake OpenRouter (config openrouter.baseUrl, at /orapi, the team key sk-or-v1-r591…). It records the
+// request as it arrived (model, provider routing, usage, the referer and title headers) and answers like OpenRouter: a whole answer or
+// a stream with the usage (and `cost`, only when `usage: {include: true}` was asked for) in the last chunk; `COST=<usd>` in the
+// request sets the cost, `OR-ERR` makes it a 429.
+const fakeOr = { calls: [] };
+const R591_KEY = 'sk-or-v1-r591-secret-0123456789';
+function fakeOpenRouter(req, res, body) {
+  const b = JSON.parse(body || '{}'), h = req.headers;
+  if (h.authorization !== 'Bearer ' + R591_KEY) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } })); }
+  fakeOr.calls.push({ headers: h, body: b, url: req.url });
+  if (body.includes('OR-ERR')) { res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '3' }); return res.end(JSON.stringify({ error: { message: 'Rate limit reached for the pair (r591)', code: 429 } })); }
+  const lm = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
+  const text = 'or says: ' + (typeof lm.content === 'string' ? lm.content : JSON.stringify(lm.content));
+  const cm = /COST=([0-9.]+)/.exec(body), cost = cm ? Number(cm[1]) : 0.01;
+  const usage = { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25, ...(b.usage && b.usage.include ? { cost } : {}) };
+  const model = b.model;
+  if (b.stream) {
+    const ck = (delta, finish = null) => 'data: ' + JSON.stringify({ id: 'gen-r591', object: 'chat.completion.chunk', created: 1, model, choices: [{ index: 0, delta, finish_reason: finish }] }) + '\n\n';
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    return res.end([': OPENROUTER PROCESSING\n\n', ck({ role: 'assistant', content: '' }), ck({ content: text }), ck({}, 'stop'), 'data: ' + JSON.stringify({ id: 'gen-r591', object: 'chat.completion.chunk', created: 1, model, choices: [], usage }) + '\n\n', 'data: [DONE]\n\n'].join(''));
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ id: 'gen-r591', object: 'chat.completion', created: 1, model, choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }], usage }));
+}
+
 let RUST_BACK = 0;
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null, FAKE_LINUX = ''; // FAKE_LINUX: R159's stand-in Linux accounts (ignored by git: under bridge/profiles)
 // read a zip like an unzipper would (the Download packages): the central directory names every entry and points at its
@@ -347,6 +372,7 @@ function startFakeOllama() {
         for (const w of txt.split(' ')) res.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: w + ' ' }) + '\n\n');
         return res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: b.model, usage: { input_tokens: 2, output_tokens: 3 } } }) + '\n\n');
       }
+      if (req.url === '/orapi/chat/completions') return fakeOpenRouter(req, res, body); // R591-R598 (T-370): the fake OpenRouter
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
       if ((req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') && body.includes('R580')) return fakeOpenAI(req, res, body); // R580-R585 (G3)
       if (req.url === '/oai/responses') return fakeResponses(req, res, body, 'api'); // R586-R590 (G5): a native Responses endpoint
@@ -447,7 +473,10 @@ async function setup() {
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
-  PORT = await freePort(7799);
+  // The checks derive many ports from PORT (PORT + 91, + 300 …) and pick them with freePort some time before they listen,
+  // so two suites running at once on a base 1 apart (7799 and 7800) collide on the derived ones (R539's fake Headroom
+  // failed to bind: 2026-11-15). Every suite process starts from its own 400-port window.
+  PORT = await freePort(7799 + (process.pid % 24) * 400);
   if (RUST_HUB) RUST_BACK = await freePort(PORT + 20); // the JavaScript hub behind the Rust one
   H = `http://127.0.0.1:${PORT}`;
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
@@ -458,7 +487,7 @@ async function setup() {
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, api: { ...(real.api || {}), anthropicBase: `http://127.0.0.1:${OLLAMA_PORT}/aapi` }, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, api: { ...(real.api || {}), anthropicBase: `http://127.0.0.1:${OLLAMA_PORT}/aapi` }, openrouter: { baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/orapi` }, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -913,6 +942,7 @@ async function run() {
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   if (process.argv.includes('--only-r575') && RUST_HUB) await r575Check(); // development: just R575 to R579 (with --stop-after R579)
   if (process.argv.includes('--only-r580') && RUST_HUB) await r580Check(); // development: just R580 to R585 (with --stop-after R585)
+  if (process.argv.includes('--only-r591') && RUST_HUB) await r591Check(); // development: just R591 to R598 (with --stop-after R598)
   if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
   if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
@@ -3116,6 +3146,7 @@ async function run() {
     if (RUST_HUB) await r560Check(); else skip('R560', 'the API gateway keys, routing and concurrency (T-369)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r575Check(); else skip('R575', 'the API gateway passes Anthropic requests through raw (T-369, G2)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r580Check(); else skip('R580', 'the API gateway passes OpenAI requests through raw and translates between the formats (T-369, G3)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r591Check(); else skip('R591', 'OpenRouter as a provider (pairs, routing, the key never shown) and the month budget (T-370)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r586Check(); else skip('R586', 'the API gateway serves the Responses API (Codex) and shows each key\'s usage by day and model (T-369, G5)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
@@ -7962,6 +7993,109 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.folder && seen.archive === 200 && seen.outOfList && seen.inArchived && seen.back && seen.served && !!S && seen.colours && seen.shapes && seen.meanings && seen.stall && seen.grouped
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
+  }
+  // R591-R592 (T-370, stage 1 of the split routing): an `openrouter` provider of the admin's with an allow-list of model + provider
+  // pairs, shared with the team; only the pairs are offered and routed; every request to OpenRouter carries the pair's model, the
+  // provider routing and the usage flag, the hub's referer and title, through every way in (chat raw, stream, Messages, Responses);
+  // the key is never shown back
+  async function r591Check() {
+    const assert = require('assert'), same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json }; };
+    const mk = async (body, tok = A) => (await call('/api/apikey/create', tok, body)).data;
+    const seenText = []; const note = (r) => { seenText.push(r.text !== undefined ? r.text : JSON.stringify(r.data)); return r; };
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic', 'amazon-bedrock'], allowFallbacks: false }, { id: 'or/qwen', label: 'Qwen', model: 'qwen/qwen3-coder', providers: 'cerebras', allowFallbacks: true }];
+    const add = { kind: 'openrouter', label: 'R591 OpenRouter', apiKey: R591_KEY, pairs, shared: true };
+    const notAdmin = note(await call('/api/providers/add', U, add)), noKey = note(await call('/api/providers/add', A, { ...add, apiKey: '' })), noPairs = note(await call('/api/providers/add', A, { ...add, pairs: [] }));
+    const dupPair = note(await call('/api/providers/add', A, { ...add, pairs: [pairs[0], pairs[0]] })), badId = note(await call('/api/providers/add', A, { ...add, pairs: [{ id: 'has space', model: 'm/x' }] }));
+    const made = note(await call('/api/providers/add', A, add)), pv = made.data.provider || {};
+    const listA = note(await call('/api/providers', A)), listU = note(await call('/api/providers', U)), check1 = note(await call('/api/check', U));
+    const inList = (r) => ((r.data.providers) || []).find((p) => p.id === pv.id) || {};
+    const stored = JSON.parse(fs.readFileSync(path.join(SB, 'providers.json'), 'utf8')).providers.find((p) => p.id === pv.id) || {};
+    const kA = await mk({ label: 'r591 admin', providers: [pv.id] }), kU = await mk({ label: 'r591 teammate' }, U), kOne = await mk({ label: 'r591 one', providers: [pv.id], models: ['or/qwen'] });
+    const ids = (r) => ((r.json && r.json.data) || []).map((m) => m.id).filter((x) => /^or\/|anthropic\/|qwen\//.test(x));
+    const mA = note(await g('/v1/models', kA.key)), mU = note(await g('/v1/models', kU.key)), mOne = note(await g('/v1/models', kOne.key));
+    fakeOr.calls.length = 0;
+    const ask = (key, model, content = 'hi r591') => g('/v1/chat/completions', key, { model, messages: [{ role: 'user', content }] });
+    const okA = note(await ask(kA.key, 'or/sonnet')), okU = note(await ask(kU.key, 'or/qwen'));
+    const rawId = note(await ask(kA.key, 'anthropic/claude-sonnet-4.5')), other = note(await ask(kA.key, 'openai/gpt-5')), oneNo = note(await ask(kOne.key, 'or/sonnet'));
+    const upd = note(await call('/api/providers/update', A, { id: pv.id, apiKey: R591_KEY, pairs: [pairs[0], { id: 'or/glm', model: 'z-ai/glm-4.6', providers: ['z-ai'] }] }));
+    const mA2 = note(await g('/v1/models', kA.key)), updNotAdmin = await call('/api/providers/update', U, { id: pv.id, pairs: [pairs[1]] });
+    const storedAfter = JSON.parse(fs.readFileSync(path.join(SB, 'providers.json'), 'utf8')).providers.find((p) => p.id === pv.id) || {};
+    check('R591', 'an admin adds an OpenRouter provider (a non-admin, a missing key, no pairs, a pair twice and a bad pair id are refused) with the team key and an allow-list of model + provider pairs, shared with the team; only the pairs are offered (/v1/models lists the pair ids and nothing of OpenRouter\'s catalogue, a key limited to one pair sees one) and only they are routed (a raw OpenRouter model id, another model and a pair the key may not use get a plain 404 and OpenRouter is never asked); the pairs are editable by the admin alone; the key is stored but never shown back (not by the add, the update, the provider lists or the page check)',
+      notAdmin.status === 400 && noKey.status === 400 && noPairs.status === 400 && dupPair.status === 400 && badId.status === 400
+      && made.status === 200 && pv.kind === 'openrouter' && pv.hasKey === true && pv.shared === true && same(pv.models, ['or/sonnet', 'or/qwen']) && pv.baseUrl === 'https://openrouter.ai/api/v1' && pv.pairs.length === 2 && pv.pairs[1].providers.join() === 'cerebras' && pv.pairs[1].allowFallbacks === true && pv.pairs[0].allowFallbacks === false
+      && inList(listA).kind === 'openrouter' && inList(listU).kind === 'openrouter' && inList(check1).kind === 'openrouter' && same(inList(listU).models, ['or/sonnet', 'or/qwen'])
+      && stored.apiKey === R591_KEY && seenText.every((t) => !t.includes(R591_KEY)) && !JSON.stringify(inList(listU)).includes('apiKey')
+      && same(ids(mA), ['or/sonnet', 'or/qwen']) && same(ids(mU), ['or/sonnet', 'or/qwen']) && same(ids(mOne), ['or/qwen']) && mA.json.data[0].owned_by === 'R591 OpenRouter'
+      && okA.status === 200 && okU.status === 200 && rawId.status === 404 && other.status === 404 && oneNo.status === 404 && fakeOr.calls.length === 2
+      && upd.status === 200 && same(upd.data.provider.models, ['or/sonnet', 'or/glm']) && same(ids(mA2), ['or/sonnet', 'or/glm']) && updNotAdmin.status === 400 && storedAfter.apiKey === R591_KEY && storedAfter.pairs.length === 2,
+      `refused ${notAdmin.status}/${noKey.status}/${noPairs.status}/${dupPair.status}/${badId.status}; made ${made.status} ${JSON.stringify(pv).slice(0, 160)}; models ${ids(mA)} / ${ids(mU)} / ${ids(mOne)}; asks ${okA.status}/${okU.status}/${rawId.status}/${other.status}/${oneNo.status} calls ${fakeOr.calls.length}; update ${upd.status} ${ids(mA2)}`);
+
+    // R592: the request OpenRouter gets, whichever way it came in
+    await call('/api/providers/update', A, { id: pv.id, pairs });
+    fakeOr.calls.length = 0;
+    const c1 = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', temperature: 0.2, messages: [{ role: 'user', content: 'whole r592' }] })), f1 = fakeOr.calls[0] || { body: {}, headers: {} };
+    const c2 = note(await g('/v1/chat/completions', kA.key, { model: 'or/qwen', stream: true, messages: [{ role: 'user', content: 'stream r592' }] })), f2 = fakeOr.calls[1] || { body: {}, headers: {} };
+    const c3 = note(await g('/v1/messages', kA.key, { model: 'or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'messages r592' }] }, { 'anthropic-version': '2023-06-01' })), f3 = fakeOr.calls[2] || { body: {}, headers: {} };
+    const c4 = note(await g('/v1/responses', kA.key, { model: 'or/qwen', input: 'responses r592' })), f4 = fakeOr.calls[3] || { body: {}, headers: {} };
+    const c5 = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'tools r592' }], tools: [{ type: 'function', function: { name: 'f', parameters: { type: 'object' } } }] })), f5 = fakeOr.calls[4] || { body: {}, headers: {} };
+    const sonnetRoute = (f) => f.body.model === 'anthropic/claude-sonnet-4.5' && same(f.body.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && same(f.body.usage, { include: true });
+    const qwenRoute = (f) => f.body.model === 'qwen/qwen3-coder' && same(f.body.provider, { allow_fallbacks: true, order: ['cerebras'] }) && same(f.body.usage, { include: true });
+    const hdr = (f) => f.headers.authorization === 'Bearer ' + R591_KEY && f.headers['x-title'] === 'VibeRoller' && /^https?:\/\//.test(f.headers['http-referer'] || '') && String(f.headers['content-type']).split(',').length === 1;
+    const streamUsage = c2.text.split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6))).find((e) => e.usage) || {};
+    check('R592', 'every request to OpenRouter carries what the pair says, whichever way it came in: a chat request (whole, streamed with the usage chunk on to the caller, with tools and the caller\'s own fields intact), a Messages request and a Responses request (both translated) all go with the pair\'s OpenRouter model id (never the pair id), provider { order, allow_fallbacks } from the pair, usage { include: true }, the team key as the bearer and the hub\'s HTTP-Referer and X-Title; the answers come back in the caller\'s shape and never carry the key',
+      c1.status === 200 && sonnetRoute(f1) && hdr(f1) && f1.body.temperature === 0.2 && /or says: whole r592/.test(c1.json.choices[0].message.content) && c1.json.usage.cost === 0.01
+      && c2.status === 200 && qwenRoute(f2) && hdr(f2) && /or says: stream r592/.test(c2.text) && streamUsage.usage && streamUsage.usage.total_tokens === 25 && /\[DONE\]/.test(c2.text)
+      && c3.status === 200 && c3.json.type === 'message' && sonnetRoute(f3) && hdr(f3) && /or says: messages r592/.test(c3.json.content[0].text)
+      && c4.status === 200 && c4.json.object === 'response' && qwenRoute(f4) && hdr(f4) && JSON.stringify(c4.json).includes('or says: responses r592')
+      && c5.status === 200 && sonnetRoute(f5) && f5.body.tools && f5.body.tools[0].function.name === 'f'
+      && seenText.every((t) => !t.includes(R591_KEY)),
+      `chat ${c1.status} ${JSON.stringify(f1.body.provider)} ${f1.body.model}; stream ${c2.status} ${JSON.stringify(f2.body.provider)}; messages ${c3.status} ${JSON.stringify(f3.body.provider)}; responses ${c4.status} ${JSON.stringify(f4.body.provider)}; tools ${c5.status}; headers ${JSON.stringify(f1.headers).slice(0, 200)}`);
+    // R593: the month budget counts the cost OpenRouter reports in each answer (usage.cost), stream or not, whichever way it came in
+    const bud = async (tok = U) => (await call('/api/openrouter/budget', tok)).data;
+    const settle = async (n, tok = U) => { let b = await bud(tok); for (let i = 0; i < 40 && b.calls < n; i++) { await sleep(100); b = await bud(tok); } return b; };
+    const b0 = await bud(), file0 = () => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'profiles', 't-user', 'openrouter.json'), 'utf8')); } catch { return {}; } };
+    note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'cost whole COST=0.5' }] }));
+    note(await g('/v1/chat/completions', kU.key, { model: 'or/qwen', stream: true, messages: [{ role: 'user', content: 'cost stream COST=0.25' }] }));
+    note(await g('/v1/messages', kU.key, { model: 'or/sonnet', max_tokens: 20, stream: true, messages: [{ role: 'user', content: 'cost messages COST=0.125' }] }, { 'anthropic-version': '2023-06-01' }));
+    note(await g('/v1/responses', kU.key, { model: 'or/qwen', input: 'cost responses COST=0.0625' }));
+    const b1 = await settle(b0.calls + 4), fileMonth = (file0().months || {})[b1.month] || {};
+    const adminBefore = await bud(A);
+    check('R593', 'the month budget is counted from the cost OpenRouter reports in each answer (usage.cost, asked for with usage { include: true }), whole or streamed, through a chat request, a streamed Messages request and a Responses request: four answers of 0.5, 0.25, 0.125 and 0.0625 USD make 0.9375 USD in 4 calls this month for the person who asked and nothing for anyone else; GET /api/openrouter/budget shows the person\'s month, cap (20 USD by default), what is left and when it resets (the first of next month, UTC); it is kept in the person\'s profile folder, add-only',
+      b0.spentUsd < 0.05 && b0.capUsd === 20 && b0.ownCap === false && /^\d{4}-\d{2}$/.test(b0.month) && b1.calls === b0.calls + 4 && Math.abs(b1.spentUsd - b0.spentUsd - 0.9375) < 1e-9 && b1.leftUsd > 19 && b1.over === false
+      && /^\d{4}-\d{2}-01T00:00:00Z$/.test(b1.resetsAt) && b1.resetsAt.slice(0, 7) > b1.month && Math.abs(fileMonth.usd - b1.spentUsd) < 1e-9 && fileMonth.calls === b1.calls && adminBefore.calls <= 6 && adminBefore.spentUsd < 0.2,
+      `before ${JSON.stringify(b0)}; after ${JSON.stringify(b1)}; file ${JSON.stringify(fileMonth)}; admin ${JSON.stringify(adminBefore)}`);
+
+    // R594: at the cap the next request is refused in plain words in the caller's shape; an admin sets a person's own cap and sees everyone's month
+    const capNotAdmin = await call('/api/openrouter/budget/cap', U, { username: 't-user', capUsd: 1000 }), allNotAdmin = await call('/api/openrouter/budget/all', U);
+    const capBad = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: -3 }), capNobody = await call('/api/openrouter/budget/cap', A, { username: 'nobody-here', capUsd: 3 });
+    const capSet = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 1 });
+    const mid = await bud();
+    fakeOr.calls.length = 0;
+    const lastOne = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'last one COST=0.1' }] }));
+    const atCap = await settle(b1.calls + 1);
+    const calls0 = fakeOr.calls.length;
+    const rChat = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'refused chat' }] }));
+    const rStream = note(await g('/v1/chat/completions', kU.key, { model: 'or/qwen', stream: true, messages: [{ role: 'user', content: 'refused stream' }] }));
+    const rAnt = note(await g('/v1/messages', kU.key, { model: 'or/sonnet', max_tokens: 5, messages: [{ role: 'user', content: 'refused messages' }] }, { 'anthropic-version': '2023-06-01' }));
+    const rResp = note(await g('/v1/responses', kU.key, { model: 'or/sonnet', input: 'refused responses' }));
+    const adminOk = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'admin still fine' }] }));
+    const callsRef = fakeOr.calls.length; // the refused ones never reached OpenRouter: only the admin request did
+    const all = (await call('/api/openrouter/budget/all', A)).data, mine = (all.people || []).find((p) => p.username === 't-user') || {}, adm = (all.people || []).find((p) => p.username === 't-admin') || {};
+    const capUp = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 5 }), again = note(await g('/v1/chat/completions', kU.key, { model: 'or/qwen', messages: [{ role: 'user', content: 'raised cap' }] }));
+    const capDefault = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: null }), after = await bud();
+    const msg = (r) => (r.json && (r.json.error && r.json.error.message)) || '';
+    check('R594', 'at or over the month cap the next request is refused before OpenRouter is asked (429 with the cap, what was spent and the date it resets, in the caller\'s own shape: OpenAI error, Anthropic error, and Responses), streamed requests too, while another person goes on; an admin sets a person\'s own cap (not a non-admin, not a negative number or an unknown account) and sees everyone\'s month with their caps (a non-admin does not); raising the cap lets the person go on, and null gives the default back',
+      capNotAdmin.status === 403 && allNotAdmin.status === 403 && capBad.status === 400 && capNobody.status === 400 && capSet.status === 200 && mid.capUsd === 1 && mid.ownCap === true && mid.over === false
+      && lastOne.status === 200 && atCap.over === true && Math.abs(atCap.spentUsd - b1.spentUsd - 0.1) < 1e-9 && calls0 === 1
+      && rChat.status === 429 && /\d\.\d\d of 1\.00 USD/.test(msg(rChat)) && /resets on \d{4}-\d{2}-01/.test(msg(rChat)) && /budget/i.test(msg(rChat))
+      && rStream.status === 429 && !/^data:/.test(rStream.text) && rAnt.status === 429 && rAnt.json.type === 'error' && rAnt.json.error.type === 'rate_limit_error' && /\d\.\d\d of 1\.00 USD/.test(rAnt.json.error.message)
+      && rResp.status === 429 && /resets on/.test(msg(rResp)) && callsRef === calls0 + 1 && adminOk.status === 200
+      && all.defaultCapUsd === 20 && mine.capUsd === 1 && mine.ownCap === true && Math.abs(mine.spentUsd - atCap.spentUsd) < 1e-9 && mine.over === true && adm.over === false && adm.ownCap === false
+      && capUp.status === 200 && again.status === 200 && capDefault.status === 200 && after.capUsd === 20 && after.ownCap === false && after.over === false,
+      `caps ${capNotAdmin.status}/${allNotAdmin.status}/${capBad.status}/${capNobody.status}/${capSet.status}; at cap ${JSON.stringify(atCap)}; refused ${rChat.status} "${msg(rChat).slice(0, 160)}" stream ${rStream.status} ant ${rAnt.status} resp ${rResp.status}; fake calls ${fakeOr.calls.length}; all ${JSON.stringify(mine)} ${JSON.stringify(adm)}; raised ${again.status}; default ${JSON.stringify(after)}`);
+    await call('/api/providers/remove', A, { id: pv.id });
+    for (const k of [kA, kU, kOne]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
   }
   // R546 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
   // it had (each id once, inside the Settings box) and every group has a heading and a one-line hint; the page's own Save

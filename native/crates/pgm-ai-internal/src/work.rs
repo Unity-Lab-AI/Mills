@@ -1192,6 +1192,7 @@ pub fn providers_list(hub: &dyn AiHub, user: &str) -> Vec<Value> {
     for p in w.own_providers() { if p["shared"] == json!(true) || p["owner"] == json!(user) {
         let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(&p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
         for k in ["baseUrl", "configDir"] { if !s(&p, k).is_empty() { v[k] = p[k].clone(); } }
+        if p["kind"] == json!(crate::openrouter::KIND) { v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) }; }
         out.push(v);
     } }
     out.extend(hub.ai().providers_for(user));

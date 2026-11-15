@@ -7,6 +7,28 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.61.0 — 2026-11-15
+
+MINOR: **OpenRouter as a shared provider, with a monthly budget per person** (T-370 stages 1 and 2; plans/split-routing.md;
+Sponge, 2026-11-15: set up OpenRouter next to Gee's Claude so the team's daily load needn't sit on one subscription).
+The Work engine on the server (Jcode PGM) and the page parts follow in the next release.
+
+- **The `openrouter` provider kind** (admin-only, Settings → AI providers' data side): `{kind: "openrouter", apiKey,
+  pairs: [{id, label, model, providers, allowFallbacks}]}`, base URL fixed to openrouter.ai. The key is stored and only
+  `hasKey` is ever shown. Only the **pairs** an admin lists are offered and routed (the pair id is what people pick,
+  also as `model` on `/v1/*`; any other model gets a plain 404). Every request, through the gateway's raw OpenAI
+  passthrough, the Anthropic and Responses translations, tools and streaming, and the hub's own text paths, goes through
+  one function that sends the pair's `provider: {order, allow_fallbacks}`, `usage: {include: true}`, `HTTP-Referer` and
+  `X-Title`.
+- **A month budget per person** (UTC calendar month): the cost is read from `usage.cost` in each answer (streamed or
+  not) and kept in `profiles/<user>/openrouter.json` (Rust-only). At or over the cap (config `openrouter.monthlyUsd`,
+  default 20, an admin can set another per person) the next request is refused with a 429 in the caller's API shape
+  naming the cap and the reset date, before OpenRouter is asked. `GET /api/openrouter/budget` (your month),
+  `GET /api/openrouter/budget/all` and `POST /api/openrouter/budget/cap {username, capUsd|null}` (admins).
+- Config `openrouter.baseUrl` exists only so the regression runner can point at a fake. Checks R591–R594.
+- The regression runner gives every suite process its own window of 400 ports (it picks many ports some time before
+  it listens on them, and two suites running at once collided: R539 failed once in a while).
+
 ## 5.60.0 — 2026-11-12
 
 MINOR: **the API gateway speaks the Responses API (Codex), and each key shows its usage** (T-369 slice G5; with this
