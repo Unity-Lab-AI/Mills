@@ -7,6 +7,25 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.63.0 — 2026-11-16
+
+MINOR: **a person's own OpenRouter key next to the team's** (T-372; plans/pgm-accounts-keys-app.md § 2; Sponge,
+2026-11-15: shared keys, and per-person keys as an option).
+
+- **Your own key.** Settings → OpenRouter budget has "My OpenRouter key": paste (or replace), Test (asks OpenRouter's key
+  endpoint), Remove. It is stored owner-only in your profile (`profiles/<you>/openrouter-key.json`, mode 0600), never
+  shown back (only `…abcd`), never used for anyone else, and never put into a run's command line or environment (a Work
+  run on it goes through the same per-run relay as the team's). Routes `GET/POST /api/openrouter/mykey`,
+  `POST …/mykey/remove` (or DELETE), `POST …/mykey/test`.
+- **"My OpenRouter"** is a provider only you see (`or-me:<you>`): in the Work picker's OpenRouter group, on `/v1/*` as
+  `my/<pair id>` (a plain model id goes to the team's pairs first, then to yours), in `/v1/models` and in the
+  opt-in fallback pick-list. Its pairs are the team's unless you list your own ("My own models").
+- **No hub budget on it**: you pay OpenRouter directly. Your use is still counted for your information
+  (`months[YYYY-MM].mine`, shown as "Your own key" next to the team key's spend). If OpenRouter refuses your key you are
+  told "Your own OpenRouter key was refused" and nothing falls back to the team key.
+- **Admin switch**: `openrouter.personalKeys` (default on; `POST /api/openrouter/personal {on}` from the budget group,
+  admins only, in the security log). Off: no new keys, and existing ones are not offered. Checks R606–R612.
+
 ## 5.62.0 — 2026-11-15
 
 MINOR: **OpenRouter Work sessions run Jcode PGM on the server, with an opt-in fallback and the page** (T-370 stage 3;

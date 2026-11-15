@@ -2604,7 +2604,7 @@ function showModels(d) {
     // two kinds of engine: Claude (Claude Code, through an AI host's login or a key) and OpenRouter (Jcode PGM on the server, T-370)
     const orp = p.kind === 'openrouter', pairLabel = Object.fromEntries((p.pairs || []).map((x) => [x.id, x.label || x.id]));
     const g = document.createElement('optgroup');
-    g.label = orp ? 'OpenRouter' + (provs.filter((x) => x.kind === 'openrouter').length > 1 ? ' · ' + p.label : '') + (p.workOff ? ' · not set up on this server' : '')
+    g.label = orp ? 'OpenRouter' + (provs.filter((x) => x.kind === 'openrouter').length > 1 || p.personal ? ' · ' + p.label : '') + (p.workOff ? ' · not set up on this server' : '')
       : (p.kind === 'host-claude' ? 'Claude (' + (p.nickname || p.label) + ')' + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '') : provName(p)) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
     for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = orp ? (pairLabel[m] || m) : modelName(m); o.disabled = p.online === false || !!p.workOff; if (p.workOff) o.title = p.workOff; g.append(o); }
     sel.append(g);
@@ -5546,11 +5546,12 @@ async function renderOrBudget() {
   const box = $('orBox'); if (!box) return;
   let m; try { m = await json('/api/openrouter/budget'); } catch { const g = $('sgOpenRouter'); if (g) g.hidden = true; return; } // an older hub has none
   let provs = []; try { provs = ((await json('/api/providers')).providers || []).filter((p) => p.kind === 'openrouter'); } catch {}
-  const g = $('sgOpenRouter'); if (g) g.hidden = !provs.length && !me.admin;
+  const g = $('sgOpenRouter'); if (g) g.hidden = !provs.length && !me.admin && m.personalKeys === false;
   box.textContent = '';
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   const usd = (n) => '$' + Number(n || 0).toFixed(2);
-  box.append(mk('div', '', 'This month (' + m.month + '): ' + usd(m.spentUsd) + ' of ' + usd(m.capUsd) + (m.ownCap ? ' (your own cap)' : '') + ' · ' + m.calls + ' answer' + (m.calls === 1 ? '' : 's') + ' · resets ' + new Date(m.resetsAt).toLocaleDateString() + (m.over ? ' · used up' : '')));
+  box.append(mk('div', '', 'This month (' + m.month + '): team key ' + usd(m.spentUsd) + ' of ' + usd(m.capUsd) + (m.ownCap ? ' (your own cap)' : '') + ' · ' + m.calls + ' answer' + (m.calls === 1 ? '' : 's') + ' · resets ' + new Date(m.resetsAt).toLocaleDateString() + (m.over ? ' · used up' : '')));
+  if (m.hasOwnKey || m.mineCalls) box.append(mk('div', '', 'Your own key: ' + usd(m.mineUsd) + ' · ' + m.mineCalls + ' answer' + (m.mineCalls === 1 ? '' : 's') + ' (you pay OpenRouter; no hub budget applies)'));
   const meter = mk('div', 'orMeter'); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', usd(m.spentUsd) + ' of ' + usd(m.capUsd) + ' used'); const fill = mk('span'); fill.style.width = (m.capUsd > 0 ? Math.min(100, Math.round(m.spentUsd / m.capUsd * 100)) : 100) + '%'; meter.append(fill); box.append(meter);
   if (provs.length) {
     const fb = m.fallback || {};
@@ -5562,6 +5563,45 @@ async function renderOrBudget() {
     const save = () => { const [provider, pair] = sel.value.split('|'); json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: on.checked, provider, pair }) }).then(() => { note.textContent = on.checked ? 'On: a Work session whose Claude host is offline or at its cap runs this model through Jcode PGM, and says so.' : 'Off.'; }).catch((e) => { note.textContent = e.message; on.checked = false; }); };
     on.onchange = save; sel.onchange = () => { if (on.checked) save(); };
     row.append(lab, sel, note); box.append(row);
+  }
+  // my own OpenRouter key (T-372): kept on the hub, never shown back (only its last four characters); it appears as "my OpenRouter"
+  let mykey = null; try { mykey = await json('/api/openrouter/mykey'); } catch {}
+  if (mykey) {
+    const kb = mk('div', 'orMine'); kb.append(mk('h4', '', 'My OpenRouter key'));
+    const kn = mk('span', 'status'); const say = (t) => { kn.textContent = t; };
+    if (!mykey.personalKeys && !mykey.hasKey) kb.append(mk('p', 'setHint', 'Personal OpenRouter keys are switched off on this hub: an admin can allow them.'));
+    else {
+      if (!mykey.personalKeys) kb.append(mk('p', 'setHint', 'An admin switched personal keys off: your stored key stays but is not used.'));
+      kb.append(mk('p', 'setHint', 'Paste your own OpenRouter key to use "my OpenRouter" in the AI picker, the API (model my/<id>) and Work. You pay OpenRouter directly: no hub budget applies, and the hub never shows the key again.'));
+      const row = mk('div', 'row'); const ki = mk('input'); ki.type = 'password'; ki.autocomplete = 'off'; ki.setAttribute('aria-label', 'Your OpenRouter key');
+      ki.placeholder = mykey.hasKey ? 'Replace it: paste a new key (sk-or-…)' : 'Your OpenRouter key (sk-or-…)';
+      const ks = mk('button', '', mykey.hasKey ? 'Replace' : 'Save key'); ks.type = 'button';
+      ks.onclick = () => { if (!ki.value.trim()) { say('Paste a key first.'); return; } json('/api/openrouter/mykey', { method: 'POST', body: JSON.stringify({ apiKey: ki.value.trim() }) }).then(() => { ki.value = ''; renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message)); };
+      row.append(ki, ks);
+      if (mykey.hasKey) {
+        const tag = mk('span', 'orTail'); tag.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-key"/></svg> '; tag.append('Stored: ' + mykey.last4);
+        const kt = mk('button', 'ghost'); kt.type = 'button'; kt.title = 'Ask OpenRouter whether the key works'; kt.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-check"/></svg> Test';
+        kt.onclick = () => { say('Asking OpenRouter…'); json('/api/openrouter/mykey/test', { method: 'POST', body: '{}' }).then((r) => say(r.ok ? 'OpenRouter accepts the key.' : r.error)).catch((e) => say(e.message)); };
+        const kr = mk('button', 'ghost'); kr.type = 'button'; kr.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg> Remove'; kr.setAttribute('aria-label', 'Remove my OpenRouter key');
+        kr.onclick = () => json('/api/openrouter/mykey/remove', { method: 'POST', body: '{}' }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message));
+        row.append(tag, kt, kr);
+      }
+      kb.append(row);
+      if (mykey.hasKey) {
+        const det = mk('details'); det.append(mk('summary', '', 'My own models (optional) · ' + (mykey.pairs.length ? mykey.pairs.length + ' of yours' : 'the team\'s models')));
+        det.append(mk('p', 'setHint', 'Leave it empty to use the team\'s models with your key. Rows you list here are used only for you (model my/<id>).'));
+        const pe3 = pairsEditor(mykey.pairs || []); const sv = mk('button', '', 'Save my models'); sv.type = 'button';
+        sv.onclick = () => { const rows = pe3.get().filter((x) => x.id || x.model); json('/api/openrouter/mykey', { method: 'POST', body: JSON.stringify({ pairs: rows }) }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message)); };
+        det.append(pe3.el, sv); kb.append(det);
+      }
+    }
+    kb.append(kn);
+    if (me.admin) { // the admin's switch
+      const row = mk('div', 'row'); const lab = mk('label', 'chk'); const sw = mk('input'); sw.type = 'checkbox'; sw.checked = mykey.personalKeys; lab.append(sw, ' Allow personal OpenRouter keys on this hub (admin)');
+      sw.onchange = () => json('/api/openrouter/personal', { method: 'POST', body: JSON.stringify({ on: sw.checked }) }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => { say(e.message); sw.checked = !sw.checked; });
+      row.append(lab); kb.append(row);
+    }
+    box.append(kb);
   }
   if (me.admin) {
     let all; try { all = await json('/api/openrouter/budget/all'); } catch { return; }
@@ -5587,7 +5627,8 @@ async function renderProviders() {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = p.label; it.append(b);
     const s = document.createElement('small'); s.textContent = KIND_NAMES[p.kind] + (p.id === 'host' ? ' · everyone' : ' · ' + (p.owner === me.username ? 'yours' : nickOf(p.owner) + "'s") + (p.shared ? ' · shared with the team' : ' · private')) + (p.models && p.models.length ? ' · ' + p.models.join(', ') : ''); it.append(s);
-    if (p.id !== 'host' && p.owner === me.username) {
+    if (p.personal) s.textContent = 'Your own OpenRouter key · only you see it · no hub budget (set it in Settings → OpenRouter budget) · ' + (p.models || []).join(', ');
+    if (p.id !== 'host' && p.owner === me.username && !p.personal) {
       const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'ghost'; sh.textContent = p.shared ? 'Make private' : 'Share with team';
       sh.onclick = () => json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: p.id, shared: !p.shared }) }).then(() => { renderProviders(); showModels(me); }).catch((e) => sysSettings(e.message));
       const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';

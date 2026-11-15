@@ -330,7 +330,16 @@ impl Work {
         read_json(&self.root.join("providers.json")).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default().into_iter()
             .filter(|p| !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, p["owner"].as_str().unwrap_or(""))).collect()
     }
+    /// The team's OpenRouter provider (the first shared one with pairs): the pairs a person's own key uses unless they list their own (T-372).
+    pub fn team_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !crate::openrouter::pairs_of(p).is_empty()) }
+    /// A person's own OpenRouter provider `or-me:<user>` (their key; None without a key, with personal keys off, or without pairs).
+    pub fn personal_for(&self, user: &str) -> Option<Value> {
+        if user.is_empty() { return None; }
+        let team = self.team_provider();
+        crate::openrouter::personal_provider(&self.root, team.as_ref(), user)
+    }
     pub fn provider_get(&self, ai: &crate::ai_hosts::AiHosts, id: &str, user: &str) -> Option<Value> {
+        if id.starts_with("or-me:") { return if !user.is_empty() && id == crate::openrouter::personal_id(user) { self.personal_for(user) } else { None }; } // only that person's own
         if id.is_empty() || id == "host" { return if self.hub_claude() { Some(self.host_entry()) } else { None }; }
         if id.starts_with("h:") { return ai.provider(id, user); }
         self.own_providers().into_iter().find(|p| p["id"] == json!(id)).filter(|p| user.is_empty() || p["shared"] == json!(true) || p["owner"] == json!(user))
@@ -1217,6 +1226,12 @@ pub fn providers_list(hub: &dyn AiHub, user: &str) -> Vec<Value> {
         }
         out.push(v);
     } }
+    // T-372: their own OpenRouter key as the provider "my OpenRouter" (theirs alone; no key in this view)
+    if let Some(p) = w.personal_for(user) {
+        let mut v = crate::openrouter::personal_public(&p);
+        if let Some(why) = crate::openrouter::work_off(hub, &p) { v["workOff"] = json!(why); }
+        out.push(v);
+    }
     out.extend(hub.ai().providers_for(user));
     out
 }
@@ -1335,6 +1350,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let p = r.path.as_str();
     if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
     if let Some(resp) = crate::gitpanel::route(hub, r, a).await { return Some(resp); }
+    if p == "/api/openrouter/mykey/test" && post { return Some(crate::openrouter::test_mykey(hub, u).await); } // T-372: the optional "test my key" call (async)
     if let Some(resp) = crate::projects::route(hub, r, a).await { return Some(resp); }
     // the session a request names (plans/multi-session.md; none = the first one, as older pages send it)
     let sess = |b: &Value| sessions::resolve(a, &sessions::wanted(r, b));

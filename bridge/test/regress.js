@@ -222,9 +222,12 @@ function fakeResponses(req, res, body, via) {
 // request sets the cost, `OR-ERR` makes it a 429.
 const fakeOr = { calls: [] };
 const R591_KEY = 'sk-or-v1-r591-secret-0123456789';
+// R606-R612 (T-372, personal keys): two people's own keys the fake also accepts; any other key is a 401 ("revoked", recorded in fakeOr.refused)
+const R606_KEY = 'sk-or-v1-r606-admin-own-aaaa1111', R606_KEY_U = 'sk-or-v1-r606-user-own-bbbb2222', R606_REVOKED = 'sk-or-v1-r606-revoked-cccc3333';
+fakeOr.refused = [];
 function fakeOpenRouter(req, res, body) {
   const b = JSON.parse(body || '{}'), h = req.headers;
-  if (h.authorization !== 'Bearer ' + R591_KEY) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } })); }
+  if (![R591_KEY, R606_KEY, R606_KEY_U].some((k) => h.authorization === 'Bearer ' + k)) { fakeOr.refused.push(h.authorization); res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } })); }
   fakeOr.calls.push({ headers: h, body: b, url: req.url });
   if (body.includes('OR-ERR')) { res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '3' }); return res.end(JSON.stringify({ error: { message: 'Rate limit reached for the pair (r591)', code: 429 } })); }
   const lm = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
@@ -372,6 +375,7 @@ function startFakeOllama() {
         for (const w of txt.split(' ')) res.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: w + ' ' }) + '\n\n');
         return res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: b.model, usage: { input_tokens: 2, output_tokens: 3 } } }) + '\n\n');
       }
+      if (req.url === '/orapi/key') { const ok = [R606_KEY, R606_KEY_U].some((k) => req.headers.authorization === 'Bearer ' + k); res.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(ok ? { data: { label: 'r606 key', usage: 1.5, limit: null } } : { error: { message: 'User not found.', code: 401 } })); } // R606: OpenRouter's GET /key
       if (req.url === '/orapi/chat/completions') return fakeOpenRouter(req, res, body); // R591-R598 (T-370): the fake OpenRouter
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
       if ((req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') && body.includes('R580')) return fakeOpenAI(req, res, body); // R580-R585 (G3)
@@ -943,6 +947,7 @@ async function run() {
   if (process.argv.includes('--only-r575') && RUST_HUB) await r575Check(); // development: just R575 to R579 (with --stop-after R579)
   if (process.argv.includes('--only-r580') && RUST_HUB) await r580Check(); // development: just R580 to R585 (with --stop-after R585)
   if (process.argv.includes('--only-r591') && RUST_HUB) await r591Check(); // development: just R591 to R598 (with --stop-after R598)
+  if (process.argv.includes('--only-r606') && RUST_HUB) await r606Check(); // development: just R606 to R612 (with --stop-after R612)
   if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
   if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
@@ -3147,6 +3152,7 @@ async function run() {
     if (RUST_HUB) await r575Check(); else skip('R575', 'the API gateway passes Anthropic requests through raw (T-369, G2)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r580Check(); else skip('R580', 'the API gateway passes OpenAI requests through raw and translates between the formats (T-369, G3)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r591Check(); else skip('R591', 'OpenRouter as a provider (pairs, routing, the key never shown) and the month budget (T-370)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r606Check(); else skip('R606', 'a person\'s own OpenRouter key next to the team\'s (T-372)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r586Check(); else skip('R586', 'the API gateway serves the Responses API (Codex) and shows each key\'s usage by day and model (T-369, G5)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
@@ -8199,6 +8205,196 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
     await call('/api/providers/remove', A, { id: pv.id });
     for (const k of [kA, kU, kOne]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
+  }
+  // R606-R612 (T-372): a person's own OpenRouter key next to the team's (plans/pgm-accounts-keys-app.md section 2). The fake OpenRouter accepts
+  // the team key, t-admin's own (R606_KEY) and t-user's own (R606_KEY_U) and says 401 to every other one.
+  async function r606Check() {
+    const assert = require('assert'), same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json }; };
+    const mkKey = async (body, tok = A) => (await call('/api/apikey/create', tok, body)).data;
+    const seenText = []; const note = (r) => { seenText.push(r.text !== undefined ? r.text : JSON.stringify(r.data)); return r; };
+    const secrets = [R591_KEY, R606_KEY, R606_KEY_U, R606_REVOKED], leaked = () => seenText.filter((t) => secrets.some((k) => t.includes(k))).length;
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic', 'amazon-bedrock'], allowFallbacks: false }, { id: 'or/qwen', label: 'Qwen', model: 'qwen/qwen3-coder', providers: 'cerebras', allowFallbacks: true }];
+    const tp = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R606 team', apiKey: R591_KEY, pairs, shared: true })).data.provider || {};
+    const my = (tok, p = '/api/openrouter/mykey', body) => call(p, tok, body);
+    const ids = (r) => ((r.json && r.json.data) || []).map((m) => m.id).filter((x) => /^(my\/)?(or|mine)\//.test(x));
+    const bud = async (tok) => (await call('/api/openrouter/budget', tok)).data;
+    const settleMine = async (n, tok) => { let b = await bud(tok); for (let i = 0; i < 40 && b.mineCalls < n; i++) { await sleep(100); b = await bud(tok); } return b; };
+    const listIds = async (tok) => ((await call('/api/providers', tok)).data.providers || []).map((p) => p.id);
+    const adminKeyFile = path.join(SB, 'profiles', 't-admin', 'openrouter-key.json'), userKeyFile = path.join(SB, 'profiles', 't-user', 'openrouter-key.json');
+    for (const t of [A, U]) await my(t, '/api/openrouter/mykey/remove', {});
+
+    // R606: the key is stored privately and never comes back, only its last four characters
+    const get0 = note(await my(A));
+    const bad = [note(await my(A, '/api/openrouter/mykey', { apiKey: '' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-ant-api03-abcdefghijklmnopqrstuvwx' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-or-short' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-or-v1-has space in it-0123456789' })), note(await my(A, '/api/openrouter/mykey', { pairs: [] }))];
+    const setA = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY })), getA = note(await my(A)), budA = note(await call('/api/openrouter/budget', A)), listA = note(await call('/api/providers', A)), chkA = note(await call('/api/check', A));
+    const stKey = fs.statSync(adminKeyFile), storedA = JSON.parse(fs.readFileSync(adminKeyFile, 'utf8'));
+    const tOk = note(await my(A, '/api/openrouter/mykey/test', {}));
+    const rmA = note(await my(A, '/api/openrouter/mykey/remove', {})), goneFile = !fs.existsSync(adminKeyFile);
+    const setA2 = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY }));
+    const delRes = await fetch(H + '/api/openrouter/mykey', { method: 'DELETE', headers: { Authorization: 'Bearer ' + A } }); note({ text: await delRes.text() });
+    const goneFile2 = !fs.existsSync(adminKeyFile);
+    note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY }));
+    const pA = ((await call('/api/providers', A)).data.providers || []).find((p) => p.id === 'or-me:t-admin') || {};
+    check('R606', 'a person\'s own OpenRouter key is stored owner-only in their profile (openrouter-key.json, mode 0600) and never comes back: the settings, the budget, the provider lists and every answer carry only hasKey and the last four characters (…1111); only a key shaped sk-or-… of a plausible length is accepted (an empty one, an Anthropic one, a short one, one with a space are a plain 400, and no call to OpenRouter is made to save it); "test" asks OpenRouter\'s key endpoint through the configured base and says it works; removing it (POST …/mykey/remove or DELETE …/mykey) deletes the file',
+      get0.data.hasKey === false && get0.data.last4 === null && get0.data.personalKeys === true && bad.every((b) => b.status === 400 && b.data.error)
+      && setA.status === 200 && setA.data.hasKey === true && setA.data.last4 === '…1111' && getA.data.last4 === '…1111' && budA.data.hasOwnKey === true && budA.data.personalKeys === true
+      && storedA.apiKey === R606_KEY && (stKey.mode & 0o777) === 0o600 && pA.hasKey === true && pA.apiKey === undefined && !JSON.stringify(inListOr(chkA)).includes(R606_KEY)
+      && tOk.status === 200 && tOk.data.ok === true && tOk.data.label === 'r606 key'
+      && rmA.status === 200 && rmA.data.hasKey === false && goneFile && setA2.status === 200 && delRes.status === 200 && goneFile2 && leaked() === 0,
+      `empty ${get0.status}; bad ${bad.map((b) => b.status)}; set ${setA.status} ${JSON.stringify(setA.data).slice(0, 140)}; mode ${(stKey.mode & 0o777).toString(8)}; test ${JSON.stringify(tOk.data)}; removed ${rmA.status}/${goneFile}; delete ${delRes.status}/${goneFile2}; leaks ${leaked()}`);
+    function inListOr(r) { return ((r.data && r.data.providers) || []).filter((p) => p.personal); }
+    await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY });
+
+    // R607: the provider "my OpenRouter" is offered to its owner alone (the team's pairs unless they list their own, which only they use)
+    const uBefore = await listIds(U);
+    const kA = await mkKey({ label: 'r606 admin' }), kU = await mkKey({ label: 'r606 user' }, U);
+    const mUBefore = note(await g('/v1/models', kU.key));
+    const setU = note(await my(U, '/api/openrouter/mykey', { apiKey: R606_KEY_U }));
+    const aIds = await listIds(A), uIds = await listIds(U);
+    const mA = note(await g('/v1/models', kA.key)), mU = note(await g('/v1/models', kU.key));
+    const pinOther = await call('/api/apikey/create', A, { label: 'r606 pin', providers: ['or-me:t-user'] }), pickOther = await call('/api/model', A, { provider: 'or-me:t-user', model: 'or/sonnet' });
+    const uAsksMy = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'hi r607' }] }));
+    const own = [{ id: 'mine/q', label: 'Mine', model: 'qwen/qwen3-coder', providers: 'cerebras', allowFallbacks: true }];
+    const setOwn = note(await my(A, '/api/openrouter/mykey', { pairs: own })), badOwn = note(await my(A, '/api/openrouter/mykey', { pairs: [{ id: 'has space', model: 'm/x' }] }));
+    const mA2 = note(await g('/v1/models', kA.key)), mU2 = note(await g('/v1/models', kU.key));
+    fakeOr.calls.length = 0;
+    const ownPlain = note(await g('/v1/chat/completions', kA.key, { model: 'mine/q', messages: [{ role: 'user', content: 'own pair r607' }] })), fOwn = fakeOr.calls[0] || { body: {}, headers: {} };
+    const uMine = note(await g('/v1/chat/completions', kU.key, { model: 'mine/q', messages: [{ role: 'user', content: 'not yours r607' }] })), uMy2 = note(await g('/v1/chat/completions', kU.key, { model: 'my/mine/q', messages: [{ role: 'user', content: 'not yours r607' }] }));
+    const aOldTeam = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'no longer yours r607' }] }));
+    const pOwn = ((await call('/api/providers', A)).data.providers || []).find((p) => p.id === 'or-me:t-admin') || {};
+    const calls607 = fakeOr.calls.length;
+    const clrOwn = note(await my(A, '/api/openrouter/mykey', { pairs: [] })), mA3 = note(await g('/v1/models', kA.key));
+    check('R607', 'the provider "my OpenRouter" (or-me:<user>) is offered to the person with the key and to nobody else: it is in their provider list with the team\'s pairs (their own key never shown), /v1/models lists their pair ids as my/<id> next to the team\'s, another person without a key sees none of it (and gets 404 for my/<id>, a key limited to it or a pick of it is refused); the person may list their own pairs, which replace the team\'s for them alone (the plain id and my/<id> route there, another person asking for them gets 404, the team\'s my/ ids are gone for them) and an empty list gives the team\'s back',
+      !uBefore.includes('or-me:t-user') && !uBefore.includes('or-me:t-admin') && ids(mUBefore).every((x) => !x.startsWith('my/')) && same(ids(mUBefore), ['or/sonnet', 'or/qwen'])
+      && setU.status === 200 && aIds.includes('or-me:t-admin') && !aIds.includes('or-me:t-user') && uIds.includes('or-me:t-user') && !uIds.includes('or-me:t-admin')
+      && same(ids(mA), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen']) && same(ids(mU), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen']) && mA.json.data.find((m) => m.id === 'my/or/sonnet').owned_by === 'my OpenRouter'
+      && pinOther.status === 400 && pickOther.status === 400 && uAsksMy.status === 200
+      && setOwn.status === 200 && same(setOwn.data.pairs.map((p) => p.id), ['mine/q']) && badOwn.status === 400
+      && same(ids(mA2), ['or/sonnet', 'or/qwen', 'mine/q', 'my/mine/q']) && same(ids(mU2), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen'])
+      && ownPlain.status === 200 && fOwn.headers.authorization === 'Bearer ' + R606_KEY && fOwn.body.model === 'qwen/qwen3-coder' && same(fOwn.body.provider, { allow_fallbacks: true, order: ['cerebras'] })
+      && uMine.status === 404 && uMy2.status === 404 && aOldTeam.status === 404 && same(pOwn.models, ['mine/q']) && calls607 === 1
+      && clrOwn.status === 200 && same(ids(mA3), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen']) && leaked() === 0,
+      `before ${uBefore.filter((x) => /or-me/.test(x))}; lists ${aIds.filter((x) => /or-me/.test(x))} / ${uIds.filter((x) => /or-me/.test(x))}; models ${ids(mA)} / ${ids(mA2)} / ${ids(mU2)}; refused ${pinOther.status}/${pickOther.status}; own ${setOwn.status}/${badOwn.status} ask ${ownPlain.status} ${fOwn.headers.authorization === 'Bearer ' + R606_KEY}; not theirs ${uMine.status}/${uMy2.status}/${aOldTeam.status}; fake calls ${calls607}`);
+
+    // R608: a request through it carries the person's own key to OpenRouter and the team's never; OpenRouter refusing the key says so plainly and nothing falls back to the team's
+    const authOf = (f) => (f || { headers: {} }).headers.authorization;
+    fakeOr.calls.length = 0;
+    const m1 = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'whole r608' }] })), f1 = fakeOr.calls[0];
+    const m2 = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/qwen', stream: true, messages: [{ role: 'user', content: 'stream r608' }] })), f2 = fakeOr.calls[1];
+    const m3 = note(await g('/v1/messages', kA.key, { model: 'my/or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'messages r608' }] }, { 'anthropic-version': '2023-06-01' })), f3 = fakeOr.calls[2];
+    const m4 = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team r608' }] })), f4 = fakeOr.calls[3];
+    const m5 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/qwen', messages: [{ role: 'user', content: 'other person r608' }] })), f5 = fakeOr.calls[4];
+    const sonnetRoute = (f) => f && f.body.model === 'anthropic/claude-sonnet-4.5' && same(f.body.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && same(f.body.usage, { include: true });
+    const refusedBefore = fakeOr.refused.length, callsBefore = fakeOr.calls.length;
+    note(await my(U, '/api/openrouter/mykey', { apiKey: R606_REVOKED }));
+    const r1 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'revoked r608' }] }));
+    const r2 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', stream: true, messages: [{ role: 'user', content: 'revoked stream r608' }] }));
+    const r3 = note(await g('/v1/messages', kU.key, { model: 'my/or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'revoked messages r608' }] }, { 'anthropic-version': '2023-06-01' }));
+    const tBad = note(await my(U, '/api/openrouter/mykey/test', {}));
+    const refusedAfter = fakeOr.refused.length, callsAfter = fakeOr.calls.length;
+    const teamStill = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team still works r608' }] })), fTeam = fakeOr.calls[fakeOr.calls.length - 1];
+    note(await my(U, '/api/openrouter/mykey', { apiKey: R606_KEY_U }));
+    const msgOf = (r) => (r.json && ((r.json.error && r.json.error.message) || '')) || '';
+    check('R608', 'a request through "my OpenRouter" (my/<id> as a chat request whole or streamed, as a Messages request) goes to OpenRouter with the person\'s own key as the bearer, the pair\'s model and routing and usage cost asked for, while the team\'s pair ids still use the team key and another person\'s my/<id> uses theirs, never the first person\'s; when OpenRouter refuses the person\'s key (401: revoked) every way in answers a plain "Your own OpenRouter key was refused" (in the caller\'s shape, the key tester too) and nothing is sent again with the team key, while the team pairs still work for them',
+      m1.status === 200 && authOf(f1) === 'Bearer ' + R606_KEY && sonnetRoute(f1) && /or says: whole r608/.test(m1.json.choices[0].message.content)
+      && m2.status === 200 && authOf(f2) === 'Bearer ' + R606_KEY && f2.body.model === 'qwen/qwen3-coder' && /or says: stream r608/.test(m2.text) && /\[DONE\]/.test(m2.text)
+      && m3.status === 200 && m3.json.type === 'message' && authOf(f3) === 'Bearer ' + R606_KEY && sonnetRoute(f3)
+      && m4.status === 200 && authOf(f4) === 'Bearer ' + R591_KEY && m5.status === 200 && authOf(f5) === 'Bearer ' + R606_KEY_U
+      && r1.status === 502 && /Your own OpenRouter key was refused/.test(msgOf(r1)) && r2.status === 502 && !/^data:/.test(r2.text) && /Your own OpenRouter key was refused/.test(msgOf(r2))
+      && r3.status === 502 && r3.json.type === 'error' && /Your own OpenRouter key was refused/.test(r3.json.error.message)
+      && refusedAfter - refusedBefore === 3 && fakeOr.refused.slice(refusedBefore).every((a) => a === 'Bearer ' + R606_REVOKED) && callsAfter === callsBefore
+      && tBad.status === 200 && tBad.data.ok === false && /Your own OpenRouter key was refused/.test(tBad.data.error)
+      && teamStill.status === 200 && authOf(fTeam) === 'Bearer ' + R591_KEY && leaked() === 0,
+      `calls ${[f1, f2, f3, f4, f5].map((f) => (authOf(f) || '').slice(-6))}; refused ${r1.status}/${r2.status}/${r3.status} "${msgOf(r1).slice(0, 70)}"; fake refused ${refusedAfter - refusedBefore}, accepted ${callsAfter - callsBefore}; tester ${JSON.stringify(tBad.data).slice(0, 80)}; team ${teamStill.status}; leaks ${leaked()}`);
+
+    // R609: no hub budget on a person's own key: a person at their team cap still uses it; their own spending is counted separately and shown with the team key's
+    const b0 = await bud(U);
+    note(await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 0 }));
+    const capped = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team key over the cap r609' }] }));
+    const w1 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'own key whole COST=0.5' }] }));
+    const w2 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/qwen', stream: true, messages: [{ role: 'user', content: 'own key stream COST=0.25' }] }));
+    const w3 = note(await g('/v1/messages', kU.key, { model: 'my/or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'own key messages COST=0.125' }] }, { 'anthropic-version': '2023-06-01' }));
+    const b1 = await settleMine(b0.mineCalls + 3, U);
+    const fileM = ((JSON.parse(fs.readFileSync(path.join(SB, 'profiles', 't-user', 'openrouter.json'), 'utf8')).months || {})[b1.month]) || {};
+    const allV = (await call('/api/openrouter/budget/all', A)).data, mineP = (allV.people || []).find((p) => p.username === 't-user') || {};
+    await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: null });
+    check('R609', 'no hub budget applies to a person\'s own key: with their team cap at 0 the team pair is refused (429) while "my OpenRouter" answers (whole, streamed, Messages); the three answers (0.5, 0.25 and 0.125 USD) are counted in the month file\'s separate "mine" counter (0.875 USD in 3 answers) and shown in the budget view next to the team key\'s spend, which does not move (spentUsd and calls stay, the person\'s team figure in the admin\'s list too)',
+      capped.status === 429 && /budget/i.test(msgOf(capped)) && w1.status === 200 && w2.status === 200 && w3.status === 200
+      && b1.mineCalls === b0.mineCalls + 3 && Math.abs(b1.mineUsd - b0.mineUsd - 0.875) < 1e-9 && b1.spentUsd === b0.spentUsd && b1.calls === b0.calls && b1.hasOwnKey === true && b1.over === true
+      && fileM.mine && Math.abs(fileM.mine.usd - b1.mineUsd) < 1e-9 && fileM.mine.calls === b1.mineCalls && Math.abs((fileM.usd || 0) - b1.spentUsd) < 1e-9 && (fileM.calls || 0) === b1.calls
+      && mineP.spentUsd === b1.spentUsd && mineP.calls === b1.calls,
+      `capped ${capped.status}; own ${w1.status}/${w2.status}/${w3.status}; before ${JSON.stringify([b0.spentUsd, b0.calls, b0.mineUsd, b0.mineCalls])} after ${JSON.stringify([b1.spentUsd, b1.calls, b1.mineUsd, b1.mineCalls])}; file ${JSON.stringify(fileM)}`);
+
+    // R610: a Jcode PGM Work session on "my OpenRouter" runs through the per-run relay with the person's key (not in its command line or environment, no hub budget); the opt-in fallback can name it
+    const nodeOnline = async () => ((await call('/api/check', A)).data.aiNodes || []).some((h) => h.id === 'test-node' && h.online);
+    const waitNode = async (want) => { for (let i = 0; i < 80 && (await nodeOnline()) !== want; i++) await sleep(250); return (await nodeOnline()) === want; };
+    const kinds = (evs) => ({ info: evs.filter((e) => e.type === 'bridge_info').map((e) => e.text).join(' | '), init: evs.find((e) => e.type === 'system' && e.subtype === 'init') || {}, res: evs.find((e) => e.type === 'result') || {}, done: evs.find((e) => e.type === 'bridge_done') || {}, err: evs.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ') });
+    const pick = await call('/api/model', A, { provider: 'or-me:t-admin', model: 'or/sonnet' });
+    fakeOr.calls.length = 0;
+    const a0 = await bud(A);
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: 0 }); // over the team cap: their own key is not counted
+    const run1 = await chat(A, 'hello ORCALL r610', { fresh: true }), t1 = texts(run1.events), k1 = kinds(run1.events), c1 = fakeOr.calls[0];
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: null });
+    const a1 = await settleMine(a0.mineCalls + 1, A);
+    const base1 = (/or\[base=(\S+) /.exec(t1) || [])[1] || '';
+    const late = base1 ? await fetch(base1 + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'x', messages: [{ role: 'user', content: 'late' }] }) }) : { status: 0 };
+    if (!(await nodeOnline())) startAiNode(); const up0 = await waitNode(true);
+    const pickCl = await call('/api/model', A, { provider: 'h:test-node/claude', model: 'claude-haiku-5-5' });
+    const fbOther = await call('/api/openrouter/fallback', U, { on: true, provider: 'or-me:t-admin', pair: 'or/qwen' }), fbSet = await call('/api/openrouter/fallback', A, { on: true, provider: 'or-me:t-admin', pair: 'or/qwen' });
+    stopAiNode(); const down = await waitNode(false);
+    fakeOr.calls.length = 0;
+    const fbRun = await chat(A, 'host is down, fallback on ORCALL r610', { fresh: true }), kf = kinds(fbRun.events), tf = texts(fbRun.events), cf = fakeOr.calls[0];
+    startAiNode(); const up1 = await waitNode(true);
+    await call('/api/openrouter/fallback', A, { on: false });
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    check('R610', 'a Work session whose provider is "my OpenRouter" runs Jcode PGM on the server through the same per-run relay: jcode gets the relay\'s address and a dummy key (the person\'s own key is in neither its command line nor its environment nor its answer, the relay dies with the run), the call reaches OpenRouter with the person\'s own key and the pair\'s model, the run goes on while the person\'s team cap is 0, and its cost lands in their own counter (0.01 USD) and not in the team\'s; the opt-in fallback accepts their own provider (not another person\'s) and, with the AI host offline, the run goes through it with their own key and says so',
+      pick.status === 200 && k1.init.harness === 'jcode' && /jcode-answer model=anthropic\/claude-sonnet-4\.5 provider=openrouter/.test(t1) && /^http:\/\/127\.0\.0\.1:\d+\/or-relay\/[0-9a-f]{48}$/.test(base1) && /key=viberoller-relay /.test(t1) && /leak=false/.test(t1) && !t1.includes(R606_KEY) && !t1.includes(R591_KEY)
+      && /orcall=200:or says: hello ORCALL r610/.test(t1) && c1 && c1.headers.authorization === 'Bearer ' + R606_KEY && c1.body.model === 'anthropic/claude-sonnet-4.5' && k1.done.code === 0 && /Using Jcode PGM \(my OpenRouter · Sonnet\)/.test(k1.info)
+      && a1.mineCalls === a0.mineCalls + 1 && Math.abs(a1.mineUsd - a0.mineUsd - 0.01) < 1e-9 && a1.spentUsd === a0.spentUsd && a1.calls === a0.calls && late.status === 401
+      && up0 && pickCl.status === 200 && fbOther.status === 400 && fbSet.status === 200 && fbSet.data.fallback.provider === 'or-me:t-admin' && down
+      && kf.init.harness === 'jcode' && /jcode-answer model=qwen\/qwen3-coder provider=openrouter/.test(tf) && /orcall=200:or says: host is down, fallback on ORCALL r610/.test(tf) && cf && cf.headers.authorization === 'Bearer ' + R606_KEY && !tf.includes(R606_KEY)
+      && /Claude \(test-node\) is offline, so this run uses OpenRouter \(Qwen\) through Jcode PGM on the server/.test(kf.info) && up1,
+      `pick ${pick.status}; init ${JSON.stringify(k1.init).slice(0, 80)}; text "${t1.slice(0, 300)}"; call ${c1 && c1.headers.authorization.slice(-6)}; info "${k1.info}"; mine ${JSON.stringify([a0.mineUsd, a0.mineCalls])} -> ${JSON.stringify([a1.mineUsd, a1.mineCalls])}, team ${a1.spentUsd}/${a0.spentUsd}; late ${late.status}; fallback ${fbOther.status}/${fbSet.status} down ${down} run "${tf.slice(0, 120)}" call ${cf && cf.headers.authorization.slice(-6)} info "${kf.info.slice(0, 160)}"`);
+
+    // R611: the admin switch: off = nobody can create a key (a plain message) and the personal providers are not offered (stored keys stay, unused); on = they are back
+    const localCfgFile = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(localCfgFile);
+    const noAdmin = await call('/api/openrouter/personal', U, { on: false }), badBody = await call('/api/openrouter/personal', A, { on: 'maybe' });
+    const off = await call('/api/openrouter/personal', A, { on: false });
+    const offA = await listIds(A), offU = await listIds(U), offM = note(await g('/v1/models', kA.key));
+    const offAsk = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'switched off r611' }] }));
+    const offPick = await call('/api/model', A, { provider: 'or-me:t-admin', model: 'or/sonnet' });
+    const offCreate = note(await my(U, '/api/openrouter/mykey', { apiKey: R606_KEY_U })), offReplace = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY })), offView = note(await my(A)), offBud = await bud(A);
+    const stillFiles = fs.existsSync(adminKeyFile) && fs.existsSync(userKeyFile);
+    const localCfg = JSON.parse(fs.readFileSync(path.join(SB, 'config.local.json'), 'utf8'));
+    const teamOff = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team pairs still work r611' }] }));
+    fakeOr.calls.length = 0;
+    const on = await call('/api/openrouter/personal', A, { on: true });
+    const onA = await listIds(A), onAsk = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'switched on again r611' }] })), fOn = fakeOr.calls[0];
+    check('R611', 'config openrouter.personalKeys (default true) is an admin\'s switch (POST /api/openrouter/personal { on }: not for a non-admin, not for a non-boolean): off, creating or replacing a key is refused with a plain message (403) and "my OpenRouter" is not offered to anyone (not in the provider lists or /v1/models, my/<id> gives 404, picking it is refused) while the stored key files stay in place and the team\'s pairs go on; on again, the same stored key is back in use',
+      noAdmin.status === 403 && badBody.status === 400 && off.status === 200 && off.data.personalKeys === false && localCfg.openrouter.personalKeys === false
+      && !offA.includes('or-me:t-admin') && !offU.includes('or-me:t-user') && ids(offM).every((x) => !x.startsWith('my/')) && offAsk.status === 404 && offPick.status === 400
+      && offCreate.status === 403 && /switched off/.test(offCreate.data.error) && offReplace.status === 403 && offView.data.personalKeys === false && offView.data.hasKey === true && offView.data.offered === false && offBud.personalKeys === false && stillFiles && teamOff.status === 200
+      && on.status === 200 && on.data.personalKeys === true && onA.includes('or-me:t-admin') && onAsk.status === 200 && fOn && fOn.headers.authorization === 'Bearer ' + R606_KEY && leaked() === 0,
+      `switch ${noAdmin.status}/${badBody.status}/${off.status}; off lists ${offA.filter((x) => /or-me/.test(x))}/${offU.filter((x) => /or-me/.test(x))} ask ${offAsk.status} pick ${offPick.status}; create ${offCreate.status} "${(offCreate.data.error || '').slice(0, 60)}" replace ${offReplace.status}; files ${stillFiles}; team ${teamOff.status}; on ${on.status} ${onA.includes('or-me:t-admin')} ask ${onAsk.status}`);
+
+    // R612: the page: the key box in Settings → OpenRouter budget, the admin switch, the picker
+    const page = await (await fetch(H + '/')).text();
+    const blk = page.slice(page.indexOf('async function renderOrBudget()'), page.indexOf('// ── Settings → My AIs: providers'));
+    const blkP = page.slice(page.indexOf('async function renderProviders()'), page.indexOf('function sysSettings('));
+    const blkPick = page.slice(page.indexOf('function showModels(d)'), page.indexOf('// The project picker (Work header)'));
+    const icons = blk.match(/href="#(i-[a-z-]+)"/g) || [], symbols = page.match(/<symbol id="(i-[a-z-]+)"/g) || [];
+    check('R612', 'the page: Settings → OpenRouter budget has "My OpenRouter key" (a password field to paste or replace it, "Stored: …abcd" from the last four characters the hub sends, Test and a Remove with an icon, the key never filled back in), "My own models (optional)" with the same pairs editor, a line for what the person spent on their own key beside the team key\'s, and for admins the "Allow personal OpenRouter keys" switch; Settings → My AIs lists "my OpenRouter" without share, remove or edit buttons; the Work picker names its group "OpenRouter · my OpenRouter"; icons are SVG symbols that exist and no emoji',
+      /My OpenRouter key/.test(blk) && /ki\.type = 'password'/.test(blk) && /'Stored: ' \+ mykey\.last4/.test(blk) && !/ki\.value = mykey/.test(blk) && /\/api\/openrouter\/mykey'/.test(blk) && /\/api\/openrouter\/mykey\/remove/.test(blk) && /\/api\/openrouter\/mykey\/test/.test(blk) && /\/api\/openrouter\/personal/.test(blk)
+      && /My own models \(optional\)/.test(blk) && /pairsEditor\(mykey\.pairs/.test(blk) && /Your own key: /.test(blk) && /team key /.test(blk) && /Allow personal OpenRouter keys/.test(blk) && /if \(me\.admin\) \{ \/\/ the admin's switch/.test(blk)
+      && /owner === me\.username && !p\.personal/.test(blkP) && /p\.personal/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick)
+      && icons.length >= 3 && icons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blk + blkP),
+      `served ${page.length}b; icons ${icons.join(',')}`);
+
+    for (const t of [A, U]) await my(t, '/api/openrouter/mykey/remove', {});
+    if (!hadLocal) { try { fs.unlinkSync(localCfgFile); } catch {} } else await call('/api/openrouter/personal', A, { on: true });
+    await call('/api/providers/remove', A, { id: tp.id });
+    for (const k of [kA, kU]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
   }
   // R546 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
   // it had (each id once, inside the Settings box) and every group has a heading and a one-line hint; the page's own Save

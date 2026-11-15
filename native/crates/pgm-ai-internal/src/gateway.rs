@@ -263,15 +263,15 @@ async fn read_all(mut up: Up, cancel: &openai::Cancel) -> Option<Vec<u8>> {
 /// Where an answer's usage is counted: the provider's kind (the ledger), its id and the model it was routed to (the key's day
 /// roll-up, G5).
 #[derive(Clone)]
-struct Tally { kind: String, prov: String, model: String }
-fn tally(p: &Value, model: &str) -> Tally { Tally { kind: s(p, "kind"), prov: s(p, "id"), model: model.to_string() } }
+struct Tally { kind: String, prov: String, model: String, personal: bool }
+fn tally(p: &Value, model: &str) -> Tally { Tally { kind: s(p, "kind"), prov: s(p, "id"), model: model.to_string(), personal: crate::openrouter::is_personal(p) } }
 /// A call starts on its key: counted, in the roll-up under its provider and model.
 fn count_call(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally) { openai::count_use(&**hub, user, key, &t.prov, &t.model); }
 fn note_usage(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, ur: &UsageReader) { note_native(hub, user, key, t, &ur.model, &ur.native); }
 /// An answer's usage (the provider's own object, whichever shape) to the ledger (under the model the upstream named) and the
 /// key's counters and day roll-up (under the routed model).
 fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, model: &str, native: &Value) {
-    if t.kind == crate::openrouter::KIND { crate::openrouter::note_cost(&**hub, user, native); } // the month budget: OpenRouter's own cost of the answer
+    if t.kind == crate::openrouter::KIND { crate::openrouter::note_for(&**hub, user, t.personal, native); } // the month budget: OpenRouter's own cost of the answer
     if let Some(u) = openai::normalise(native) {
         hub.ai().usage.note_answer(user, &t.kind, model, &u);
         openai::count_tokens(&**hub, user, key, &t.prov, &t.model, u.total_input(), u.output);
@@ -283,7 +283,7 @@ fn full_provider(hub: &Arc<dyn AiHub>, user: &str, prov: &Value) -> Value { hub.
 fn preflight(hub: &Arc<dyn AiHub>, user: &str, p: &Value, f: Fmt) -> Option<Resp> {
     let kind = s(p, "kind");
     // OpenRouter costs money: a person at or over their month's cap is refused before OpenRouter is asked (openrouter.rs)
-    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::refusal(&**hub, user) { return Some(err_resp(f, 429, &m)); } }
+    if kind == crate::openrouter::KIND { if let Some(m) = crate::openrouter::guard(&**hub, user, p) { return Some(err_resp(f, 429, &m)); } }
     if kind == "host-claude" && hub.root().join("ai-host.off").exists() { return Some(err_resp(f, 503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     if kind == "anthropic" && s(p, "apiKey").is_empty() { return Some(err_resp(f, 503, "This provider has no API key set.")); }
     if kind == "openai" && s(p, "baseUrl").is_empty() { return Some(err_resp(f, 503, "This provider has no address set.")); }
@@ -322,6 +322,8 @@ async fn oa_upstream(hub: &Arc<dyn AiHub>, user: &str, p: &Value, path: &str, bo
         if !or && !s(p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(p, "apiKey"))); }
         let sent = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = rb.send() => x };
         let resp = match sent { Ok(x) => x, Err(e) => return Err(err_resp(f, 502, &format!("{} could not be reached: {e}", if or { "OpenRouter" } else { "The endpoint" }))) };
+        // a person's own key that OpenRouter refused: say so plainly, never retry with the team's
+        if let Some(m) = crate::openrouter::refused(p, resp.status().as_u16()) { return Err(err_resp(f, 502, &m)); }
         let hs: Vec<(String, String)> = resp.headers().iter().filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string()))).collect();
         Ok((resp.status().as_u16(), hs, Up::Http(resp)))
     } else {
