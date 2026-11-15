@@ -26,6 +26,8 @@ The Work engine on the server (Jcode PGM) and the page parts follow in the next 
   naming the cap and the reset date, before OpenRouter is asked. `GET /api/openrouter/budget` (your month),
   `GET /api/openrouter/budget/all` and `POST /api/openrouter/budget/cap {username, capUsd|null}` (admins).
 - Config `openrouter.baseUrl` exists only so the regression runner can point at a fake. Checks R591–R594.
+- The regression runner gives every suite process its own window of 400 ports (it picks many ports some time before
+  it listens on them, and two suites running at once collided: R539 failed once in a while).
 
 ## 5.60.0 — 2026-11-12
 

@@ -473,7 +473,10 @@ async function setup() {
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
-  PORT = await freePort(7799);
+  // The checks derive many ports from PORT (PORT + 91, + 300 …) and pick them with freePort some time before they listen,
+  // so two suites running at once on a base 1 apart (7799 and 7800) collide on the derived ones (R539's fake Headroom
+  // failed to bind: 2026-11-15). Every suite process starts from its own 400-port window.
+  PORT = await freePort(7799 + (process.pid % 24) * 400);
   if (RUST_HUB) RUST_BACK = await freePort(PORT + 20); // the JavaScript hub behind the Rust one
   H = `http://127.0.0.1:${PORT}`;
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
