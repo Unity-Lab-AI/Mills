@@ -309,7 +309,7 @@ impl Work {
     pub fn session_wt(&self, a: &Account, sx: &Sx) -> Result<Wt, String> {
         if self.is_none(a, sx) { return self.wt.scratch(&a.username); }
         let pj = self.project_in(a, sx);
-        if !sx.own { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.hex(), &pj) }
+        if !sx.own { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.tree(), &pj) }
     }
     pub fn project_of(&self, a: &Account) -> String { let st = self.state(a); if st["noProject"] == json!(true) { return NO_PROJECT.into(); } let p = s(&st, "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     pub fn project_list(&self) -> Value {
@@ -575,6 +575,9 @@ impl Work {
         let Some(mut r) = run else { return };
         // it ends still holding board tasks (T-266): each gets one automatic handoff from what the hub knows of the run
         if !r.tasks.is_empty() {
+            // the session remembers them (T-375: a /transfer adds a handoff note to those it still holds, naming the new session)
+            let held = r.tasks.clone();
+            sessions::touch(a, &sx.sid, |m| { let mut l: Vec<Value> = m.get("heldTasks").and_then(Value::as_array).cloned().unwrap_or_default(); for t in &held { if !l.contains(&json!(t)) { l.push(json!(t)); } } let n = l.len(); if n > 20 { l.drain(0..n - 20); } m.insert("heldTasks".into(), json!(l)); });
             let reply = last_reply(&r.ev.events);
             hub.run_left_claims(json!({ "account": a.username, "run": r.id, "session": sx.sid, "project": r.project, "branch": r.branch, "dir": r.dir, "tasks": r.tasks, "reply": reply, "code": code }));
         }
@@ -869,6 +872,9 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // the session it goes to (plans/multi-session.md; none named = the first one, as older pages send it)
     let Some(sx) = sessions::resolve(a, &sessions::wanted(r, &b)) else { return answer(404, json!({ "error": "No such session." })) };
     if w.busy_key(&sx.key) { return answer(409, json!({ "error": "Claude is already working. Stop it first." })); }
+    // T-375: a session being transferred runs nothing meanwhile; one that handed its worktree on runs no more (the new one works there)
+    if crate::transfer::busy(&sx.key) { return answer(409, json!({ "error": "This session is being transferred to a new one right now: wait a moment, then go on there." })); }
+    if sx.gave { return answer(409, json!({ "error": format!("This session was transferred to \"{}\", which works in its worktree now: go on there (the list shows it).", crate::transfer::to_title(a, &sx.sid)), "transferred": true })); }
     // a requested restart wins the gap between two replies (the page retries a 503 by itself)
     if std::env::var("MILLS_SUPERVISED").is_ok() && hub.root().join(".restart").exists() { return answer(503, json!({ "error": "VibeRoller is restarting; your message goes through in a moment." })); }
     let Some(message) = b["message"].as_str().filter(|m| !m.is_empty()).map(String::from) else { return answer(400, json!({ "error": "Empty message." })) };
@@ -884,7 +890,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
     // a new message answers whatever the session waited for (T-288)
     { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); m.remove("waiting"); }); }
-    if none { } else if !sx.own { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
+    if none { } else if !sx.own { w.check_fresh_in(a, &pj, None); } else { w.check_fresh_in(a, &pj, Some(sx.tree())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
     let run_secret = pgm_core_internal::crypto::random_hex(24); // this run's own secret for its MCP relays (T-308)
@@ -1348,6 +1354,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let w = hub.work(); let u = &a.username;
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
+    // /transfer (T-375): a handoff, then a fresh session that goes on from it (crate::transfer); before the sessions' own routes
+    if p == "/api/work/sessions/transfer" && post { return Some(crate::transfer::route(hub, a, r).await); }
     if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
     if let Some(resp) = crate::gitpanel::route(hub, r, a).await { return Some(resp); }
     if p == "/api/openrouter/mykey/test" && post { return Some(crate::openrouter::test_mykey(hub, u).await); } // T-372: the optional "test my key" call (async)
@@ -1458,7 +1466,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let pj = match w.wt.project(&want) { Ok(p) => p, Err(e) => return Some(answer(400, json!({ "error": e }))) };
             let Some(sx) = sess(&b) else { return Some(no_session()) };
             if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
-            let wd = match if !sx.own { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.hex(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
+            let wd = match if !sx.own { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.tree(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
             let switched = w.project_in(a, &sx) != pj.name;
             sessions::supdate(w, a, &sx, |m| { m.remove("noProject"); if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
             w.check_fresh(a);
@@ -1700,8 +1708,9 @@ pub fn start(hub: &Arc<dyn AiHub>) {
             // and the worktrees of their sessions used that day
             let Some(ix) = sessions::index_if_any(&a) else { continue };
             for (sid, m) in ix["sessions"].as_object().cloned().unwrap_or_default() {
-                if (sid == s(&ix, "primary") && m["ownTree"] != json!(true)) || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
-                h.work().check_fresh_in(&a, &s(&m["worktree"], "project"), Some(sid.trim_start_matches("s-")));
+                let sx = sessions::sx_in(&a, &ix, &sid); // its worktree (T-375: one a transfer handed it; none once it gave it on)
+                if !sx.own || sx.gave || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
+                h.work().check_fresh_in(&a, &s(&m["worktree"], "project"), Some(sx.tree()));
             }
         }
     } });

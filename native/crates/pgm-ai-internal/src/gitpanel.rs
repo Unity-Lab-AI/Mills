@@ -41,7 +41,7 @@ fn target(hub: &Arc<dyn AiHub>, r: &Req, a: &Account, b: &Value) -> Result<Targe
         let base = if g(&wd.repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{up}")]).0 { up } else { wd.main.clone() };
         Ok(Target { sx, project, dir: wd.dir, branch: wd.branch, base, own: true, exists: true })
     } else {
-        let Some((dir, branch, _)) = w.wt.session_path(&a.username, sx.hex(), &project) else { return Err(answer(400, json!({ "error": "Unknown project." }))) };
+        let Some((dir, branch, _)) = w.wt.session_path(&a.username, sx.tree(), &project) else { return Err(answer(400, json!({ "error": "Unknown project." }))) };
         let exists = dir.join(".git").exists();
         Ok(Target { sx, project, dir, branch, base: format!("work/{}", a.username), own: false, exists })
     }
@@ -101,6 +101,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/work/git" if get => answer(200, status(hub, a, &t)),
         "/api/work/git/stage" | "/api/work/git/unstage" | "/api/work/git/commit" | "/api/work/git/update" | "/api/work/git/merge" if post => {
             if w.busy_key(&t.sx.key) { return Some(answer(409, json!({ "error": "That session is working. Wait for its reply (or stop it), then try again." }))); }
+            if t.sx.gave { return Some(answer(409, json!({ "error": "This session handed its worktree on with /transfer: use the session it was transferred to." }))); }
             if !t.exists { return Some(answer(409, json!({ "error": "This session has no worktree yet." }))); }
             let what = p.rsplit('/').next().unwrap_or("");
             let text: String; let mut ok = true; let mut code = 200;
@@ -128,7 +129,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
                     // update / merge: only worktree.js (Forgejo first, the versioning law, no force). A session's own worktree
                     // updates from the person's work/<user> and "merges" into it ("home"); the person's own one goes to develop.
                     let mut env = w.work_env(&a.username); env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
-                    let u = a.username.clone(); let hex = t.sx.hex().to_string();
+                    let u = a.username.clone(); let hex = t.sx.tree().to_string();
                     let mut args: Vec<&str> = vec!["--project", &t.project];
                     match (what, t.own) {
                         ("update", true) => args.extend(["update", &u]),
