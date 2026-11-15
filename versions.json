@@ -1,5 +1,5 @@
 {
-  "project": "5.64.1",
+  "project": "5.64.2",
   "modules": {
     "bridge/ai-node.js": "3.4.1",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -56,7 +56,7 @@
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.2.0",
     "web/hyperwork.js": "1.0.0",
-    "web/index.html": "1.49.0",
+    "web/index.html": "1.49.1",
     "web/library.js": "1.2.0",
     "web/localai.js": "1.0.0",
     "web/machines.js": "1.0.0",

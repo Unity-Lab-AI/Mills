@@ -4801,6 +4801,21 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R613 (T-373): the hub page in Jcode PGM Desktop's VibeRoller window uses that app's own bridge (window.__PGM_DESKTOP__)
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
+    const line = (re) => (page.match(re) || [''])[0];
+    const code = [line(/^const PGMD = .*$/m), line(/^const nativeNotify = .*$/m)].join('\n');
+    const run = (win) => { const out = {}; try { require('vm').runInNewContext(code + '\nout.PGMD = PGMD; out.notify = nativeNotify;', { window: win, NATIVE: null, out }); } catch (e) { out.err = e.message; } return out; };
+    const calls = [], bridge = { exitToMenu: () => calls.push('exit'), notify: (t, b) => calls.push('notify:' + t + '|' + b), openExternal: () => {} };
+    const withB = run({ __PGM_DESKTOP__: bridge }), without = run({}), fake = run({ __PGM_DESKTOP__: { notify: () => {} } });
+    seen.found = !!withB.PGMD && !without.PGMD && !fake.PGMD; // a bridge without exitToMenu is not taken for the app
+    seen.notified = !!withB.notify && withB.notify('Title r613', 'Body') === true && calls.includes('notify:Title r613|Body') && without.notify('x', 'y') === false;
+    seen.button = /<button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"\/><\/svg>Exit to menu<small>/.test(page);
+    seen.wired = /if \(PGMD\) \{ \$\('goPgmMenu'\)\.hidden = false; \$\('goPgmMenu'\)\.onclick = \(\) => \{ try \{ PGMD\.exitToMenu\(\); \} catch \{\} \};/.test(page);
+    seen.notifyPaths = (page.match(/nativeNotify\(/g) || []).length === 2; // the two places the page notifies (a mention while away, user action required)
+    check('R613', 'in Jcode PGM Desktop\'s VibeRoller window the hub page finds the app\'s own bridge (window.__PGM_DESKTOP__ with exitToMenu; not a look-alike), shows an "Exit to menu" tile that calls it, and sends its notifications through it; in a browser or the Tauri app nothing changes',
+      Object.values(seen).every(Boolean) && !withB.err, JSON.stringify({ ...seen, err: withB.err || '', calls }));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r527')) await r527Check(); } else for (const id of Object.keys(L527)) skip(id, L527[id], 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own and a stand-in AI host)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
@@ -5801,7 +5816,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     { const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       check('R244', 'T-246/T-248 [static] the Work page shows a question series one at a time (Back / Next / Done, radio, checkboxes, checklist with select all / none and a filter, own answer, recommended marked, countdown, Use the recommended), restores it after a reload (GET /api/work/questions, sessionStorage), the "User action required" tone has its own kind and volume in Settings, a "When the AI asks" settings group, speech and the desktop notification respect do-not-disturb, and any activity is sent at most every 15 s',
         /function showQuestion/.test(page) && /'Next'/.test(page) && /'Done'/.test(page) && /Select all/.test(page) && /Select none/.test(page) && /Filter the list/.test(page) && /qrec/.test(page) && /Use the recommended/.test(page) && /restoreQuestions/.test(page) && /api\/work\/questions/.test(page) && /sessionStorage/.test(page)
-        && /ask: \[0, 0\.95\]/.test(page) && /id="volAsk"/.test(page) && /id="setAskMin"/.test(page) && /When the AI asks/.test(page) && /User action required/.test(page) && /if \(dndOn\(\)\) return;\s*\n\s*if \(P\.sound\.on\) playTone\('ask'/.test(page) && /NATIVE\.call\('notify', \{ title: 'User action required'/.test(page) && /now - lastPoke < 15000/.test(page),
+        && /ask: \[0, 0\.95\]/.test(page) && /id="volAsk"/.test(page) && /id="setAskMin"/.test(page) && /When the AI asks/.test(page) && /User action required/.test(page) && /if \(dndOn\(\)\) return;\s*\n\s*if \(P\.sound\.on\) playTone\('ask'/.test(page) && /nativeNotify\('User action required', title\)/.test(page) && /now - lastPoke < 15000/.test(page),
         'page checked'); }
   } else for (const [id, l] of [['R240', 'the question settings are saved'], ['R241', 'a question waits the person\'s minutes'], ['R242', 'off = never; the tool\'s own timeout wins'], ['R243', 'activity restarts the wait'], ['R244', 'the question UI on the page']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R255-R259 (T-239): the person's project index, pin / hide, remove my worktree, admin delete (to the trash)
