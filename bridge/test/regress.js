@@ -8252,7 +8252,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
     seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
-    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance,Desktop Unity' && seen.connGroups === 8
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance,Desktop Unity' && seen.connGroups === 9
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
       && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
       && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.wired
