@@ -1126,6 +1126,7 @@
     <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
     <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
     <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
+    <button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"/></svg>Exit to menu<small>Back to Jcode PGM Desktop's menu (Jcode or VibeRoller)</small></button>
     <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
     <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
     <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
@@ -1851,6 +1852,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // for harmless things only: desktop notifications, the unread count on its tray / taskbar, its Tools window and the AI
 // host switch; everything that touches the computer lives in the Tools window, the app's own page.
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
+// Jcode PGM Desktop's VibeRoller window (T-373): its own small bridge (exitToMenu, notify, openExternal), not Tauri's
+const PGMD = (window.__PGM_DESKTOP__ && typeof window.__PGM_DESKTOP__.exitToMenu === 'function') ? window.__PGM_DESKTOP__ : null;
+const nativeNotify = (title, body) => { if (NATIVE) return NATIVE.call('notify', { title, body: body || '' }).catch(() => {}); if (PGMD) { try { PGMD.notify(title, body || ''); } catch {} return true; } return false; };
 let reconnecting = false;
 // 5.41.1: the hub being away (a restart, a deploy, a dropped long poll) is shown in a small badge at the top, not written
 // into the chat: only when it lasts more than CONN_GRACE (a blip shows nothing), "Back" for a moment when it returns, and
@@ -2319,6 +2323,7 @@ $('goNotes').onclick = () => showScreen('notes');
 $('goFiles').onclick = () => showScreen('library');
 $('goWorkflows').onclick = () => showScreen('workflows');
 // the desktop app's Tools window (its own page, which may use this computer; the hub's page never can)
+if (PGMD) { $('goPgmMenu').hidden = false; $('goPgmMenu').onclick = () => { try { PGMD.exitToMenu(); } catch {} }; document.body.classList.add('pgmDesktop'); }
 if (NATIVE) { $('goTools').hidden = false; $('goTools').onclick = () => NATIVE.call('open_tools').catch((e) => sys(String(e), true)); document.body.classList.add('native'); }
 $('goAdmin').onclick = () => showScreen('admin');
 $('goAssist').onclick = () => showScreen('assist');
@@ -2920,7 +2925,7 @@ function agentNotify(n) {
     $('toasts').append(t);
   }
   if (away) {
-    if (NATIVE) NATIVE.call('notify', { title: n.title, body: n.body || '' }).catch(() => {});
+    if (NATIVE || PGMD) nativeNotify(n.title, n.body);
     else { try { if (window.Notification && Notification.permission === 'granted') new Notification(n.title, { body: n.body || '' }); } catch {} }
   }
 }
@@ -3209,7 +3214,7 @@ function qAlert(ev) {
   if (dndOn()) return;
   if (P.sound.on) playTone('ask', P.sound.ask);
   if (P.tts.ask) speak('User action required. ' + title);
-  if (NATIVE && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: 'User action required', body: title }).catch(() => {});
+  if ((NATIVE || PGMD) && (document.visibilityState !== 'visible' || !document.hasFocus())) nativeNotify('User action required', title);
 }
 function closeQuestion(ev) {
   const o = openQuestions.get(ev.id); if (!o) return; openQuestions.delete(ev.id); o.stop(); qStore.del(ev.id);

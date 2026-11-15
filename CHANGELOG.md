@@ -7,6 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.64.2 — 2026-11-16
+
+PATCH: **the hub page knows Jcode PGM Desktop's VibeRoller window** (T-373; Jcode PGM Desktop 0.7.0 merges the
+VibeRoller app into one program: a menu with "Jcode" and "VibeRoller", Exit to menu in both). That window shows this
+page in a native webview and offers its own small bridge, `window.__PGM_DESKTOP__` (exitToMenu, notify, openExternal);
+it is not Tauri. When the bridge is there (and has `exitToMenu`), the page shows an **Exit to menu** tile on its menu
+that goes back to the app's launcher, and sends its notifications (a mention while away, "user action required")
+through the app. In a browser and in the Tauri app nothing changes. The window signs the page in with the app's linked
+device token through the page's own session storage, so no page change was needed for that. web/index.html 1.49.1.
+Check R613.
+
 ## 5.64.1 — 2026-11-16
 
 PATCH: **the Downloads offer Jcode PGM Desktop too.** With no `releases` in the config, the Products list now has five

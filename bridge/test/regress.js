@@ -4801,6 +4801,21 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R613 (T-373): the hub page in Jcode PGM Desktop's VibeRoller window uses that app's own bridge (window.__PGM_DESKTOP__)
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
+    const line = (re) => (page.match(re) || [''])[0];
+    const code = [line(/^const PGMD = .*$/m), line(/^const nativeNotify = .*$/m)].join('\n');
+    const run = (win) => { const out = {}; try { require('vm').runInNewContext(code + '\nout.PGMD = PGMD; out.notify = nativeNotify;', { window: win, NATIVE: null, out }); } catch (e) { out.err = e.message; } return out; };
+    const calls = [], bridge = { exitToMenu: () => calls.push('exit'), notify: (t, b) => calls.push('notify:' + t + '|' + b), openExternal: () => {} };
+    const withB = run({ __PGM_DESKTOP__: bridge }), without = run({}), fake = run({ __PGM_DESKTOP__: { notify: () => {} } });
+    seen.found = !!withB.PGMD && !without.PGMD && !fake.PGMD; // a bridge without exitToMenu is not taken for the app
+    seen.notified = !!withB.notify && withB.notify('Title r613', 'Body') === true && calls.includes('notify:Title r613|Body') && without.notify('x', 'y') === false;
+    seen.button = /<button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"\/><\/svg>Exit to menu<small>/.test(page);
+    seen.wired = /if \(PGMD\) \{ \$\('goPgmMenu'\)\.hidden = false; \$\('goPgmMenu'\)\.onclick = \(\) => \{ try \{ PGMD\.exitToMenu\(\); \} catch \{\} \};/.test(page);
+    seen.notifyPaths = (page.match(/nativeNotify\(/g) || []).length >= 3;
+    check('R613', 'in Jcode PGM Desktop\'s VibeRoller window the hub page finds the app\'s own bridge (window.__PGM_DESKTOP__ with exitToMenu; not a look-alike), shows an "Exit to menu" tile that calls it, and sends its notifications through it; in a browser or the Tauri app nothing changes',
+      Object.values(seen).every(Boolean) && !withB.err, JSON.stringify({ ...seen, err: withB.err || '', calls }));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r527')) await r527Check(); } else for (const id of Object.keys(L527)) skip(id, L527[id], 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own and a stand-in AI host)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
