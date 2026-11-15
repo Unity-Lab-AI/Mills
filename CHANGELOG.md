@@ -7,6 +7,34 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.62.0 — 2026-11-15
+
+MINOR: **OpenRouter Work sessions run Jcode PGM on the server, with an opt-in fallback and the page** (T-370 stage 3;
+plans/split-routing.md). With 5.61.0's provider and budget this completes the split: Claude through an AI host as
+before, or OpenRouter through Jcode PGM with no PC involved.
+
+- **The engine follows the provider.** A Claude provider (an AI host's Claude login, the hub's own Claude, an Anthropic
+  key, claude-cli) runs Claude Code exactly as before. A session on an `openrouter` provider runs `<jcode.command> [jcode.args]
+  run --ndjson --no-update -p openrouter -m <the pair's model> [--resume id] <message>` in the session's worktree, with
+  the same team tools (board, notes, chat, agents) the host-side jcode Work already sets up (shared code, no copy). Config
+  `jcode.command` (empty = off: then the provider is greyed in Work with the reason, not hidden) is read on each use, so
+  an admin needs no restart. `openai` and `host-openai` providers still refuse Work.
+- **The key never enters the run.** jcode gets a per-run relay address (`JCODE_OPENROUTER_API_BASE=http://127.0.0.1:
+  <port>/or-relay/<run token>`, loopback only, forgotten when the run ends) and a dummy key; the relay sends the request
+  through the gateway's chat passthrough with the real key, adds the pair's `provider: {order, allow_fallbacks}`,
+  `usage: {include: true}`, `HTTP-Referer` and `X-Title`, counts the cost against the person's month and refuses at the
+  cap. The environment also sets `JCODE_OPENROUTER_PROVIDER_ORDER`, `JCODE_OPENROUTER_ALLOW_FALLBACKS` and
+  `JCODE_PGM_PROXY_SHARED=off` (one person's cached answer never reaches another's session). Stop kills the process.
+- **Opt-in fallback** (`POST /api/openrouter/fallback {on, provider, pair}`, default off): when the session's Claude host is
+  offline and the person turned it on, the run uses their pair through Jcode PGM and the transcript says so in one
+  line; skipped if `jcode.command` is off or the month cap is reached.
+- **The page.** Settings → My AIs: an admin adds an OpenRouter provider (key field, pairs editor). The Work picker has two
+  groups, "Claude (<host>)" and "OpenRouter". Settings → Connections has an "OpenRouter budget" group: your month with a
+  meter and the fallback switch; admins see everyone's month and set caps. (web/index.html 1.48.0.)
+- To use it on a server: install `jcodepgm` 0.99.5 or newer and set `jcode.command`; add the OpenRouter provider with
+  the key and pairs, and share it; optionally `openrouter.monthlyUsd` and per-person caps. Checks R595–R599 (a fake
+  `jcodepgm` and fake OpenRouter); R546 expects nine groups in Connections now.
+
 ## 5.61.0 — 2026-11-15
 
 MINOR: **OpenRouter as a shared provider, with a monthly budget per person** (T-370 stages 1 and 2; plans/split-routing.md;
