@@ -10,6 +10,8 @@
 //!   capped)
 //! - [`openai`]: providers (keys, endpoints, logins; admin-only kinds) and the inference APIs: OpenAI- and
 //!   Anthropic-compatible /v1 (plain + streaming, format conversion), per-person API keys
+//! - [`openrouter`]: the `openrouter` provider kind (pairs, OpenRouter's routing and usage on every request), the month budget per
+//!   person, and the split routing of Work (Jcode PGM on the server for the providers the hub calls itself, through the run relay)
 //! - [`gateway`], [`xlate`]: the API gateway's raw passthroughs (Anthropic `/v1/messages`, OpenAI `/v1/chat/completions`) and
 //!   the cross-format translation between the two (requests, answers, streams, tool calls)
 //! - [`work`]: AI coding runs (Claude Code here, relayed to a host's login, or on an older host), their log + attach /
@@ -47,6 +49,7 @@ pub mod local_proxy;
 pub mod machine_jobs;
 pub mod machine_transfer;
 pub mod openai;
+pub mod openrouter;
 pub mod plan;
 pub mod planner;
 pub mod projects;

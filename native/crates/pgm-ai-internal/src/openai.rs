@@ -137,6 +137,7 @@ fn clean_models(m: &Value, fallback: Vec<String>) -> Vec<String> {
 fn pub_view(p: &Value) -> Value {
     let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
     for k in ["baseUrl", "configDir", "command", "home", "provider"] { if !s(p, k).is_empty() { v[k] = p[k].clone(); } }
+    if p["kind"] == json!(crate::openrouter::KIND) { v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) }; }
     if p["args"].is_array() { v["args"] = p["args"].clone(); }
     if p["responses"] == json!(true) { v["responses"] = json!(true); }
     if p["kind"] == json!(crate::jcode::KIND) { v["harness"] = json!(crate::jcode::HARNESS); }
@@ -144,15 +145,15 @@ fn pub_view(p: &Value) -> Value {
 }
 /// A custom endpoint (this hub calls whatever address it names), a Claude config folder or a Jcode PGM binary on this
 /// machine: admins only.
-pub fn admin_only(p: &Value) -> bool { matches!(p["kind"].as_str(), Some("openai") | Some("claude-cli") | Some("jcode")) }
+pub fn admin_only(p: &Value) -> bool { matches!(p["kind"].as_str(), Some("openai") | Some("claude-cli") | Some("jcode") | Some("openrouter")) }
 fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String> {
     if admin_only(b) {
-        // a Jcode PGM binary runs here on the hub, so only being an admin counts; the other two need an AI host of theirs
-        let needs_host = s(b, "kind") != crate::jcode::KIND;
-        if !hub.is_admin(user) || (needs_host && !hub.ai().owns_online_host(user)) { return Err("A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (Settings → My AI hosts); a Jcode PGM binary is for admins. An Anthropic API key works for everyone.".into()); }
+        // a Jcode PGM binary runs here on the hub, and the team's OpenRouter key lives here too, so only being an admin counts; the others need an AI host of theirs
+        let needs_host = s(b, "kind") != crate::jcode::KIND && s(b, "kind") != crate::openrouter::KIND;
+        if !hub.is_admin(user) || (needs_host && !hub.ai().owns_online_host(user)) { return Err("A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (Settings → My AI hosts); a Jcode PGM binary and an OpenRouter provider are for admins. An Anthropic API key works for everyone.".into()); }
     }
     let kind = s(b, "kind");
-    if !["anthropic", "claude-cli", "openai", "jcode"].contains(&kind.as_str()) { return Err("kind must be anthropic, claude-cli, openai or jcode.".into()); }
+    if !["anthropic", "claude-cli", "openai", "jcode", "openrouter"].contains(&kind.as_str()) { return Err("kind must be anthropic, claude-cli, openai, openrouter or jcode.".into()); }
     let label: String = s(b, "label").trim().chars().take(60).collect();
     if label.is_empty() { return Err("Give it a label.".into()); }
     let mut p = json!({ "id": format!("p-{}", pgm_core_internal::crypto::random_hex(5)), "kind": kind, "label": label, "owner": user, "shared": b["shared"].as_bool().unwrap_or(false), "createdAt": pgm_core_internal::time::iso_now(), "models": [] });
@@ -183,6 +184,13 @@ fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String>
             if !pr.is_empty() { p["provider"] = json!(pr); }
             p["models"] = json!(clean_models(&b["models"], vec![]));
         }
+        "openrouter" => {
+            // the team's OpenRouter key and the allow-list of model + provider pairs (openrouter.rs); the address is fixed
+            let k = s(b, "apiKey").trim().to_string();
+            if k.is_empty() || k.len() > 400 || k.chars().any(|c| c.is_whitespace() || c.is_control()) { return Err("Give the OpenRouter API key (sk-or-…).".into()); }
+            let pairs = crate::openrouter::clean_pairs(&b["pairs"])?;
+            p["apiKey"] = json!(k); p["models"] = json!(pairs.iter().map(|x| x["id"].clone()).collect::<Vec<_>>()); p["pairs"] = json!(pairs);
+        }
         _ => {
             let url = s(b, "baseUrl").trim().trim_end_matches('/').to_string();
             let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("");
@@ -204,7 +212,10 @@ fn update_provider(hub: &dyn AiHub, user: &str, id: &str, b: &Value) -> Result<V
     let Some(p) = list.iter_mut().find(|x| x["id"] == json!(id)).filter(|x| x["owner"] == json!(user)) else { return Err("Not your provider.".into()) };
     if !b["label"].is_null() { let l: String = match &b["label"] { Value::String(t) => t.trim().chars().take(60).collect(), v => v.to_string() }; if !l.is_empty() { p["label"] = json!(l); } }
     if b.get("shared").is_some() { p["shared"] = json!(!(b["shared"].is_null() || b["shared"] == json!(false) || b["shared"] == json!(0) || b["shared"] == json!(""))); }
-    if b.get("models").is_some() { let fb = if p["kind"] == json!("openai") || p["kind"] == json!("jcode") { p["models"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() } else { host_models(hub) }; p["models"] = json!(clean_models(&b["models"], fb)); }
+    if p["kind"] == json!(crate::openrouter::KIND) {
+        // the pairs are the models: only they are offered and routed
+        if b.get("pairs").is_some() { let ps = crate::openrouter::clean_pairs(&b["pairs"])?; p["models"] = json!(ps.iter().map(|x| x["id"].clone()).collect::<Vec<_>>()); p["pairs"] = json!(ps); }
+    } else if b.get("models").is_some() { let fb = if p["kind"] == json!("openai") || p["kind"] == json!("jcode") { p["models"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() } else { host_models(hub) }; p["models"] = json!(clean_models(&b["models"], fb)); }
     if !s(b, "apiKey").is_empty() && p["kind"] != json!("claude-cli") && p["kind"] != json!("jcode") { p["apiKey"] = json!(s(b, "apiKey").trim()); }
     if p["kind"] == json!("openai") && b.get("responses").is_some() { if b["responses"] == json!(true) { p["responses"] = json!(true); } else if let Some(m) = p.as_object_mut() { m.remove("responses"); } }
     if p["kind"] == json!("jcode") {
@@ -297,20 +308,20 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
     let host = s(&p, "hostId"); let pid = s(&p, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default(); let nick = s(&p, "nickname");
     let fail_text = |who: String, status: u16, body: Vec<u8>, keep429: bool| err(if keep429 && status == 429 { 429 } else { 502 }, format!("{who} answered {status}: {}", String::from_utf8_lossy(&body).chars().take(300).collect::<String>()));
     match kind.as_str() {
-        "openai" | "host-openai" => {
+        "openai" | "openrouter" | "host-openai" => {
             let mut body = json!({ "model": if m.is_empty() { p["models"][0].clone() } else { json!(m) }, "stream": streaming, "messages": [] });
             let mut all = vec![]; if !system.is_empty() { all.push(json!({ "role": "system", "content": system })); } all.extend(chat_msgs()); body["messages"] = json!(all);
             if let Some(mt) = max_tokens { body["max_tokens"] = json!(mt); }
-            let (status, ct, src) = if kind == "openai" {
-                let mut rb = self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string());
-                if !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
+            let (status, ct, src) = if kind == "openai" || kind == "openrouter" {
+                let mut rb = if kind == "openrouter" { crate::openrouter::post(&**hub, &p, "/chat/completions", body.to_string().as_bytes()) } else { self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string()) };
+                if kind == "openai" && !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
                 let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
                 (r.status().as_u16(), r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string(), Src::Http(r))
             } else {
                 let r = ai.provider_fetch_for(user, "", &host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
                 (r.status, r.headers.iter().find(|(k, _)| k == "content-type").map(|x| x.1.clone()).unwrap_or_default(), Src::Host(r.body))
             };
-            let who = if kind == "openai" { "The endpoint".to_string() } else { format!("{nick}'s endpoint") };
+            let who = if kind == "openai" { "The endpoint".to_string() } else if kind == "openrouter" { "OpenRouter".to_string() } else { format!("{nick}'s endpoint") };
             if !(200..300).contains(&status) { return Err(fail_text(who, status, src.all().await, false)); }
             let used = s(&body, "model");
             if !streaming || (kind == "host-openai" && !ct.to_lowercase().contains("text/event-stream")) {
@@ -411,14 +422,14 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
     let host = s(&p, "hostId"); let pid = s(&p, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default(); let nick = s(&p, "nickname");
     let used_model = if m.is_empty() { p["models"][0].clone() } else { json!(m) };
     let ans = match kind.as_str() {
-        "openai" | "host-openai" => {
+        "openai" | "openrouter" | "host-openai" => {
             let mut body = json!({ "model": used_model, "stream": false, "messages": crate::toolconv::clean_messages(b) });
             if b["tools"].is_array() { body["tools"] = b["tools"].clone(); }
             if !b["tool_choice"].is_null() { body["tool_choice"] = b["tool_choice"].clone(); }
             if let Some(mt) = max_tokens { body["max_tokens"] = json!(mt); }
-            let (status, src) = if kind == "openai" {
-                let mut rb = self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string());
-                if !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
+            let (status, src) = if kind == "openai" || kind == "openrouter" {
+                let mut rb = if kind == "openrouter" { crate::openrouter::post(&**hub, &p, "/chat/completions", body.to_string().as_bytes()) } else { self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string()) };
+                if kind == "openai" && !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
                 let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
                 (r.status().as_u16(), Src::Http(r))
             } else {
@@ -426,7 +437,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
                 (r.status, Src::Host(r.body))
             };
             let raw = read_all(src, &cancel).await?;
-            if !(200..300).contains(&status) { return Err(err(502, format!("{} answered {status}: {}", if kind == "openai" { "The endpoint".to_string() } else { format!("{nick}'s endpoint") }, String::from_utf8_lossy(&raw).chars().take(300).collect::<String>()))); }
+            if !(200..300).contains(&status) { return Err(err(502, format!("{} answered {status}: {}", if kind == "openai" { "The endpoint".to_string() } else if kind == "openrouter" { "OpenRouter".to_string() } else { format!("{nick}'s endpoint") }, String::from_utf8_lossy(&raw).chars().take(300).collect::<String>()))); }
             let j: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
             let msg = &j["choices"][0]["message"];
             let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();

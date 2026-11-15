@@ -50,7 +50,7 @@ pub fn speaks_anthropic(p: &Value) -> bool {
 }
 /// Does this provider speak OpenAI's chat completions (so a chat request goes through raw)? An endpoint of the admin's, or an
 /// OpenAI-compatible server (Ollama, vLLM, LM Studio ...) a host lends.
-pub fn speaks_openai(p: &Value) -> bool { matches!(p["kind"].as_str().unwrap_or(""), "openai" | "host-openai") }
+pub fn speaks_openai(p: &Value) -> bool { matches!(p["kind"].as_str().unwrap_or(""), "openai" | "openrouter" | "host-openai") }
 /// A host's Claude login (a subscription), as opposed to an API key.
 pub fn is_login(p: &Value) -> bool { p["kind"] == json!("host-claude") }
 
@@ -284,6 +284,7 @@ fn preflight(hub: &Arc<dyn AiHub>, p: &Value, f: Fmt) -> Option<Resp> {
     if kind == "host-claude" && hub.root().join("ai-host.off").exists() { return Some(err_resp(f, 503, "The host's AI is switched off right now (its host paused it); an API key or endpoint of your own still answers.")); }
     if kind == "anthropic" && s(p, "apiKey").is_empty() { return Some(err_resp(f, 503, "This provider has no API key set.")); }
     if kind == "openai" && s(p, "baseUrl").is_empty() { return Some(err_resp(f, 503, "This provider has no address set.")); }
+    if kind == crate::openrouter::KIND && s(p, "apiKey").is_empty() { return Some(err_resp(f, 503, "This OpenRouter provider has no key set.")); }
     None
 }
 /// The request to an Anthropic-speaking provider: Anthropic with the provider's key, or a host's Claude login through its relay.
@@ -310,12 +311,14 @@ const CHAT: &str = "/chat/completions";
 async fn oa_upstream(hub: &Arc<dyn AiHub>, user: &str, p: &Value, path: &str, body: Vec<u8>, stream: bool, cancel: &Arc<openai::Cancel>, f: Fmt) -> Result<Upstream, Resp> {
     let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
     if stream { headers.push(("accept".into(), "text/event-stream".into())); }
-    if s(p, "kind") == "openai" {
-        let mut rb = openai::self_http(&**hub).post(format!("{}{path}", s(p, "baseUrl").trim_end_matches('/'))).body(body);
-        for (k, v) in &headers { rb = rb.header(k.as_str(), v.as_str()); }
-        if !s(p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(p, "apiKey"))); }
+    if s(p, "kind") == "openai" || s(p, "kind") == crate::openrouter::KIND {
+        // OpenRouter: its fixed address, the pair's model and provider routing, usage with the cost, the hub's referer and title (openrouter.rs)
+        let or = s(p, "kind") == crate::openrouter::KIND;
+        let mut rb = if or { crate::openrouter::post(&**hub, p, path, &body) } else { openai::self_http(&**hub).post(format!("{}{path}", s(p, "baseUrl").trim_end_matches('/'))).body(body) };
+        for (k, v) in &headers { if !(or && k.eq_ignore_ascii_case("content-type")) { rb = rb.header(k.as_str(), v.as_str()); } }
+        if !or && !s(p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(p, "apiKey"))); }
         let sent = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = rb.send() => x };
-        let resp = match sent { Ok(x) => x, Err(e) => return Err(err_resp(f, 502, &format!("The endpoint could not be reached: {e}"))) };
+        let resp = match sent { Ok(x) => x, Err(e) => return Err(err_resp(f, 502, &format!("{} could not be reached: {e}", if or { "OpenRouter" } else { "The endpoint" }))) };
         let hs: Vec<(String, String)> = resp.headers().iter().filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string()))).collect();
         Ok((resp.status().as_u16(), hs, Up::Http(resp)))
     } else {
