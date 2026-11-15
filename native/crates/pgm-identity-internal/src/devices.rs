@@ -33,20 +33,21 @@ pub type UnlinkHook = Box<dyn Fn(&str, &str) + Send + Sync>;
 
 pub struct Devices {
     file: PathBuf,
-    tokens: Mutex<Map<String, Value>>, // sha256(token) → { id, user, name, client, created, lastUsed, lastUsedAt }
+    pub(crate) tokens: Mutex<Map<String, Value>>, // sha256(token) → { id, user, name, client, created, lastUsed, lastUsedAt }
     pending: Mutex<HashMap<String, Pending>>, // sha256(deviceCode) → request
-    starts: Mutex<HashMap<String, Vec<u64>>>, // address → recent starts
+    pub(crate) starts: Mutex<HashMap<String, Vec<u64>>>, // address → recent starts
     fails: Mutex<HashMap<String, (u32, u64)>>, // person → wrong user codes, blocked until
     revoked: Mutex<Map<String, Value>>, // sha256(token) of an unlinked machine → { id, user, at }: the machine is told "revoked", not just "unknown"
     polls: Mutex<HashMap<String, u64>>, // machine record id → last poll (memory only; online = within ONLINE_MS)
     hook: Mutex<Option<UnlinkHook>>,
+    pub(crate) app: crate::appsignin::State, // browser sign-in codes (T-371): memory only
 }
 
 fn clean_code(c: &str) -> String { c.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase() }
-fn short(s: &str, n: usize) -> String { s.chars().filter(|c| !c.is_control()).take(n).collect::<String>().trim().to_string() }
-fn same(a: &str, b: &str) -> bool { a.len() == b.len() && bool::from(a.as_bytes().ct_eq(b.as_bytes())) }
-fn lk<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
-fn key(t: &str) -> String { pgm_core_internal::crypto::sha256_hex(t.as_bytes()) }
+pub(crate) fn short(s: &str, n: usize) -> String { s.chars().filter(|c| !c.is_control()).take(n).collect::<String>().trim().to_string() }
+pub(crate) fn same(a: &str, b: &str) -> bool { a.len() == b.len() && bool::from(a.as_bytes().ct_eq(b.as_bytes())) }
+pub(crate) fn lk<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
+pub(crate) fn key(t: &str) -> String { pgm_core_internal::crypto::sha256_hex(t.as_bytes()) }
 
 impl Devices {
     pub fn new(root: &Path) -> Devices {
@@ -54,10 +55,10 @@ impl Devices {
         let doc = read_json(&file);
         let tokens = doc.as_ref().and_then(|v| v["devices"].as_object().cloned()).unwrap_or_default();
         let revoked = doc.as_ref().and_then(|v| v["revoked"].as_object().cloned()).unwrap_or_default();
-        Devices { file, tokens: Mutex::new(tokens), pending: Mutex::default(), starts: Mutex::default(), fails: Mutex::default(), revoked: Mutex::new(revoked), polls: Mutex::default(), hook: Mutex::new(None) }
+        Devices { file, tokens: Mutex::new(tokens), pending: Mutex::default(), starts: Mutex::default(), fails: Mutex::default(), revoked: Mutex::new(revoked), polls: Mutex::default(), hook: Mutex::new(None), app: Default::default() }
     }
     // `devices` is what the first version wrote (an older reader takes it as it is); `revoked` is new (machines' tombstones)
-    fn save(&self) { write_json(&self.file, &json!({ "devices": Value::Object(lk(&self.tokens).clone()), "revoked": Value::Object(lk(&self.revoked).clone()) })); }
+    pub(crate) fn save(&self) { write_json(&self.file, &json!({ "devices": Value::Object(lk(&self.tokens).clone()), "revoked": Value::Object(lk(&self.revoked).clone()) })); }
     pub fn set_unlink_hook(&self, f: UnlinkHook) { *lk(&self.hook) = Some(f); }
     fn fire(&self, user: &str, id: &str) { if let Some(f) = lk(&self.hook).as_ref() { f(user, id); } lk(&self.polls).remove(id); }
 
@@ -119,19 +120,31 @@ impl Devices {
                 let (client, device, meta, replace) = (r.client.clone(), r.device.clone(), r.meta.clone(), r.replace.clone());
                 p.remove(&k);
                 drop(p);
-                let token = pgm_core_internal::crypto::random_hex(32);
-                let id = pgm_core_internal::crypto::random_hex(6);
-                if client == MACHINE_CLIENT { return self.link_machine(&user, &token, &id, &device, &meta, replace.as_deref()); }
-                {
-                    let mut t = lk(&self.tokens);
-                    let mine: Vec<String> = t.iter().filter(|(_, v)| v["user"].as_str() == Some(&user) && v["kind"].as_str() != Some("machine")).map(|(k, _)| k.clone()).collect();
-                    if mine.len() >= MAX_DEVICES_PER_USER { if let Some(old) = mine.iter().min_by_key(|k| t[*k]["lastUsedAt"].as_u64().unwrap_or(0)).cloned() { t.remove(&old); } }
-                    t.insert(key(&token), json!({ "id": id, "user": user, "name": if device.is_empty() { client.clone() } else { device }, "client": client, "created": iso_now(), "createdAt": now, "lastUsed": Value::Null, "lastUsedAt": now }));
+                if client == MACHINE_CLIENT {
+                    let token = pgm_core_internal::crypto::random_hex(32);
+                    let id = pgm_core_internal::crypto::random_hex(6);
+                    return self.link_machine(&user, &token, &id, &device, &meta, replace.as_deref());
                 }
-                self.save();
+                let (token, id) = self.issue(&user, &client, &device);
                 (200, json!({ "token": token, "username": user, "deviceId": id }))
             }
         }
+    }
+
+    /// A new per-device token for a person (the listing in Settings → Signed-in devices, revocable): (token, id). Shared by the
+    /// device-code sign-in and the browser sign-in (appsignin.rs). The oldest device goes when the person has too many.
+    pub(crate) fn issue(&self, user: &str, client: &str, device: &str) -> (String, String) {
+        let now = now_ms();
+        let token = pgm_core_internal::crypto::random_hex(32);
+        let id = pgm_core_internal::crypto::random_hex(6);
+        {
+            let mut t = lk(&self.tokens);
+            let mine: Vec<String> = t.iter().filter(|(_, v)| v["user"].as_str() == Some(user) && v["kind"].as_str() != Some("machine")).map(|(k, _)| k.clone()).collect();
+            if mine.len() >= MAX_DEVICES_PER_USER { if let Some(old) = mine.iter().min_by_key(|k| t[*k]["lastUsedAt"].as_u64().unwrap_or(0)).cloned() { t.remove(&old); } }
+            t.insert(key(&token), json!({ "id": id, "user": user, "name": if device.is_empty() { client } else { device }, "client": client, "created": iso_now(), "createdAt": now, "lastUsed": Value::Null, "lastUsedAt": now }));
+        }
+        self.save();
+        (token, id)
     }
 
     /// The signed-in person approves or refuses a user code.

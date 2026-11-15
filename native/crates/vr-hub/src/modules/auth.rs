@@ -22,7 +22,9 @@ impl Auth {
     pub fn new(root: &Path, cfg: &crate::modules::Config) -> Auth {
         let default_user = cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
         let behind_proxy = cfg.get("behindProxy").and_then(Value::as_bool) == Some(true);
-        Auth(pgm_identity_internal::Auth::new(root, &default_user, behind_proxy, "[vr-hub]"))
+        let auth = pgm_identity_internal::Auth::new(root, &default_user, behind_proxy, "[vr-hub]");
+        if let Some(s) = cfg.get("appSignin").and_then(|v| v.get("codeSeconds")).and_then(Value::as_u64) { auth.devices.set_app_code_seconds(s); } // the browser sign-in code's life (T-371; 120 by default)
+        Auth(auth)
     }
     /// POST /api/login. `maintenance`: where the hub has moved to (then nobody signs in here).
     pub async fn login(&self, r: &Req, maintenance: Option<String>) -> Routed {
