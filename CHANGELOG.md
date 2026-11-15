@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.64.1 — 2026-11-16
+
+PATCH: **the Downloads offer Jcode PGM Desktop too.** With no `releases` in the config, the Products list now has five
+entries: ShaDow Chat, Hyper Prod Man, Prod Suit, Jcode PGM and **Jcode PGM Desktop** (its releases come from
+UnityAILab/Jcode-PGM-Desktop-releases, like Jcode PGM's from Jcode-PGM-releases). A unit test checks both Jcode products
+are on the default list.
+
 ## 5.64.0 — 2026-11-16
 
 MINOR: **sign in to Jcode PGM from the browser** (T-371, hub side; plans/pgm-accounts-keys-app.md § 1; Sponge,
