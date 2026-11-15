@@ -487,7 +487,7 @@ async function setup() {
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, api: { ...(real.api || {}), anthropicBase: `http://127.0.0.1:${OLLAMA_PORT}/aapi` }, openrouter: { baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/orapi` }, jcode: { command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')] } /* T-370: the Jcode PGM an OpenRouter Work session runs on the server: the fake one */, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, api: { ...(real.api || {}), anthropicBase: `http://127.0.0.1:${OLLAMA_PORT}/aapi` }, openrouter: { baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/orapi` }, jcode: { command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')] } /* T-370: the Jcode PGM an OpenRouter Work session runs on the server: the fake one */, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), appSignin: { codeSeconds: 3 } /* R600-R605 (T-371): a browser sign-in code lives 3 s here (120 by default) so that R601 can see it expire */, hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
@@ -942,6 +942,7 @@ async function run() {
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
   if (process.argv.includes('--only-r575') && RUST_HUB) await r575Check(); // development: just R575 to R579 (with --stop-after R579)
   if (process.argv.includes('--only-r580') && RUST_HUB) await r580Check(); // development: just R580 to R585 (with --stop-after R585)
+  if (process.argv.includes('--only-r600') && RUST_HUB) await r600Check(); // development: just R600 to R605 (with --stop-after R605)
   if (process.argv.includes('--only-r591') && RUST_HUB) await r591Check(); // development: just R591 to R598 (with --stop-after R598)
   if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
   if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
@@ -3147,6 +3148,7 @@ async function run() {
     if (RUST_HUB) await r575Check(); else skip('R575', 'the API gateway passes Anthropic requests through raw (T-369, G2)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r580Check(); else skip('R580', 'the API gateway passes OpenAI requests through raw and translates between the formats (T-369, G3)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r591Check(); else skip('R591', 'OpenRouter as a provider (pairs, routing, the key never shown) and the month budget (T-370)', 'the Rust hub\'s: --rust-hub runs it');
+    await r600Check(); // R600-R605 (T-371): the browser sign-in for Jcode PGM (the hub flow with --rust-hub; the page's files always)
     if (RUST_HUB) await r586Check(); else skip('R586', 'the API gateway serves the Responses API (Codex) and shows each key\'s usage by day and model (T-369, G5)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
@@ -9787,6 +9789,140 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       for (const mm of ((await call('/api/machines', U)).data.machines || [])) if (/^r3(28|30)-/.test(mm.name || '')) await mcall('DELETE', '/api/machines/' + mm.id, U);
       if (created.password) await call('/api/admin/delete', A, { username: 't-r330' });
       try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
+    }
+  }
+  // R600-R605 (T-371): the browser sign-in for Jcode PGM (plans/pgm-accounts-keys-app.md section 1): check -> authorize (signed in as the
+  // person) -> exchange (a PKCE verifier, no sign-in) gives a per-device token. The scratch hub's code lifetime is 3 s (appSignin.codeSeconds).
+  async function r600Check() {
+    const b64u = (b) => Buffer.from(b).toString('base64url'), sha = (s) => crypto.createHash('sha256').update(s).digest();
+    const AUDIT = path.join(SB, 'security', 'audit.jsonl');
+    const secrets = []; // every code, verifier and token this check makes: none may reach the security log
+    const REDIR = 'http://127.0.0.1:51734/cb', DEVICE = 'R600 Laptop (test)';
+    const newReq = (over = {}) => { const verifier = b64u(crypto.randomBytes(32)); secrets.push(verifier); return { verifier, client: 'jcodepgm', device: DEVICE, redirect: REDIR, state: b64u(crypto.randomBytes(12)), ...over, challenge: over.challenge || b64u(sha(verifier)) }; };
+    const qs = (r) => new URLSearchParams({ client: r.client, device: r.device, redirect: r.redirect, state: r.state, challenge: r.challenge }).toString();
+    const IPC = { v: '198.51.100.60' }; // the address a section's requests come from (CF-Connecting-IP): one rate-limit bucket per section
+    const chk = (r, ip = IPC.v) => call('/api/app-signin/check?' + qs(r), null, undefined, { 'CF-Connecting-IP': ip });
+    const auth = async (tok, r, ip = IPC.v) => { const x = await call('/api/app-signin/authorize', tok, { client: r.client, device: r.device, redirect: r.redirect, state: r.state, challenge: r.challenge }, { 'CF-Connecting-IP': ip }); const u = new URL((x.data && x.data.redirectTo) || 'http://x/'); x.code = u.searchParams.get('code') || ''; x.back = u; if (x.code) secrets.push(x.code); return x; };
+    const exch = async (r, code, ip = '198.51.100.61', over = {}) => { const x = await call('/api/app-signin/exchange', null, { code, verifier: r.verifier, redirect: r.redirect, client: r.client, device: r.device, ...over }, { 'CF-Connecting-IP': ip }); if (x.data && x.data.token) secrets.push(x.data.token); return x; };
+    const devices = async (t = U) => ((await call('/api/devices', t)).data || {}).devices || [];
+    const hex64 = /^[0-9a-f]{64}$/;
+    const seen = {};
+    // ---- R600: the whole flow
+    if (!RUST_HUB) skip('R600', 'the browser sign-in works end to end (T-371)', 'the Rust hub\'s: --rust-hub runs it');
+    else {
+      const r = newReq(), c = await chk(r), anon = await auth(null, r), a = await auth(U, r), x = await exch(r, a.code);
+      const tok = (x.data || {}).token, who = tok ? await call('/api/check', tok) : {}, list = await devices();
+      const mine = list.find((d) => d.id === (x.data || {}).deviceId) || {};
+      const r2 = newReq({ client: 'jcodepgm-desktop', device: 'R600 Desktop', redirect: 'http://localhost:51735/cb' }), a2 = await auth(U, r2), x2 = await exch(r2, a2.code);
+      const rv = await call('/api/devices/revoke', U, { id: (x.data || {}).deviceId }), after = tok ? await call('/api/check', tok) : {}, list2 = await devices();
+      const rv2 = await call('/api/devices/revoke', x2.data.token, { id: (x2.data || {}).deviceId }), after2 = await call('/api/check', x2.data.token);
+      seen.r600 = { check: [c.status, c.data.ok, c.data.device, c.data.client], anon: anon.status, authorize: [a.status, a.back.origin + a.back.pathname, hex64.test(a.code), a.back.searchParams.get('state') === r.state], exchange: [x.status, hex64.test(tok || ''), (x.data || {}).username, typeof (x.data || {}).deviceId],
+        who: [who.status, (who.data || {}).username], listed: [mine.name, mine.client, mine.kind], desktop: [a2.status, x2.status, x2.data.username], revoke: [rv.status, after.status, list2.some((d) => d.id === (x.data || {}).deviceId)], selfRevoke: [rv2.status, after2.status] };
+      const s = seen.r600;
+      check('R600', 'the browser sign-in works end to end (T-371): the page asks GET /api/app-signin/check (client, device, redirect, state, challenge) and gets {ok, device, client}; POST /api/app-signin/authorize signed in as the person (a visitor gets 401) answers {redirectTo} = the loopback redirect with ?code=<64 hex>&state=<the state>; POST /api/app-signin/exchange with no sign-in (code, verifier, redirect, client, device) answers {token, username, deviceId}; that token works on the API (/api/check names the person), is listed under Settings, Signed-in devices named by the device with the client id (jcodepgm and jcodepgm-desktop, a localhost redirect too), and revoking it (the person\'s, or the device\'s own) stops it',
+        RUST_HUB ? s.check.join() === `200,true,${DEVICE},jcodepgm` && s.anon === 401 && s.authorize[0] === 200 && s.authorize[1] === 'http://127.0.0.1:51734/cb' && s.authorize[2] && s.authorize[3] && s.exchange[0] === 200 && s.exchange[1] && s.exchange[2] === 't-user' && s.exchange[3] === 'string'
+          && s.who.join() === '200,t-user' && s.listed.join() === `${DEVICE},jcodepgm,device` && s.desktop.join() === '200,200,t-user' && s.revoke.join() === '200,401,false' && s.selfRevoke.join() === '200,401' : true, JSON.stringify(s));
+    }
+    if (!RUST_HUB) { skip('R601', 'a browser sign-in code is single-use and short-lived (T-371)', 'the Rust hub\'s: --rust-hub runs it'); skip('R602', 'a wrong verifier, redirect, client or device is refused (T-371)', 'the Rust hub\'s: --rust-hub runs it'); skip('R603', 'a non-loopback or malformed redirect is refused, a linked machine cannot authorize (T-371)', 'the Rust hub\'s: --rust-hub runs it'); skip('R604', 'the browser sign-in is rate-limited per address and logged without secrets (T-371)', 'the Rust hub\'s: --rust-hub runs it'); }
+    else {
+      // ---- R601: single use (the replay revokes the token the first exchange made), expiry
+      {
+        IPC.v = '198.51.100.66';
+        const r = newReq(), a = await auth(U, r), x1 = await exch(r, a.code), t1 = (x1.data || {}).token, ok1 = t1 ? (await call('/api/check', t1)).status : 0;
+        const x2 = await exch(r, a.code), after = t1 ? (await call('/api/check', t1)).status : 0, listed = (await devices()).some((d) => d.id === (x1.data || {}).deviceId);
+        const e = newReq(), ae = await auth(U, e); await sleep(3500); const xe = await exch(e, ae.code);
+        const e2 = newReq(), ae2 = await auth(U, e2), xe2 = await exch(e2, ae2.code);
+        seen.r601 = { first: [x1.status, ok1], replay: [x2.status, typeof x2.data.error, after, listed], expired: [xe.status, /expired/i.test(xe.data.error || '')], freshAfter: xe2.status };
+        const s = seen.r601;
+        check('R601', 'a browser sign-in code is single-use and short-lived (T-371): the first exchange works; presenting the same code again is a 400 {error} and revokes the token the first exchange made (it stops working and leaves Signed-in devices); a code older than the lifetime (3 s in this scratch hub, 120 by default) is a 400 that says it expired; a fresh one still works',
+          s.first.join() === '200,200' && s.replay.join() === '400,string,401,false' && s.expired.join() === '400,true' && s.freshAfter === 200, JSON.stringify(s));
+      }
+      // ---- R602: every binding of the code
+      {
+        IPC.v = '198.51.100.67'; let n = 0;
+        const before = (await devices()).length, rows = [];
+        const tries = { verifier: (r) => ({ verifier: b64u(crypto.randomBytes(32)) }), redirect: () => ({ redirect: 'http://localhost:51734/cb' }), 'redirect port': () => ({ redirect: 'http://127.0.0.1:51799/cb' }), client: () => ({ client: 'jcodepgm-desktop' }), device: () => ({ device: 'Another device' }), 'no verifier': () => ({ verifier: '' }), 'short verifier': () => ({ verifier: 'short' }) };
+        for (const [name, over] of Object.entries(tries)) {
+          const r = newReq(), a = await auth(U, r), ipn = '198.51.100.7' + (n++), bad = await exch(r, a.code, ipn, over(r)), right = await exch(r, a.code, ipn);
+          rows.push([name, bad.status, typeof bad.data.error, right.status]);
+        }
+        const unknown = await exch(newReq(), '0'.repeat(64), '198.51.100.62'), junk = await exch(newReq(), 'not-a-code', '198.51.100.62');
+        seen.r602 = { rows, unknown: unknown.status, junk: junk.status, devicesMade: (await devices()).length - before };
+        const s = seen.r602;
+        check('R602', 'a browser sign-in code is bound to what asked for it (T-371): an exchange with a wrong verifier, another redirect (host or port), another client, another device or no / a malformed verifier is a 400 {error}, and the code is burnt: the right exchange right afterwards is refused too, so no token is made; an unknown or malformed code is a 400',
+          rows.every((x) => x[1] === 400 && x[2] === 'string' && x[3] === 400) && rows.length === 7 && s.unknown === 400 && s.junk === 400 && s.devicesMade === 0, JSON.stringify(s));
+      }
+      // ---- R603: refused requests; a linked machine cannot authorize
+      {
+        IPC.v = '198.51.100.68';
+        const base = newReq(), bads = [];
+        const table = { 'other host': { redirect: 'http://evil.example:51734/cb' }, https: { redirect: 'https://127.0.0.1:51734/cb' }, 'no port': { redirect: 'http://127.0.0.1/cb' }, 'port 80': { redirect: 'http://127.0.0.1:80/cb' }, 'port 1023': { redirect: 'http://127.0.0.1:1023/cb' }, 'port 70000': { redirect: 'http://127.0.0.1:70000/cb' }, 'other path': { redirect: 'http://127.0.0.1:51734/x' }, query: { redirect: 'http://127.0.0.1:51734/cb?a=1' }, fragment: { redirect: 'http://127.0.0.1:51734/cb#f' }, credentials: { redirect: 'http://u:p@127.0.0.1:51734/cb' }, 'look-alike host': { redirect: 'http://127.0.0.1.evil.example:51734/cb' }, 'ipv6': { redirect: 'http://[::1]:51734/cb' }, 'trailing slash': { redirect: 'http://127.0.0.1:51734/cb/' },
+          'unknown client': { client: 'vr-machine' }, 'no client': { client: '' }, 'empty device': { device: '' }, 'long device': { device: 'a'.repeat(61) }, 'html device': { device: '<b>x</b>' }, 'emoji device': { device: 'my pc \u{1F600}' }, 'short state': { state: 'abc' }, 'odd state': { state: 'abcdefgh&x=1' }, 'short challenge': { challenge: 'abc' }, 'padded challenge': { challenge: b64u(sha('x')) + '=' } };
+        for (const [name, over] of Object.entries(table)) { const r = { ...base, ...over }; const c = await chk(r), a = await auth(U, r); bads.push([name, c.status, a.status, a.code]); }
+        const ok1 = await chk({ ...base, redirect: 'http://localhost:65535/cb' }), ok2 = await chk({ ...base, device: 'My PC (work)_1.2-b' });
+        // a linked machine's token
+        const k = crypto.generateKeyPairSync('ed25519'), pub = k.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
+        const ms = await call('/api/device/start', null, { client: 'vr-machine', device: 'r603-box', publicKey: pub, machineId: 'mach-r603-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r603/work' });
+        const map = await call('/api/device/approve', U, { userCode: (ms.data || {}).userCode }), mp = await call('/api/device/poll', null, { deviceCode: (ms.data || {}).deviceCode }), mt = (mp.data || {}).token;
+        const viaMachine = mt ? await auth(mt, base) : { status: 0 };
+        if (mp.data && mp.data.deviceId) await call('/api/devices/revoke', U, { id: mp.data.deviceId });
+        seen.r603 = { bads: bads.filter((x) => x[1] !== 400 || x[2] !== 400 || x[3]).map((x) => x.join(':')), count: bads.length, okLocalhost: ok1.status, okDevice: ok2.status, machine: [ms.status, map.status, !!mt, viaMachine.status, !!viaMachine.code] };
+        const s = seen.r603;
+        check('R603', 'a browser sign-in request is validated before anything is shown or made (T-371): at check AND at authorize a redirect that is not exactly http://127.0.0.1:<port>/cb or http://localhost:<port>/cb (other host or look-alike host, https, no port, a port under 1024 or over 65535, another path, a query, a fragment, credentials, IPv6, a trailing slash), a client outside jcodepgm / jcodepgm-desktop, a device name that is empty, over 60 characters or not plain (markup, emoji), a short or odd state and a challenge that is not 43 base64url characters are each a 400 and no code is made; a localhost redirect on port 65535 and a name with letters, digits, space and - _ . ( ) pass; a linked machine\'s token cannot authorize (403, no code)',
+          s.bads.length === 0 && s.count === 23 && s.okLocalhost === 200 && s.okDevice === 200 && s.machine.join() === '200,200,true,403,false', JSON.stringify(s));
+      }
+      // ---- R604: the rate limit per address, and the security log
+      {
+        IPC.v = '198.51.100.69';
+        const ipA = '198.51.100.63', ipB = '198.51.100.64', codes = [];
+        for (let i = 0; i < 12; i++) codes.push((await exch(newReq(), '1'.repeat(64), ipA)).status);
+        const other = await exch(newReq(), '1'.repeat(64), ipB);
+        const rr = newReq(), ra = await auth(U, rr), rx = await exch(rr, ra.code, '198.51.100.65'), rbad = newReq(), rba = await auth(U, rbad), rbx = await exch(rbad, rba.code, '198.51.100.65', { client: 'jcodepgm-desktop' });
+        const au = await call('/api/admin/audit?action=app-signin&limit=500', A), es = au.data.entries || [];
+        const mine = (act) => es.filter((e) => e.action === act && e.actor === 't-user');
+        const file = fs.existsSync(AUDIT) ? fs.readFileSync(AUDIT, 'utf8') : '';
+        const authE = mine('app-signin.authorize').find((e) => e.detail && e.detail.client === 'jcodepgm' && e.detail.device === DEVICE), exE = mine('app-signin.exchange').find((e) => e.detail && e.detail.device === DEVICE);
+        const reasons = new Set(es.filter((e) => e.action === 'app-signin.refused').map((e) => e.detail && e.detail.reason));
+        seen.r604 = { first10: codes.slice(0, 10).every((s) => s === 400), limited: codes.slice(10).every((s) => s === 429), otherAddress: other.status, afterGood: [rx.status, rbx.status], logged: [!!authE, !!exE, au.status], reasons: [...reasons].sort().join(), noSecrets: !!file && secrets.length > 20 && !secrets.some((x) => file.includes(x)) && !file.includes(REDIR), fieldsOnly: es.every((e) => Object.keys(e.detail || {}).every((k) => ['client', 'device', 'reason'].includes(k))) };
+        const s = seen.r604;
+        check('R604', 'the browser sign-in is limited per address and logged (T-371): ten exchanges a minute from one address (wrong ones count), the next ones are 429 while another address is still answered; the security log (GET /api/admin/audit) has app-signin.authorize and app-signin.exchange for the person with the client and device, and app-signin.refused (with a reason: rate, mismatch, reused, expired, unknown ...); never a code, verifier or token (none of the ' + 'values this check made is in the log file) and no other fields',
+          s.first10 && s.limited && s.otherAddress === 400 && s.afterGood.join() === '200,400' && s.logged.join() === 'true,true,200' && ['expired', 'mismatch', 'rate', 'reused', 'unknown'].every((x) => s.reasons.split(',').includes(x)) && s.noSecrets && s.fieldsOnly, JSON.stringify(s));
+      }
+    }
+    // ---- R605: the page
+    {
+      const html = fs.readFileSync(path.join(MILLS, 'web', 'appsignin.html'), 'utf8'), js = fs.readFileSync(path.join(MILLS, 'web', 'appsignin.js'), 'utf8'), sw = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8');
+      const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{23E9}-\u{23FA}\u{25B6}\u{27F3}\u{21A9}\u{21AA}\u{2713}\u{2715}\u{25A0}]/u;
+      const st = { plainFiles: !EMOJI.test(html) && !EMOJI.test(js), svg: /<svg[^>]*aria-hidden="true"/.test(html), noImages: !/<img\b/i.test(html), noCache: !/appsignin/.test(sw), buttons: /id="approve"[^>]*>Approve</.test(html) && /id="cancel"[^>]*>Cancel</.test(html), csp: /script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'/.test(html) && !/<script>/.test(html) && !/\son[a-z]+="/i.test(html),
+        wiring: /\/api\/app-signin\/check\?/.test(js) && /\/api\/app-signin\/authorize/.test(js) && /error=access_denied&state=/.test(js) && !/innerHTML|document\.write|eval\(/.test(js), onlyValidated: (js.match(/location\.replace\(/g) || []).length === 2 && /startsWith\(req\.redirect \+ '\?'\)/.test(js) && !/location\.(href|assign)\s*=/.test(js) && /qn\.append\('Link ', dev, ' \(', cli, '\) to your account ', acc, '\?'\)/.test(js) };
+      if (RUST_HUB) {
+        const pg = await fetch(H + '/app-signin?client=jcodepgm'), body = await pg.text(), sj = await fetch(H + '/appsignin.js');
+        st.served = [pg.status, /text\/html/.test(pg.headers.get('content-type') || ''), pg.headers.get('cache-control'), body === html, sj.status, /javascript/.test(sj.headers.get('content-type') || '')].join();
+        // the page's script, run against the real hub with stand-in DOM: a good request shows the question and goes back with a code; cancel goes back with access_denied;
+        // a bad redirect shows an error and never navigates
+        const run = async (req, signedIn) => {
+          const ids = ['busy', 'bad', 'login', 'ask', 'done', 'title', 'badText', 'username', 'password', 'loginErr', 'question', 'askErr', 'approve', 'cancel', 'loginCancel', 'doneText'], els = {};
+          for (const id of ids) els[id] = { id, hidden: ['bad', 'login', 'ask', 'done'].includes(id), textContent: '', value: '', disabled: false, on: {}, addEventListener(t, f) { this.on[t] = f; }, focus() {}, append(...a) { this.textContent += a.map((x) => (typeof x === 'string' ? x : x.textContent)).join(''); } };
+          const nav = [];
+          const ctx = { document: { getElementById: (id) => els[id], createElement: () => ({ textContent: '' }) }, location: { search: '?' + new URLSearchParams(req).toString(), replace: (u) => nav.push(u) }, URLSearchParams, fetch: (p, o) => fetch(H + p, o), sessionStorage: { getItem: () => (signedIn ? U : null) }, localStorage: { getItem: () => null, setItem() {} }, crypto: require('crypto').webcrypto, navigator: { language: 'en' }, Intl, Error, JSON, Promise, console };
+          require('vm').runInNewContext(js, ctx);
+          for (let i = 0; i < 60 && !(els.ask.hidden === false || els.bad.hidden === false || els.login.hidden === false); i++) await sleep(50);
+          return { els, nav };
+        };
+        const good = newReq(), pgGood = await run(good, true);
+        const asked = pgGood.els.ask.hidden === false && pgGood.els.question.textContent === `Link ${DEVICE} (jcodepgm) to your account t-user?`;
+        await pgGood.els.approve.on.click();
+        const back = new URL(pgGood.nav[0] || 'http://x/'), ex = await exch(good, back.searchParams.get('code') || '');
+        const cx = newReq(), pgCancel = await run(cx, true); await pgCancel.els.cancel.on.click();
+        const bad = newReq({ redirect: 'http://evil.example:51734/cb' }), pgBad = await run(bad, true);
+        const anon = newReq(), pgAnon = await run(anon, false);
+        st.behaviour = { asked, navigated: [pgGood.nav.length, back.origin + back.pathname, back.searchParams.get('state') === good.state, ex.status, JSON.stringify(Object.values(pgGood.els).map((e) => e.textContent)).includes(back.searchParams.get('code') || '\0')], cancel: pgCancel.nav.join() === `${REDIR}?error=access_denied&state=${cx.state}`, bad: [pgBad.els.bad.hidden, pgBad.nav.length, pgBad.els.ask.hidden], anon: [pgAnon.els.login.hidden, pgAnon.els.ask.hidden, pgAnon.nav.length] };
+        const b = st.behaviour;
+        st.behaviourOk = b.asked && b.navigated.join() === `1,${REDIR},true,200,false` && b.cancel && b.bad.join() === 'false,0,true' && b.anon.join() === 'false,true,0';
+        st.servedOk = st.served === `200,true,no-store,true,200,true`;
+      }
+      check('R605', 'the /app-signin page (T-371): one small plain page and script of its own (SVG icon, no emoji, no images, a strict content policy with no inline script, not in the service worker\'s cache list); it asks check first, shows "Link <device> (<client>) to your account <username>?" with Approve and Cancel, signs the person in with the normal password sign-in when the tab has no session, goes back only to the redirect check accepted (with the code when approved, with error=access_denied&state=... when cancelled), never shows the code, and shows an error without navigating for a bad redirect' + (RUST_HUB ? '' : ' (static; the served page and its behaviour run with --rust-hub)'),
+        st.plainFiles && st.svg && st.noImages && st.noCache && st.buttons && st.csp && st.wiring && st.onlyValidated && (!RUST_HUB || (st.servedOk && st.behaviourOk)), JSON.stringify(st));
     }
   }
   // R337: the owner's list over HTTP (scope in words, mode, status, in-use while a run uses it), nobody else sees or manages it, the

@@ -507,6 +507,18 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             Err((s, e)) => answer(s, json!({ "error": e })),
         };
     }
+    // browser sign-in for Jcode PGM (T-371): the page asks `check` who is asking; the tool trades its code for a device token
+    if p == "/api/app-signin/check" && r.method == hyper::Method::GET {
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let q = |k: &str| r.param(k).unwrap_or_default();
+        return match a.devices.app_check(&ip, &q("client"), &q("device"), &q("redirect"), &q("state"), &q("challenge")) { Ok(v) => answer(200, v), Err((s, e)) => answer(s, json!({ "error": e })) };
+    }
+    if p == "/api/app-signin/exchange" && r.method == hyper::Method::POST {
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let b = r.json();
+        let s = |k: &str| b[k].as_str().unwrap_or("").to_string();
+        return match a.devices.app_exchange(&ip, &s("code"), &s("verifier"), &s("redirect"), &s("client"), &s("device")) { Ok(v) => answer(200, v), Err((s, e)) => answer(s, json!({ "error": e })) };
+    }
     // the public download routes are gone (4.0.0): downloads and updates need an account
     if let Some(x) = downloads::gone(r) { return x; }
     let user = a.session_user(r);
@@ -542,6 +554,14 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             }
             _ => answer(405, json!({ "error": "Method not allowed." })),
         };
+    }
+    // browser sign-in (T-371): the signed-in person (a page session or a device token, never a linked machine's) makes the code
+    if p == "/api/app-signin/authorize" && r.method == hyper::Method::POST {
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let b = r.json();
+        let s = |k: &str| b[k].as_str().unwrap_or("").to_string();
+        return match a.devices.app_authorize(&u, &ip, &s("client"), &s("device"), &s("redirect"), &s("state"), &s("challenge")) { Ok(v) => answer(200, v), Err((s, e)) => answer(s, json!({ "error": e })) };
     }
     // linked machines (T-309): the owner's list / rename / unlink, the admin's count, the machine's own poll and signed replies
     if p.starts_with("/api/machine") || p == "/api/device/peek" || p == "/api/transfers" || p.starts_with("/api/transfers/") { if let Some(x) = machines::route(hub, r).await { return x; } }

@@ -14,6 +14,7 @@
 //! On its first start it takes over an older hub's sessions (`<root>/hub-state.json`) and locks (each account's
 //! state.json `lockedDevice`), so nobody is signed out or loses a device by the move.
 pub mod devices;
+pub mod appsignin;
 use pgm_core_internal::json::{read_json, write_json_private as write_json};
 use pgm_core_internal::now_ms;
 use pgm_core_internal::audit;

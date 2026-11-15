@@ -76,7 +76,8 @@ fn public_url(hub: &Hub) -> String {
 /// GET of anything that is not /api/: web/<path> (index.html for /).
 pub fn page(hub: &Arc<Hub>, path: &str) -> Routed {
     let web = hub.root.join("..").join("web");
-    let rel = if path == "/" { "index.html".to_string() } else { path.trim_start_matches('/').to_string() };
+    // /app-signin (T-371): the browser sign-in page for Jcode PGM, one small file of its own (never cached, never a referrer)
+    let rel = if path == "/" { "index.html".to_string() } else if path == "/app-signin" { "appsignin.html".to_string() } else { path.trim_start_matches('/').to_string() };
     let nf = || Routed::Answer(crate::front::json(404, &json!({ "error": "Not found" })));
     // inside web/ only: no "..", no empty part, no drive letter or stream name (on Windows "C:…" would be a path of its own)
     if rel.contains(':') || rel.split(['/', '\\']).any(|c| c == ".." || c.is_empty()) { return nf(); }
@@ -101,7 +102,8 @@ pub fn page(hub: &Arc<Hub>, path: &str) -> Routed {
         return Routed::Answer(hyper::Response::builder().status(200).header("content-type", "text/html").header("cache-control", "no-cache, no-store, must-revalidate").body(crate::front::full(html)).expect("response"));
     }
     let ext = f.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    match std::fs::read(&f) { Ok(b) => Routed::Answer(hyper::Response::builder().status(200).header("content-type", mime(&ext)).header("cache-control", "no-cache").body(crate::front::full(b)).expect("response")), Err(_) => nf() }
+    let cache = if name == "appsignin.html" { "no-store" } else { "no-cache" };
+    match std::fs::read(&f) { Ok(b) => Routed::Answer(hyper::Response::builder().status(200).header("content-type", mime(&ext)).header("cache-control", cache).header("referrer-policy", "no-referrer").body(crate::front::full(b)).expect("response")), Err(_) => nf() }
 }
 /// /api/check: who this is, their choices, what there is.
 pub fn check(hub: &Arc<Hub>, a: &Account) -> Value {
