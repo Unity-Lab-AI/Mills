@@ -8181,6 +8181,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && /jcode\.command/.test(emptyOff || '') && /Jcode PGM/.test(emptyOff || '') && emptyPick.status === 400 && emptyPick.data.error === emptyOff && /jcode\.command/.test(ke.err) && !ke.init.harness && emptyApi.status === 200
       && /\/nonexistent\/jcodepgm/.test(goneOff || '') && /not there/.test(goneOff || '') && gonePick.status === 400 && /jcode\.command/.test(noneOff || '') && backOff === undefined && backPick.status === 200,
       `on ${JSON.stringify(onNow)}; empty "${(emptyOff || '').slice(0, 100)}" pick ${emptyPick.status} run "${ke.err.slice(0, 80)}" api ${emptyApi.status}; gone "${(goneOff || '').slice(0, 80)}" ${gonePick.status}; none ${!!noneOff}; back ${backOff} ${backPick.status}`);
+    // R599: the page: the provider form for an admin (key field and the pairs editor), the Work picker's two groups, the budget box
+    const pageOr = await (await fetch(H + '/')).text();
+    const blkPick = pageOr.slice(pageOr.indexOf('function showModels(d)'), pageOr.indexOf('// The project picker (Work header)'));
+    const blkOr = pageOr.slice(pageOr.indexOf('function pairsEditor('), pageOr.indexOf('// ── Settings → My AIs: providers'));
+    const blkProv = pageOr.slice(pageOr.indexOf('async function renderProviders()'), pageOr.indexOf('function sysSettings('));
+    const orIcons = (blkOr + blkProv).match(/href="#(i-[a-z-]+)"/g) || [], symbols = pageOr.match(/<symbol id="(i-[a-z-]+)"/g) || [];
+    check('R599', 'the page: Settings → My AIs offers an admin the OpenRouter kind (the key field, a pairs editor with id, label, OpenRouter model, provider order and allow-fallbacks per row, add and remove a pair; the owner can edit the pairs and replace the key later, the key is never filled back in); the Work AI picker shows two kinds of group, "Claude (<host>)" and "OpenRouter" (a pair shows its label, a provider the server cannot run is greyed with its reason); Settings has an OpenRouter budget box (the month\'s spend against the cap with a meter, the opt-in fallback switch with its pair, and for admins everyone\'s month with a cap field per person); only SVG icons from the page\'s own set, no emoji',
+      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /\['openrouter', 'OpenRouter \(the team key/.test(blkProv) && /me\.admin \? \[\['openrouter'/.test(blkProv) && /body\.pairs = pe\.get\(\)/.test(blkProv) && /pairsEditor\(p\.pairs/.test(blkProv) && /body\.apiKey = nk\.value/.test(blkProv) && !/nk\.value = p/.test(blkProv)
+      && /allow fallbacks/.test(blkOr) && /OpenRouter model, e\.g\./.test(blkOr) && /providers in order/.test(blkOr) && /Add a pair/.test(blkOr)
+      && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
+      && /\/api\/openrouter\/budget'\)/.test(blkOr) && /\/api\/openrouter\/fallback/.test(blkOr) && /\/api\/openrouter\/budget\/all/.test(blkOr) && /\/api\/openrouter\/budget\/cap/.test(blkOr) && /Use OpenRouter when Claude is unavailable/.test(blkOr) && /'orMeter'/.test(blkOr)
+      && orIcons.length >= 3 && orIcons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blkOr),
+      `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
     await call('/api/providers/remove', A, { id: pv.id });
     for (const k of [kA, kU, kOne]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
   }
