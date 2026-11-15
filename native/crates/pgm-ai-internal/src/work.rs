@@ -353,9 +353,10 @@ impl Work {
     }
     /// Which coding harness runs Work for that provider: "claude" (Claude Code), "jcode" (Jcode PGM), None (neither:
     /// an OpenAI endpoint or a ChatGPT login answers the API and the Unity section, not Work).
-    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
+    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) || p["kind"] == json!(crate::openrouter::KIND) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
     pub fn harness_of(p: &Value) -> Option<&'static str> {
-        if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { return Some(crate::jcode::HARNESS); }
+        // the router (T-370): the engine follows the provider; an OpenRouter one runs Jcode PGM on this server (openrouter.rs)
+        if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) || p["kind"] == json!(crate::openrouter::KIND) { return Some(crate::jcode::HARNESS); }
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
     }
     fn usage_source(&self, ai: &crate::ai_hosts::AiHosts, a: &Account) -> String { match self.effective(ai, &a.username, &s(&self.state(a), "provider")) { Some(p) if p["kind"] == json!("host-claude") => s(&p, "id"), _ => "hub".into() } }
@@ -890,13 +891,21 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let model = { let m = s(&st, "model"); if m.is_empty() { w.default_model_of(a) } else { m } };
     let ai = hub.ai();
     // (on the dev hub while live does not lend its hosts, T-335: "… (live's AI hosts are not reachable from dev right now)")
-    let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": ai.with_peer_note("No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings.") })) };
+    // opt-in fallback (T-370): the session's Claude (an AI host) is offline or at its cap and the person chose to use OpenRouter then
+    let mut prov_o = w.effective(ai, &a.username, &s(&st, "provider"));
+    let (mut fb_pair, mut fb_line): (Option<String>, Option<String>) = (None, None);
+    if let Some((fp, pair, line)) = crate::openrouter::fallback_for(&**hub, &a.username, prov_o.as_ref()) { prov_o = Some(fp); fb_pair = Some(pair); fb_line = Some(line); }
+    let model = fb_pair.clone().unwrap_or(model);
+    let Some(prov) = prov_o else { return one_line(json!({ "type": "bridge_error", "text": ai.with_peer_note("No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings.") })) };
     let Some(harness) = Work::harness_of(&prov) else { return one_line(json!({ "type": "bridge_error", "text": "Your chosen AI provider can run neither Claude Code nor Jcode PGM, so it cannot run Work. Pick a Claude or a Jcode PGM model in the dropdown." })) };
     let prov_env = Work::claude_env(&prov).unwrap_or_default();
     let kind = s(&prov, "kind");
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return one_line(json!({ "type": "bridge_error", "text": AI_OFF_TEXT })); }
     // a provider shared with a scope: Work must be among its uses and the model among its models (the owner names what is allowed)
     if let Err(m) = ai.scope_check(&a.username, &s(&prov, "id"), "work", &model) { return one_line(json!({ "type": "bridge_error", "text": format!("{m} Pick another AI or model in the dropdown.") })); }
+    // an OpenRouter model runs Jcode PGM on this server (config jcode.command); refused here, in plain words, when that is off or the month's budget is used up
+    let state_model0 = fb_pair.clone().unwrap_or_else(|| s(&st, "model"));
+    let or_plan = if kind == crate::openrouter::KIND { match crate::openrouter::work_plan(&**hub, &a.username, &prov, &state_model0) { Ok(p) => Some(p), Err(e) => return one_line(json!({ "type": "bridge_error", "text": e })) } } else { None };
     let owner = s(&prov, "owner"); let nick = s(&prov, "nickname");
     let host_id = s(&prov, "hostId"); let prov_id = s(&prov, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default();
     let hjcode = kind == HOST_JCODE;
@@ -922,7 +931,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         if used >= max_u { return answer(429, json!({ "error": format!("{where_}: {used} of {max_u} sessions working. Wait for one, stop one, or use another AI host."), "limit": { "host": host, "used": used, "max": max_u } })); }
         if used_p >= max_p { return answer(429, json!({ "error": format!("{where_} / {pfull}: {used_p} of {max_p} sessions working on it. Wait for one, stop one, or pick another AI."), "limit": { "host": host, "used": used_p, "max": max_p, "provider": pfull } })); }
       } }
-    let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else { String::new() };
+    let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else if kind == crate::openrouter::KIND { "openrouter".to_string() } else { String::new() };
     // a Claude session lives where it ran (relayed runs run here, on this hub); a Jcode PGM host's, on that host
     let wher = if (kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work") || hjcode { host_id.clone() } else { "hub".to_string() };
     // a session is resumed only where it ran and by the harness that made it (a Jcode PGM session id means nothing to Claude Code)
@@ -1004,14 +1013,23 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // `claude`, the message on stdin), or Jcode PGM (the provider's binary, `run --ndjson`, the message as the last
     // argument, a private jcode home with the hub's MCP servers and the system prompt as its overlay)
     let hkind = Work::harness_kind(&prov);
-    let mut hx = crate::harness::harness_for(hkind, &prov, &s(&st, "model"));
+    // an OpenRouter run: Jcode PGM on this server, pointed at this hub's relay for the run (no key in its arguments or environment)
+    let hprov = or_plan.as_ref().map(|p| p.prov.clone()).unwrap_or_else(|| prov.clone());
+    let mut or_tok: Option<String> = None;
+    if let Some(pl) = &or_plan {
+        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed);
+        relay_env = crate::openrouter::relay_env(hub.cfg().port, &tok); relay_env.extend(pl.env.iter().cloned());
+        or_tok = Some(tok);
+        if let Some(l) = &fb_line { w.emit(&sx.key, json!({ "type": "bridge_info", "text": l })); }
+    }
+    let mut hx = crate::harness::harness_for(hkind, &hprov, &fb_pair.clone().unwrap_or_else(|| s(&st, "model")));
     let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx, &run_secret) } else { Value::Null };
     let sid = s(&st, "claudeSessionId");
     let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
     let mut claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     if planner { claude_args.extend(["--disallowedTools".to_string(), PLANNER_DENIED.to_string()]); } // deny beats allow and any permission mode
-    let state_model = s(&st, "model");
-    let spec = hx.command(&crate::harness::RunContext { prov: &prov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
+    let state_model = fb_pair.clone().unwrap_or_else(|| s(&st, "model"));
+    let spec = hx.command(&crate::harness::RunContext { prov: &hprov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
         system_prompt: &system_prompt, mcp_json: &mcp_json, mcp_config: &mcp_config, permission_mode: &permission_mode, allowed_tools: &tools, add_dirs: &add_dirs, claude_command: &claude_command, claude_args: &claude_args });
     if let Some(b) = hx.banner() { w.emit(&sx.key, json!({ "type": "bridge_info", "text": b })); }
     let (command, harness_env, input) = (spec.program.clone(), spec.env.clone(), spec.stdin.clone());
@@ -1028,7 +1046,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         let w = h.work();
         let mut child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&*h, &a2, &sx2, &id, json!(-2)); return; }
+            Err(e) => { if let Some(t) = &or_tok { crate::openrouter::relay_forget(t); } w.emit(&sx2.key, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&*h, &a2, &sx2, &id, json!(-2)); return; }
         };
         if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx2.key) { r.pid = child.id(); }
         if let Some(mut stdin) = child.stdin.take() { let inp = input.clone(); tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
@@ -1043,6 +1061,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         }
         let code = child.wait().await.ok().and_then(|s| s.code()).map(|c| json!(c)).unwrap_or(Value::Null);
         if let Some(t) = err_task { let _ = t.await; }
+        if let Some(t) = &or_tok { crate::openrouter::relay_forget(t); } // the run's relay dies with it
         w.finish(&*h, &a2, &sx2, &id, code);
     });
     ndjson(rx)
@@ -1192,7 +1211,10 @@ pub fn providers_list(hub: &dyn AiHub, user: &str) -> Vec<Value> {
     for p in w.own_providers() { if p["shared"] == json!(true) || p["owner"] == json!(user) {
         let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(&p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
         for k in ["baseUrl", "configDir"] { if !s(&p, k).is_empty() { v[k] = p[k].clone(); } }
-        if p["kind"] == json!(crate::openrouter::KIND) { v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) }; }
+        if p["kind"] == json!(crate::openrouter::KIND) {
+            v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) };
+            if let Some(why) = crate::openrouter::work_off(hub, &p) { v["workOff"] = json!(why); } // Work needs Jcode PGM on the server: why it is not offered
+        }
         out.push(v);
     } }
     out.extend(hub.ai().providers_for(user));
@@ -1341,6 +1363,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let prov = if !want.is_empty() && want != "host" { w.provider_get(ai, &want, u) } else { w.default_for(ai, u).or_else(|| w.provider_get(ai, "host", "")) };
             let Some(prov) = prov else { return Some(answer(400, json!({ "error": "Unknown provider." }))) };
             if Work::harness_of(&prov).is_none() { return Some(answer(400, json!({ "error": "That provider cannot run Work: it is neither Claude Code nor Jcode PGM. Use it for the API or the Unity section instead." }))); }
+            if let Some(why) = crate::openrouter::work_off(&**hub, &prov) { return Some(answer(400, json!({ "error": why, "workOff": true }))); } // OpenRouter without Jcode PGM on this server
             let ids: Vec<String> = if prov["kind"] == json!("host") { w.model_ids() } else { prov["models"].as_array().map(|m| m.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() };
             let Some(model) = b["model"].as_str().map(String::from) else { return Some(answer(400, json!({ "error": "Unknown model." }))) };
             // a jcode provider without a model list takes any model id (jcode resolves it; empty = jcode's default)
