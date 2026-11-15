@@ -4812,7 +4812,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.notified = !!withB.notify && withB.notify('Title r613', 'Body') === true && calls.includes('notify:Title r613|Body') && without.notify('x', 'y') === false;
     seen.button = /<button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"\/><\/svg>Exit to menu<small>/.test(page);
     seen.wired = /if \(PGMD\) \{ \$\('goPgmMenu'\)\.hidden = false; \$\('goPgmMenu'\)\.onclick = \(\) => \{ try \{ PGMD\.exitToMenu\(\); \} catch \{\} \};/.test(page);
-    seen.notifyPaths = (page.match(/nativeNotify\(/g) || []).length >= 3;
+    seen.notifyPaths = (page.match(/nativeNotify\(/g) || []).length === 2; // the two places the page notifies (a mention while away, user action required)
     check('R613', 'in Jcode PGM Desktop\'s VibeRoller window the hub page finds the app\'s own bridge (window.__PGM_DESKTOP__ with exitToMenu; not a look-alike), shows an "Exit to menu" tile that calls it, and sends its notifications through it; in a browser or the Tauri app nothing changes',
       Object.values(seen).every(Boolean) && !withB.err, JSON.stringify({ ...seen, err: withB.err || '', calls }));
   }
