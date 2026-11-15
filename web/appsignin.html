@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<title>Link a device · VibeRoller</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f5f5f7; --card: #ffffff; --ink: #1c1c1e; --dim: #5c5c63; --line: #d6d6db; --accent: #3b5bdb; --accent-ink: #ffffff; --bad: #b42318; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #17171a; --card: #222226; --ink: #f2f2f5; --dim: #a3a3ad; --line: #3a3a41; --accent: #7c93ff; --accent-ink: #101020; --bad: #ff8a80; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { width: min(440px, calc(100vw - 32px)); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 28px 24px; }
+  .mark { width: 40px; height: 40px; color: var(--accent); }
+  h1 { font-size: 20px; margin: 12px 0 8px; font-weight: 600; }
+  p { margin: 8px 0; color: var(--dim); }
+  p.q { color: var(--ink); font-size: 17px; }
+  b { color: var(--ink); overflow-wrap: anywhere; }
+  label { display: block; margin: 14px 0 4px; font-size: 14px; color: var(--dim); }
+  input { width: 100%; padding: 10px 12px; font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; gap: 12px; margin-top: 22px; }
+  button { flex: 1; padding: 10px 14px; font: inherit; font-weight: 600; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; }
+  button.go { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .55; cursor: default; }
+  .err { color: var(--bad); min-height: 1.4em; margin-top: 12px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>
+  <h1 id="title">Link a device</h1>
+
+  <section id="busy"><p>One moment.</p></section>
+
+  <section id="bad" hidden>
+    <p class="err" id="badText"></p>
+    <p>Nothing was linked. Start the sign-in again from the app.</p>
+  </section>
+
+  <form id="login" hidden>
+    <p>Sign in to VibeRoller to continue.</p>
+    <label for="username">Username</label>
+    <input id="username" autocomplete="username" autocapitalize="none" spellcheck="false">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <div class="err" id="loginErr" role="alert"></div>
+    <div class="row"><button type="button" id="loginCancel">Cancel</button><button type="submit" class="go">Sign in</button></div>
+  </form>
+
+  <section id="ask" hidden>
+    <p class="q" id="question"></p>
+    <p>It will get its own sign-in, which you can remove at any time in Settings, Signed-in devices.</p>
+    <div class="err" id="askErr" role="alert"></div>
+    <div class="row"><button type="button" id="cancel">Cancel</button><button type="button" id="approve" class="go">Approve</button></div>
+  </section>
+
+  <section id="done" hidden><p id="doneText"></p></section>
+</main>
+<script src="/appsignin.js"></script>
+</body>
+</html>
