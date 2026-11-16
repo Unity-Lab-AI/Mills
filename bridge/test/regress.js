@@ -66,6 +66,14 @@ const L533 = { // T-341 / T-342 (plans/multi-session.md § 4a): every Work sessi
   R536: 'the JS hub still reads your first session after a delete: the frozen JavaScript hub\'s own reader (bridge/work-state.js) finds the promoted session\'s conversation in work-current.json, in the shape it always had',
   R537: 'an older page (no session field) still works against the new hub after a delete: /api/work/current and /api/chat without a session mean the new first session, and its run works in that session\'s own worktree',
 };
+const L614 = { // T-375: /transfer in Work (a handoff, then a fresh session that goes on from it)
+  R614: '/transfer writes a handoff with a throw-away model call through the session\'s own Claude (the handoff writer\'s own system prompt, no tools, no MCP, no session kept) that gets the conversation in short, the worktree\'s exact state (its uncommitted file) and the paths the runs touched, and the person\'s focus; it makes a new session with the same project, provider, model and harness, in the same worktree, titled "… (continued)", in the old one\'s folder, linked both ways and open on screen; the new session\'s first run starts at once with the fixed transfer line and the handoff, in that worktree',
+  R615: 'when the handoff writer fails, /transfer still goes on with a plain handoff made without a model (it says so and why: the goal, the focus, the conversation in short, the worktree\'s state), and a board task the old session\'s run left claimed gets a handoff note ("session transferred") naming the new session',
+  R616: 'the worktree goes with the transfer: the old session runs no more (a message to it is refused 409 naming the new one), deleting it leaves the worktree and its uncommitted file to the new session, which keeps working there; deleting the new session then removes that worktree as deleting a session always does',
+  R617: 'how /transfer refuses: a session that is working (409, nothing made), another person\'s session (404), a session with no conversation yet (400), one transferred already (409), and nobody signed out (401)',
+  R618: 'a Jcode PGM session (an OpenRouter provider) transfers the same way: the handoff is written through its own OpenRouter provider (its key, the handoff writer\'s prompt), and the new session uses the same provider, model and engine (its first run is a Jcode PGM run in the same worktree)',
+  R619: 'the page offers /transfer: typed with a focus, in the Commands panel with a tooltip and a confirm modal with a focus box that says what happens (a handoff, a fresh session in the same project and worktree, the switch), a progress line while it works, then it opens the new session; the old session shows "Transferred to …" and the new one "Continued from …" with a link to the other, the session list says "transferred →", and its icons are SVG symbols (no emoji)',
+};
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -949,6 +957,7 @@ async function run() {
   if (process.argv.includes('--only-r600') && RUST_HUB) await r600Check(); // development: just R600 to R605 (with --stop-after R605)
   if (process.argv.includes('--only-r591') && RUST_HUB) await r591Check(); // development: just R591 to R598 (with --stop-after R598)
   if (process.argv.includes('--only-r606') && RUST_HUB) await r606Check(); // development: just R606 to R612 (with --stop-after R612)
+  if (process.argv.includes('--only-r614') && RUST_HUB) { await r614Check(); r619Check(); } // development: just R614 to R619 (with --stop-after R619)
   if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
   if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
@@ -4385,6 +4394,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
       Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
   } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r614')) await r614Check(); } else for (const [n, what] of Object.entries(L614)) if (n !== 'R619') skip(n, what, 'the Rust hub\'s: --rust-hub runs it');
+  r619Check(); // T-375: the page's /transfer (static: both modes)
   // T-271: the security log (bridge/security/audit.jsonl, pgm-core-internal audit.rs): append-only, hash-chained, admins read it
   const AUDIT_FILE = path.join(SB, 'security', 'audit.jsonl');
   const loginFrom = (ip, body) => fetch(H + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
@@ -8222,6 +8233,134 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
     await call('/api/providers/remove', A, { id: pv.id });
     for (const k of [kA, kU, kOne]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
+  }
+  // R614-R618 (T-375): /transfer driven over HTTP against the fake Claude (the handoff writer answers with what it got) and the fake jcodepgm
+  async function r614Check() {
+    const parse = (t) => { try { return JSON.parse(String(t || '').split('\n\n## From the hub')[0].replace(/^ENHANCED:/, '')); } catch { return {}; } };
+    const mk = async (tok, title, project = 'VibeRoller') => (await call('/api/work/sessions/new', tok, { project, title, background: true })).data;
+    const xfer = (tok, body) => call('/api/work/sessions/transfer', tok, body);
+    const listOf = async (tok) => (await call('/api/work/sessions?archived=1', tok)).data;
+    const byId = (l, id) => (l.sessions || []).find((x) => x.id === id) || {};
+    const setTr = (tok, session, transcript) => call('/api/work/current', tok, { session, transcript });
+    const runEnd = async (tok, sid, run) => { let d = {}; for (let i = 0; i < 80; i++) { d = (await call('/api/work/attach?session=' + sid + '&run=' + encodeURIComponent(run || '') + '&after=0', tok)).data || {}; if (!d.busy) break; await sleep(250); } return d; };
+    const evText = (evs) => texts((evs || []).filter((e) => e.type === 'assistant' && e.message && Array.isArray(e.message.content)));
+    const journalOf = (sid) => { for (const base of [path.join(SB, 'profiles'), SB]) { const dirs = base === SB ? [SB] : (fs.existsSync(base) ? fs.readdirSync(base).map((d) => path.join(base, d)) : []); for (const d of dirs) { const f = path.join(d, 'work-sessions', sid + '.jsonl'); if (fs.existsSync(f)) return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } }); } } return []; };
+    const model0 = (() => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')).models[0].id; } catch { return ''; } })();
+    const FIRST = '[transfer from session ';
+    { // R614 + R616: the usual transfer of a Claude session with a project, then what happens to its worktree
+      const seen = {}, seen6 = {};
+      const n = await mk(U, 'r614 dark mode');
+      const folder = (await call('/api/work/folders/new', U, { name: 'r614 folder' })).data.id;
+      await call('/api/work/sessions/move', U, { id: n.id, folder });
+      seen.model = (await call('/api/model', U, { session: n.id, provider: 'host', model: model0 })).status;
+      await chat(U, 'r614 first run', { session: n.id });
+      await setTr(U, n.id, [{ cls: 'me', text: 'r614 goal: a dark mode toggle' }, { cls: 'tool', text: 'Edit  web/r614.css' }, { cls: 'tool', text: 'Read  web/index.html' }, { cls: 'claude', text: 'r614 done: the toggle is in the header' }]);
+      fs.writeFileSync(path.join(n.dir, 'r614-left.txt'), 'uncommitted r614\n');
+      const t = await xfer(U, { session: n.id, focus: 'r614 keep the API part' });
+      const d = t.data || {}, got = parse(d.handoff && d.handoff.text), inp = String(got.input || '');
+      seen.status = t.status; seen.by = d.handoff && d.handoff.by;
+      seen.writer = { writer: got.writer, tools: got.tools, mcp: got.mcp, resume: got.resume, noPersist: got.noPersist };
+      seen.input = { goal: inp.includes('r614 goal: a dark mode toggle'), last: inp.includes('r614 done: the toggle'), left: /\?\? r614-left\.txt/.test(inp), focus: inp.includes('r614 keep the API part'), edited: inp.includes('- web/r614.css'), read: inp.includes('- web/index.html'), branch: inp.includes('Branch: ' + n.branch) };
+      seen.facts = /## From the hub \(exact, at the transfer\)[\s\S]*\?\? r614-left\.txt/.test((d.handoff && d.handoff.text) || '');
+      const l = await listOf(U), o = byId(l, n.id), w = byId(l, d.to);
+      seen.same = { project: w.project === o.project, provider: w.provider === o.provider, model: w.model === o.model && w.model === model0, harness: w.harness === o.harness, tree: !!(w.worktree && w.worktree.path === n.dir) && !!(d.worktree && d.worktree.path === n.dir && d.worktree.kept), title: w.title === 'r614 dark mode (continued)' && d.title === w.title, folder: w.folder === folder };
+      seen.links = { from: w.transferredFrom && w.transferredFrom.id === n.id && w.transferredFrom.title === 'r614 dark mode', to: o.transferredTo && o.transferredTo.id === d.to && o.transferredTo.title === w.title, gave: o.gaveTree === true, current: l.current === d.to };
+      const end = await runEnd(U, d.to, d.run), jl = journalOf(d.to), firstUser = (jl.find((x) => typeof x.user === 'string') || {}).user || '';
+      const cur = (await call('/api/work/current?session=' + d.to, U)).data || {};
+      seen.run = { started: d.started === true && !!d.run, first: firstUser.startsWith(FIRST + 'r614 dark mode · ') && /----- HANDOFF -----/.test(firstUser) && firstUser.includes('confirm in a few lines'), cwd: evText(end.events).includes('cwd=' + n.dir), saved: ((cur.transcript || [])[0] || {}).text === firstUser && (cur.run || {}).id === d.run };
+      check('R614', L614.R614, t.status === 200 && seen.by === 'model' && seen.writer.writer && seen.writer.tools === '' && !seen.writer.mcp && !seen.writer.resume && seen.writer.noPersist && Object.values(seen.input).every(Boolean) && seen.facts
+        && Object.values(seen.same).every(Boolean) && Object.values(seen.links).every(Boolean) && Object.values(seen.run).every(Boolean), JSON.stringify(seen));
+      // R616: the old one runs no more; deleting it leaves the worktree to the new one
+      const again = await chat(U, 'r616 to the old one', { session: n.id });
+      seen6.oldRefused = again.status;
+      const del = await call('/api/work/sessions/delete', U, { id: n.id });
+      seen6.del = del.status; seen6.delTree = del.data.worktree; seen6.left = fs.existsSync(path.join(n.dir, 'r614-left.txt'));
+      const after = await chat(U, 'r616 in the new one', { session: d.to });
+      seen6.newRuns = after.status === 200 && texts(after.events).includes('cwd=' + n.dir);
+      seen6.stillLeft = fs.existsSync(path.join(n.dir, 'r614-left.txt'));
+      const l2 = await listOf(U), w2 = byId(l2, d.to);
+      seen6.linkGone = !!(w2.transferredFrom && w2.transferredFrom.gone === true);
+      const del2 = await call('/api/work/sessions/delete', U, { id: d.to });
+      seen6.del2 = del2.status; seen6.treeGone = !fs.existsSync(n.dir);
+      check('R616', L614.R616, seen6.oldRefused === 409 && seen6.del === 200 && !seen6.delTree && seen6.left && seen6.newRuns && seen6.stillLeft && seen6.linkGone && seen6.del2 === 200 && seen6.treeGone, JSON.stringify(seen6));
+      await call('/api/work/folders/delete', U, { id: folder });
+    }
+    { // R615: the writer fails: a plain handoff; a task the run left claimed gets a note naming the new session
+      const seen = {};
+      const n = await mk(U, 'r615 held');
+      const held = await chat(U, 'BOARDHOLD r615', { session: n.id });
+      const hold = JSON.parse((texts(held.events).match(/HOLD:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+      // the run's own automatic note ("run ended", R517) is written in the background as the run ends: wait for it, so the transfer's note is the latest
+      for (let i = 0; i < 40 && !/· run ended/.test(((await call('/api/board/task?id=' + hold.id, U)).data.task || {}).body || ''); i++) await sleep(200);
+      await setTr(U, n.id, [{ cls: 'me', text: 'r615 goal: hold the task' }, { cls: 'claude', text: 'r615 holding it' }]);
+      const t = await xfer(U, { session: n.id, focus: 'HANDOFFFAIL r615 focus' });
+      const d = t.data || {}, h = d.handoff || {}, txt = h.text || '';
+      seen.status = t.status; seen.by = h.by; seen.why = h.why;
+      seen.plain = { head: txt.startsWith('## Handoff (made without a model: '), goal: txt.includes('> r615 goal: hold the task'), focus: txt.includes('## Focus for this handoff\nHANDOFFFAIL r615 focus'), state: txt.includes('Branch: ' + n.branch) && /Uncommitted changes/.test(txt), started: d.started === true };
+      const task = (await call('/api/board/task?id=' + hold.id, U)).data || {};
+      seen.board = { held: hold.claimed === true, noted: (d.board || []).includes(hold.id), kind: task.handoff && task.handoff.kind, names: String(task.handoff && task.handoff.next || '').includes('r615 held (continued)'), state: String(task.handoff && task.handoff.state || '').includes(d.to) };
+      await runEnd(U, d.to, d.run);
+      check('R615', L614.R615, t.status === 200 && seen.by === 'plain' && /could not write it/.test(seen.why || '') && Object.values(seen.plain).every(Boolean) && seen.board.held && seen.board.noted && seen.board.kind === 'session transferred' && seen.board.names && seen.board.state, JSON.stringify(seen));
+      if (hold.id) await call('/api/board/delete', U, { id: hold.id });
+      await call('/api/work/sessions/delete', U, { id: d.to }); await call('/api/work/sessions/delete', U, { id: n.id });
+    }
+    { // R617: the refusals
+      const seen = {};
+      const n = await mk(U, 'r617 busy');
+      await setTr(U, n.id, [{ cls: 'me', text: 'r617 goal' }]);
+      const before = ((await listOf(U)).sessions || []).length;
+      const slow = chat(U, 'SLOW r617', { session: n.id }); await sleep(800);
+      const busyT = await xfer(U, { session: n.id }); seen.working = busyT.status; seen.workingWhy = busyT.data.error;
+      seen.madeNone = ((await listOf(U)).sessions || []).length === before;
+      await slow;
+      seen.other = (await xfer(A, { session: n.id })).status;
+      const e = await mk(U, 'r617 empty'); seen.empty = (await xfer(U, { session: e.id })).status;
+      const ok = await xfer(U, { session: n.id }); seen.first = ok.status;
+      const twice = await xfer(U, { session: n.id }); seen.twice = twice.status; seen.twiceWhy = twice.data.error;
+      seen.anon = (await xfer(null, { session: n.id })).status;
+      if (ok.data && ok.data.to) { await runEnd(U, ok.data.to, ok.data.run); await call('/api/work/sessions/delete', U, { id: ok.data.to }); }
+      for (const id of [n.id, e.id]) await call('/api/work/sessions/delete', U, { id });
+      check('R617', L614.R617, seen.working === 409 && /still working/.test(seen.workingWhy || '') && seen.madeNone && seen.other === 404 && seen.empty === 400 && seen.first === 200 && seen.twice === 409 && /transferred already/.test(seen.twiceWhy || '') && seen.anon === 401, JSON.stringify(seen));
+    }
+    { // R618: a Jcode PGM session (OpenRouter) transfers through its own provider and the new one runs Jcode PGM too
+      const seen = {};
+      const pv = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R618 or', apiKey: R591_KEY, pairs: [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic'], allowFallbacks: false }], shared: false })).data.provider || {};
+      const n = await mk(A, 'r618 jcode');
+      seen.pick = (await call('/api/model', A, { session: n.id, provider: pv.id, model: 'or/sonnet' })).status;
+      const first = await chat(A, 'r618 first run', { session: n.id });
+      seen.firstJcode = (first.events.find((x) => x.type === 'system' && x.subtype === 'init') || {}).harness === 'jcode';
+      await setTr(A, n.id, [{ cls: 'me', text: 'r618 goal: port it' }, { cls: 'claude', text: 'r618 half ported' }]);
+      fakeOr.calls.length = 0;
+      const t = await xfer(A, { session: n.id });
+      const d = t.data || {}, h = d.handoff || {}, call0 = fakeOr.calls[0] || { body: {}, headers: {} };
+      seen.status = t.status; seen.by = h.by;
+      seen.viaOr = { said: /^or says: /.test(h.text || '') && (h.text || '').includes('r618 goal: port it'), writer: JSON.stringify(call0.body.messages || []).includes('You are a handoff writer'), key: call0.headers.authorization === 'Bearer ' + R591_KEY, model: call0.body.model === 'anthropic/claude-sonnet-4.5' };
+      const l = await listOf(A), o = byId(l, n.id), w = byId(l, d.to);
+      seen.same = { provider: w.provider === pv.id && o.provider === pv.id, model: w.model === 'or/sonnet', harness: w.harness === 'jcode', tree: !!(w.worktree && w.worktree.path === n.dir) };
+      const end = await runEnd(A, d.to, d.run);
+      seen.run = { started: d.started === true, jcode: ((end.events || []).find((x) => x.type === 'system' && x.subtype === 'init') || {}).harness === 'jcode', cwd: evText(end.events).includes('cwd=' + n.dir) };
+      await call('/api/work/sessions/delete', A, { id: d.to }); await call('/api/work/sessions/delete', A, { id: n.id });
+      await call('/api/providers/remove', A, { id: pv.id });
+      check('R618', L614.R618, seen.pick === 200 && seen.firstJcode && t.status === 200 && seen.by === 'model' && Object.values(seen.viaOr).every(Boolean) && Object.values(seen.same).every(Boolean) && Object.values(seen.run).every(Boolean), JSON.stringify(seen));
+    }
+  }
+  // R619 (T-375): the page's parts of /transfer (static: there is no browser here; the hub side is R614-R618)
+  function r619Check() {
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), list = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');
+    const entry = (page.match(/\{ cmd: '\/transfer'[^\n]*\n/) || [''])[0];
+    const fnT = (page.match(/async function transferSession\([\s\S]*?\n\}\n/) || [''])[0], fnP = (page.match(/function paintTransfer\(\)[\s\S]*?\n\}\n/) || [''])[0];
+    const ask = (page.match(/const TRANSFER_ASK = '[^\n]*/) || [''])[0];
+    const icons = [...(fnT + fnP).matchAll(/\bic\(([^)]*)\)/g)].flatMap((m) => [...m[1].matchAll(/'([a-z0-9-]+)'/g)].map((x) => x[1])).filter((x) => x !== 'lead');
+    const seen = {
+      entry: /args: '\[focus\]'/.test(entry) && /hint: '/.test(entry) && /confirm: TRANSFER_ASK/.test(entry) && /local: \(a\) => transferSession\(a\)/.test(entry) && /same project and worktree/.test(entry),
+      ask: /handoff/.test(ask) && /fresh session/.test(ask) && /same project and worktree/.test(ask) && /switch to it/.test(ask),
+      modal: /if \(n\.confirm && n\.input\) return done\(field\.value\.trim\(\)\)/.test(page) && /field\.value = s\.prefill \|\| ''/.test(page),
+      route: /'\/api\/work\/sessions\/transfer'/.test(fnT) && /focus: words/.test(fnT) && /openWorkSession\(d\.to\)/.test(fnT) && /Transferring: writing the handoff/.test(fnT),
+      links: /'Transferred to '/.test(fnP) && /'Continued from '/.test(fnP) && /openWorkSession\(l\.id\)/.test(fnP) && /id="xferNote"/.test(page) && /paintTransfer\(\); \/\/ its transfer links/.test(page),
+      list: /transferred → /.test(list),
+      svg: icons.length >= 3 && icons.every((i) => page.includes('<symbol id="i-' + i + '"')) && !/\p{Extended_Pictographic}/u.test(entry + ask + fnT + fnP),
+    };
+    check('R619', L614.R619, Object.values(seen).every(Boolean), JSON.stringify(seen) + ' icons ' + icons.join(','));
   }
   // R606-R612 (T-372): a person's own OpenRouter key next to the team's (plans/pgm-accounts-keys-app.md section 2). The fake OpenRouter accepts
   // the team key, t-admin's own (R606_KEY) and t-user's own (R606_KEY_U) and says 401 to every other one.

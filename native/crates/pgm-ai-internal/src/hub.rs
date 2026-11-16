@@ -48,6 +48,10 @@ pub trait AiHub: Send + Sync {
     /// A Work run ended still holding board tasks it claimed (T-266): `{ account, run, session, project, branch, dir, tasks,
     /// reply, code }`. The program adds an automatic handoff to each it still holds (once per run and task). Default: nothing.
     fn run_left_claims(&self, _end: Value) {}
+    /// A Work session was transferred (T-375): `{ account, from, fromTitle, to, toTitle, branch, project, changes, tasks }`. The
+    /// program adds a handoff note naming the new session to each task in `tasks` its person's Claude still holds (once per
+    /// transfer and task). Returns the tasks it noted. Default: none.
+    fn session_handoff(&self, _v: Value) -> Vec<String> { vec![] }
     /// A notes tool, saved as `actor`.
     fn notes_tool(&self, name: &str, args: &Value, actor: &str) -> Value;
     /// A team (chat) tool for this account.

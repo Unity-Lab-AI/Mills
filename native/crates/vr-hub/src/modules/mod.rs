@@ -228,6 +228,29 @@ pub fn run_left_claims(hub: &Hub, end: Value) {
         }
     });
 }
+/// A Work session was transferred to a new one (T-375, `AiHub::session_handoff`): each task the old session's runs left
+/// claimed that its person's Claude still holds gets one handoff note naming the new session (done so far: the transfer and
+/// its handoff; state: branch, uncommitted changes, both sessions; next: go on in the new session). The claim is left as it
+/// is. Once per transfer and task. The tasks noted.
+pub fn session_handoff(hub: &Hub, v: Value) -> Vec<String> {
+    let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+    let key = format!("{}#agent", s("account")); let marker = format!("transfer {}", s("to"));
+    let mut state: Vec<String> = vec![];
+    if s("project").is_empty() { state.push("No project (the session's scratch folder)".into()); } else if s("branch").is_empty() { state.push(format!("Project {}", s("project"))); } else { state.push(format!("Branch `{}` of {}", s("branch"), s("project"))); }
+    if let Some(n) = v["changes"].as_u64() { state.push(if n == 0 { "no uncommitted changes in the worktree".to_string() } else { format!("{n} uncommitted change{} in the worktree (git status)", if n == 1 { "" } else { "s" }) }); }
+    state.push(format!("the work goes on in session {} (\"{}\"), continued from session {}", s("to"), s("toTitle"), s("from")));
+    let state = state.join("; ") + ".";
+    let mut out = vec![];
+    for id in v["tasks"].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
+        let make = |_t: &Value| board::Handoff {
+            done: format!("The Work session \"{}\" was transferred to a fresh session, \"{}\": it wrote a handoff of where things stand (goal, what is done, the state of the worktree, decisions, open problems, next steps), and the new session started from it.", s("fromTitle"), s("toTitle")),
+            state: state.clone(),
+            next: format!("Go on in the Work session \"{}\": it has the handoff{}. The claim was left as it was: renew it from there, or claim the task again once it lapses.", s("toTitle"), if v["sameTree"] == json!(true) { " and the same worktree" } else { "" }),
+            questions: String::new() };
+        if hub.mods.board.auto_handoff(id, &key, "session transferred", &marker, &make) { out.push(id.to_string()); }
+    }
+    out
+}
 /// A person went offline (and is not working): every claim they (or their Claude) hold gets one short automatic handoff,
 /// unless a handoff was left since that claim began. How many were added.
 pub fn offline_handoffs(hub: &Hub, user: &str) -> usize {

@@ -183,6 +183,9 @@
   #logRow { flex: 1; min-height: 0; display: flex; position: relative; } #logRow > #log { min-width: 0; }
   #queuePanel { flex: none; width: 18rem; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: .5rem .6rem; font-size: .8rem; display: flex; flex-direction: column; gap: .45rem; }
   #queuePanel[hidden] { display: none; }
+  .xferNote { display: flex; align-items: center; gap: .4rem; padding: .3rem .7rem; font-size: .82rem; border-bottom: 1px solid var(--line, #8883); }
+  .xferNote[hidden] { display: none; }
+  .xferNote button { padding: .05rem .45rem; font-size: .8rem; }
   .qBadge { margin-left: .35rem; background: var(--accent); color: var(--on-accent); border-radius: .7rem; padding: 0 .38rem; font-size: .7rem; font-weight: 600; }
   .qBadge[hidden] { display: none; }
   #queuePanel .qpHead { display: flex; align-items: baseline; gap: .45rem; } #queuePanel .qpSum { flex: 1; color: var(--muted); font-size: .74rem; }
@@ -1572,6 +1575,7 @@
         <button type="button" class="ghost" id="queueBtn" aria-expanded="false" aria-controls="queuePanel" title="Queued messages: see, copy or cancel what is still to go">Queue<span id="queueBadge" class="qBadge" hidden></span></button>
         <button type="button" class="ghost" id="agentsBtn" hidden aria-expanded="false" aria-controls="agentsPanel" title="Agent threads: what your agent and the others' say to each other, and your say in it">Agents<span id="agentsBadge" class="qBadge" hidden></span></button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
+      <div id="xferNote" class="xferNote" hidden role="note"></div>
       <div id="gitBox" hidden>
         <div class="gitHead"><b id="gitBranch">…</b><span id="gitAB" class="muted"></span><span class="grow"></span>
           <button type="button" class="ghost" id="gitUpdate" title="Bring the integration branch (or, in a session worktree, your own work branch) into this branch (worktree.js update)">Update</button>
@@ -2955,6 +2959,7 @@ function enqueue(message, restoring, first) { // first: back at the head of the 
 // the session list's every refresh (web/sessions.js): a message refused for the session limit goes when a slot frees
 function onSessionSlots(d) {
   queuePanel.render(); // the other sessions' queued counts are in this refresh
+  paintTransfer(); // its transfer links (T-375)
   if (!slotWait || busy || !(queue.length || sendNowMessage)) return;
   const s = SESSIONS.byId(SESSIONS.onScreen()), h = s && (((d && d.counts) || {}).perHost || {})[s.host];
   if (h && ((h.max && h.used >= h.max) || (h.maxPerProvider && ((h.providers || {})[s.provider] || 0) >= h.maxPerProvider))) return; // still full
@@ -3329,7 +3334,10 @@ function handleEvent(ev) {
 // ── Slash commands: "/" at the start of the Claude box lists the common ones. Most are passed through to
 // Claude Code exactly as typed (it understands them); a few act on VibeRoller itself ("here").
 const CLEAR_ASK = 'Clear this conversation? Claude starts fresh on your next message. The session, its worktree and its files stay as they are.';
+// /transfer (T-375): a handoff, then a fresh session that goes on from it (POST /api/work/sessions/transfer)
+const TRANSFER_ASK = 'Write a handoff of this session (its goal, what is done, the state of its worktree, decisions, open problems, next steps), start a fresh session with it in the same project and worktree, with the same AI, and switch to it. The new session picks up where this one left off; this one stays in the list, marked as transferred. Optional: what the handoff should stress or leave out.';
 const SLASH = [
+  { cmd: '/transfer', desc: 'Hand this session over to a fresh one: write a handoff, start a new session with it in the same project and worktree, and switch to it (frees the context, keeps the work going)', args: '[focus]', hint: 'Optional: what the handoff stresses or leaves out, e.g. "keep everything about the API, drop the CSS detour". Empty = the usual handoff.', confirm: TRANSFER_ASK, go: 'Transfer', local: (a) => transferSession(a) },
   { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context). With words after it, the summary follows them', args: '[focus]', hint: 'Optional: what the summary keeps or drops, e.g. "remove everything about X, keep all about Y and Z". Empty = the usual compact.' },
   { cmd: '/clear', desc: 'Clear the conversation: Claude starts fresh on your next message (the session, its worktree and its files stay)', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/clear', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
   { cmd: '/new', desc: 'Same as /clear: a fresh conversation in this session', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/new', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
@@ -3380,18 +3388,19 @@ function askCommand(s) {
     const box = $('cmdModal'), field = $('cmdField'), sel = $('cmdSel');
     $('cmdTitle').textContent = s.cmd; $('cmdErr').textContent = '';
     $('cmdText').textContent = n.confirm || s.desc || '';
-    field.hidden = !n.input; sel.hidden = !n.choices; field.value = '';
+    field.hidden = !n.input; sel.hidden = !n.choices; field.value = s.prefill || '';
     field.placeholder = n.input ? (n.input.hint || (n.input.required ? 'What it needs' : 'Optional')) : '';
     if (n.choices) { sel.textContent = ''; for (const c of n.choices) { const o = document.createElement('option'); o.value = o.textContent = c; sel.append(o); } }
-    $('cmdGo').textContent = n.confirm ? 'Yes, ' + s.cmd.slice(1) : 'Run';
+    $('cmdGo').textContent = s.go || (n.confirm ? 'Yes, ' + s.cmd.slice(1) : 'Run');
     const done = (v) => { box.hidden = true; $('cmdGo').onclick = $('cmdCancel').onclick = $('cmdCancelX').onclick = null; field.onkeydown = null; resolve(v); };
     $('cmdGo').onclick = () => {
+      if (n.confirm && n.input) return done(field.value.trim()); // a confirm with words (/transfer): the words, '' = none; cancel = null
       if (n.confirm) return done(true);
       if (n.choices) return done(sel.value);
       if (n.input && n.input.required && !field.value.trim()) { $('cmdErr').textContent = 'This one needs a few words.'; field.focus(); return; }
       done(field.value.trim());
     };
-    $('cmdCancel').onclick = $('cmdCancelX').onclick = () => done(n.confirm ? false : null);
+    $('cmdCancel').onclick = $('cmdCancelX').onclick = () => done(n.confirm && !n.input ? false : null);
     field.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('cmdGo').click(); if (e.key === 'Escape') $('cmdCancel').click(); };
     box.hidden = false;
     setTimeout(() => (n.input ? field : n.choices ? sel : $('cmdGo')).focus(), 0);
@@ -3505,6 +3514,46 @@ function newChatNow() {
   if (usageData) { usageData.context = null; paintUsage(); } // a new session starts with an empty context window
   sys('New conversation — Claude starts fresh on your next message.');
 };
+
+// /transfer [focus] (T-375): asked first (what happens, the focus box), then the hub writes the handoff, makes the new session in the
+// same project and worktree with the same AI, starts it with the handoff, and the page switches to it. A hub without the route: 404, said.
+let transferring = false;
+async function transferSession(focus) {
+  const s0 = SLASH.find((x) => x.cmd === '/transfer');
+  const words = await askCommand({ ...s0, prefill: String(focus || '').trim() });
+  if (words === null || words === false) return;
+  if (busy) return sys('Claude is still working in this session: wait for its reply (or stop it), then transfer it.', true);
+  if (transferring) return;
+  transferring = true;
+  const from = SESSIONS.onScreen(), line0 = sys('Transferring: writing the handoff and starting the new session…');
+  line0.prepend(ic('refresh', 'lead'));
+  try {
+    if (currentDirty) await saveCurrent(); // the hub writes the handoff from the conversation as it is now
+    const d = await json('/api/work/sessions/transfer', { method: 'POST', body: JSON.stringify({ session: from, focus: words }) });
+    line0.textContent = ''; line0.append(ic('check', 'lead'), 'Transferred to "' + d.title + '"' + (d.handoff && d.handoff.by === 'plain' ? ' (the handoff was made without a model: ' + (d.handoff.why || 'no model') + ')' : '') + '. Opening it…');
+    await SESSIONS.refresh();
+    await openWorkSession(d.to);
+    if (d.handoff && d.handoff.by === 'plain') sys('This handoff was made without a model (' + (d.handoff.why || 'no model') + '): it has the conversation in short and the worktree\'s state.');
+    if (d.queued) sys((d.error || 'Over your session limit.') + ' The handoff waits in this session and goes as soon as a slot frees.', true);
+    else if (!d.started && d.error) sys('The new session did not start: ' + d.error, true);
+  } catch (e) { line0.classList.add('bad'); line0.textContent = 'Could not transfer this session: ' + e.message; }
+  finally { transferring = false; paintTransfer(); }
+}
+// "Transferred to …" on the old session, "Continued from …" on the new one, each with a link to the other (T-375)
+function paintTransfer() {
+  const box = $('xferNote'); if (!box) return;
+  const s = typeof SESSIONS !== 'undefined' ? SESSIONS.byId(SESSIONS.onScreen()) : null;
+  const l = s && (s.transferredTo || s.transferredFrom); box.textContent = '';
+  if (!l) { box.hidden = true; return; }
+  const to = !!s.transferredTo;
+  box.append(ic(to ? 'share' : 'back'), to ? 'Transferred to ' : 'Continued from ');
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.textContent = l.title || 'Session';
+  b.title = to ? 'Open the session this one was handed over to' : 'Open the session this one continues (read it; it runs no more when it gave its worktree on)';
+  if (l.gone) { b.disabled = true; b.title = 'That session was deleted'; } else b.onclick = () => openWorkSession(l.id);
+  box.append(b);
+  if (to && s.gaveTree) box.append(' (it works in this session\'s worktree now; this one is read-only)');
+  box.hidden = false;
+}
 
 // Planner mode (T-275): a planner session is made on the hub (mode "planner": plan-only tools, enforced there); the badge shows while
 // it is open, in the header of the conversation and over the input box. "Leave planner" goes back to the normal session; a session
@@ -3714,7 +3763,7 @@ async function openWorkSession(id) {
     log.innerHTML = ''; queue.length = 0; sendNowMessage = null; queuePanel.render(); transcript = []; transcriptFrom = 0; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
     curRun = null; runEnded = false; fresh = false; slotWait = false; hideThinking(); setBusy(false);
     for (const q of openQuestions.values()) { try { q.stop(); } catch {} } openQuestions.clear(); openPlans.clear();
-    $('convTitle').textContent = SESSIONS.titleOf(s);
+    $('convTitle').textContent = SESSIONS.titleOf(s); paintTransfer();
     $('input').value = SESSIONS.draftOf(id); updateStopButton();
     me.project = s.project; renderProjects();
     const mv = s.provider && s.provider !== 'host' ? s.provider + '|' + (s.model || '') : s.model || ''; $('model').value = mv; if ($('model').selectedIndex < 0) $('model').value = '';
