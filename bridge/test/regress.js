@@ -8922,7 +8922,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const bin = process.env.VR_TEST_JCODEPGM || '';
       if (!bin || !fs.existsSync(bin)) skip('R633', 'a real Jcode PGM Server with the hub: create + message, a server run streams its answer', bin ? 'VR_TEST_JCODEPGM points at nothing (' + bin + ')' : 'VR_TEST_JCODEPGM is not set (the path of a jcodepgm binary with stage 3)');
       else {
-        const port = await freePort(PORT + 90), stateDir = path.join(SCRATCH, 'r633-pgm-state'); fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+        // a free port, never 7783-7792 (the PGM products and dev's Jcode PGM Server live there)
+        let port = await freePort(PORT + 90); if (port >= 7783 && port <= 7792) port = await freePort(7800);
+        const stateDir = path.join(SCRATCH, 'r633-pgm-state'); fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
         const log = []; const ps = spawn(bin, ['server', '--listen', '127.0.0.1:' + port, '--hub', H, '--hub-secret-file', secretFile, '--state', stateDir, '--openrouter-base', `http://127.0.0.1:${OLLAMA_PORT}/orapi`, '--quiet-log'], { stdio: ['ignore', 'pipe', 'pipe'] });
         ps.stdout.on('data', (d) => log.push(String(d))); ps.stderr.on('data', (d) => log.push(String(d)));
         try {
