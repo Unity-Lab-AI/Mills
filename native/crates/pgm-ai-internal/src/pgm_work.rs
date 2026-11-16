@@ -85,7 +85,7 @@ fn repo_of(w: &Work, wd: &Wt) -> String {
 /// Where a PGM session runs now, in words: "running in jcode on <device>" / "running on the server".
 pub fn where_text(state: &Value) -> String {
     let r = &state["runner"];
-    let dev = { let d = s(r, "device"); if d.is_empty() { s(state, "device") } else { d } };
+    let dev = [s(r, "label"), s(r, "device"), s(state, "device")].into_iter().find(|d| !d.is_empty()).unwrap_or_default();
     if s(r, "kind") == "device" || (r.is_null() && !dev.is_empty()) { format!("running in jcode on {}", if dev.is_empty() { "your computer".to_string() } else { dev }) } else { "running on the server".into() }
 }
 /// A session's state from an answer that has it as `session` or at its top level.
@@ -120,14 +120,16 @@ pub fn map_event(ev: &Value, skip: &mut Option<String>) -> Vec<Value> {
 /// The line for the server's answer to a message (None = nothing to say; Err = the plain refusal).
 pub fn routed_line(st: u16, v: &Value) -> Result<Option<String>, String> {
     if !(200..300).contains(&st) { return Err(err_text(v, st)); }
-    let dev = s(v, "device");
+    // a device as people know it: its label (the host), else its name
+    let name = |o: &Value| { let l = s(o, "label"); if l.is_empty() { s(o, "device") } else { l } };
+    let dev = name(v);
     Ok(match s(v, "routed").as_str() {
         "device" => Some(format!("Sent to jcode on {}: it works on it there, and its turns appear here.", if dev.is_empty() { "your computer".into() } else { dev })),
         _ => {
             let h = &v["handover"];
             let mut l: Vec<String> = vec![];
             if h.is_object() {
-                let d = { let x = s(h, "device"); if x.is_empty() { dev.clone() } else { x } };
+                let d = { let x = name(h); if x.is_empty() { dev.clone() } else { x } };
                 l.push(format!("jcode on {} handed its unfinished work over: committed and pushed {}{}; the server continues from it.", if d.is_empty() { "your computer".into() } else { d }, s(h, "branch"), { let c = s(h, "commit"); if c.is_empty() { String::new() } else { format!(" at {}", c.chars().take(12).collect::<String>()) } }));
             }
             if s(v, "from") == "last-push" { l.push({ let n = s(v, "note"); if n.is_empty() { "The newest work is on your computer, which is offline; the server continued from the last push.".into() } else { cap_first(&n) } }); }
@@ -140,7 +142,8 @@ fn cap_first(t: &str) -> String { let mut c = t.chars(); match c.next() { Some(f
 
 // ---------- the runs that follow a PGM session ----------
 /// A run's controls: messages for it to send, and Stop.
-struct Ctl { inbox: mpsc::UnboundedSender<String>, stop: Arc<Notify> }
+/// A message is `{text, target, pair, mcp, systemPrompt}` (F.3 / F.8 message body without user, worktree, project, branch).
+struct Ctl { inbox: mpsc::UnboundedSender<Value>, stop: Arc<Notify> }
 static CTL: LazyLock<Mutex<HashMap<String, Ctl>>> = LazyLock::new(Mutex::default);
 
 /// Stop (the page's Stop, the liveness check): the server is told, and the run that follows the session ends.
@@ -199,7 +202,7 @@ fn frames(sv: Srv, user: String, pid: String, after: u64) -> mpsc::UnboundedRece
 /// One run following PGM session `pid` for Work session `sx`, until its turn is over (or Stop): the history since `after`, then
 /// each message from the inbox sent, and the server's frames shown as they come.
 #[allow(clippy::too_many_arguments)]
-async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, pid: String, mut after: u64, mut inbox: mpsc::UnboundedReceiver<String>, stopper: Arc<Notify>, extra: (String, String, String)) {
+async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, pid: String, mut after: u64, mut inbox: mpsc::UnboundedReceiver<Value>, stopper: Arc<Notify>, extra: (String, String, String)) {
     let w = hub.work().clone();
     let (dir, project, branch) = extra;
     let emit = |ev: Value| w.on_event(&*hub, &a, &sx, ev, "openrouter");
@@ -239,8 +242,9 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
         tokio::select! {
             _ = stopper.notified() => { set_pgm(&w, &a, &sx, &pid, after); return end(&hub, &a, &sx, &run, &pid, after, Value::Null); }
             m = inbox.recv(), if ready => {
-                let Some(text) = m else { continue };
-                let body = json!({ "user": user, "text": text, "worktree": dir, "project": project, "branch": branch });
+                let Some(mut body) = m else { continue };
+                let text = s(&body, "text");
+                for (k, v) in [("user", &user), ("worktree", &dir), ("project", &project), ("branch", &branch)] { body[k] = json!(v); }
                 match call(&sv, reqwest::Method::POST, &format!("/__srv/sessions/{}/message", q(&pid)), Some(&body), Duration::from_secs(600)).await {
                     Err(e) => { line(error(format!("The Jcode PGM Server could not be reached: {e}."))); if !is_running { return end(&hub, &a, &sx, &run, &pid, after, json!(1)); } }
                     Ok((st, v)) => match routed_line(st, &v) {
@@ -265,7 +269,7 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
                     }
                     continue;
                 }
-                if ty == "handover" { line(info(format!("The server asked jcode{} to hand its unfinished work over (stage, commit, push).", { let d = s(&f, "device"); if d.is_empty() { String::new() } else { format!(" on {d}") } }))); continue; }
+                if ty == "handover" { line(info(format!("The server asked jcode{} to hand its unfinished work over (stage, commit, push).", { let d = { let l = s(&f, "label"); if l.is_empty() { s(&f, "device") } else { l } }; if d.is_empty() { String::new() } else { format!(" on {d}") } }))); continue; }
                 batch.push(f);
             }
             _ = tick => {
@@ -299,7 +303,7 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
     }
     end(&hub, &a, &sx, &run, &pid, after, json!(0))
 }
-fn sent_any_pending(inbox: &mpsc::UnboundedReceiver<String>) -> bool { !inbox.is_empty() }
+fn sent_any_pending(inbox: &mpsc::UnboundedReceiver<Value>) -> bool { !inbox.is_empty() }
 /// The run ends: its controls go first (a message that comes now starts a new run), then the run itself.
 fn end(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, run: &str, _pid: &str, _after: u64, code: Value) {
     CTL.lock().unwrap_or_else(|e| e.into_inner()).remove(run);
@@ -307,12 +311,14 @@ fn end(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, run: &str, _pid: &str, _after
 }
 
 /// Starts a run following the session's PGM session (or joins the one going) and hands it `message` (None = only follow).
-/// Some((run, its stream)) ; None = the session runs something else.
+/// `message` makes the message from the run's own secret (its MCP servers). Some((run, its stream)) ; None = the session runs
+/// something else.
 #[allow(clippy::too_many_arguments)]
-fn begin(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, sv: &Srv, prov: &str, pid: &str, after: u64, wd: (String, String, String), message: Option<String>, started_by: &str, banner: Vec<String>) -> Option<(String, mpsc::UnboundedReceiver<Result<Bytes, String>>)> {
+fn begin(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, sv: &Srv, prov: &str, pid: &str, after: u64, wd: (String, String, String), message: Option<&dyn Fn(&str) -> Value>, started_by: &str, banner: Vec<String>) -> Option<(String, mpsc::UnboundedReceiver<Result<Bytes, String>>)> {
     let w = hub.work();
     for _ in 0..20 {
-        let (run, rx, new) = w.pgm_begin(a, sx, prov, &wd.1, &wd.2, &wd.0, pid, started_by)?;
+        let (run, rx, new, secret) = w.pgm_begin(a, sx, prov, &wd.1, &wd.2, &wd.0, pid, started_by)?;
+        let message = message.map(|f| f(&secret));
         w.emit_key(&sx.key, json!({ "type": "bridge_run", "id": run, "session": sx.sid }));
         if new {
             let (itx, irx) = mpsc::unbounded_channel(); let stopper = Arc::new(Notify::new());
@@ -333,7 +339,7 @@ fn begin(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, sv: &Srv, prov: &str, pid: 
 
 /// POST /api/chat on a PGM session (called by work::chat once the session, its worktree and the provider are settled).
 #[allow(clippy::too_many_arguments)]
-pub async fn chat(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, prov: &Value, state_model: &str, wd: &Wt, text: &str, fb_line: Option<&str>, started_by: &str, srv: (String, String)) -> Resp {
+pub async fn chat(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, prov: &Value, state_model: &str, wd: &Wt, text: &str, target: &str, fb_line: Option<&str>, started_by: &str, srv: (String, String)) -> Resp {
     let w = hub.work(); let sv = Srv { url: srv.0, secret: srv.1 };
     let (pair, label) = match crate::openrouter::pgm_work_pair(&**hub, &a.username, prov, state_model) { Ok(x) => x, Err(e) => return one_line(error(e)) };
     let (mut pid, after) = pgm_of(w, a, sx);
@@ -356,7 +362,9 @@ pub async fn chat(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, prov: &Value, stat
             Err(e) => return one_line(error(format!("The Jcode PGM Server could not be reached: {e}. Pick a Claude in the dropdown meanwhile, or ask an admin to start it."))),
         }
     }
-    match begin(hub, a, sx, &sv, &s(prov, "id"), &pid, after, (dir, project, wd.branch.clone()), Some(text.to_string()), started_by, banner) {
+    // the message as F.3 / F.8 take it: a run on the server gets the hub's MCP servers (this run's own secret) and system prompt
+    let mk = |secret: &str| { let (mcp, prompt) = w.pgm_extras(a, sx, wd, secret); json!({ "text": text, "target": target, "pair": pair, "mcp": mcp, "systemPrompt": prompt }) };
+    match begin(hub, a, sx, &sv, &s(prov, "id"), &pid, after, (dir, project, wd.branch.clone()), Some(&mk), started_by, banner) {
         Some((_, rx)) => Work::stream_of(rx),
         None => answer(409, json!({ "error": "Claude is already working. Stop it first." })),
     }

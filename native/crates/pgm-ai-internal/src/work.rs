@@ -640,20 +640,24 @@ impl Work {
     /// A run for session `sx` that follows the PGM session `pgm` (its events come from the server). When a run of that same
     /// PGM session is going already, it is joined: its stream goes to the new caller from now on (Some((id, rx, false))).
     /// None = the session runs something else (a run of its own here).
-    pub(crate) fn pgm_begin(&self, a: &Account, sx: &Sx, prov: &str, project: &str, branch: &str, dir: &str, pgm: &str, started_by: &str) -> Option<(String, mpsc::UnboundedReceiver<Result<Bytes, String>>, bool)> {
+    /// Also the run's own secret (its MCP relays' credentials, T-308: the server's run gets the hub's MCP servers with it).
+    pub(crate) fn pgm_begin(&self, a: &Account, sx: &Sx, prov: &str, project: &str, branch: &str, dir: &str, pgm: &str, started_by: &str) -> Option<(String, mpsc::UnboundedReceiver<Result<Bytes, String>>, bool, String)> {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(r) = runs.get_mut(&sx.key) {
             if r.pgm != pgm || r.pgm.is_empty() { return None; }
             r.tx = tx; r.last = now_ms();
-            return Some((r.id.clone(), rx, false));
+            return Some((r.id.clone(), rx, false, r.secret.clone()));
         }
-        let id = pgm_core_internal::crypto::random_hex(8);
-        runs.insert(sx.key.clone(), Run { journal: Some(sessions::journal_file(a, sx)), id: id.clone(), tx, pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: prov.into(), project: project.into(), branch: branch.into(), started: now_ms(), secret: pgm_core_internal::crypto::random_hex(24), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if sx.primary { String::new() } else { sx.sid.clone() }, started_by: started_by.into(), machines: Vec::new(), dir: dir.into(), tasks: Vec::new(), pgm: pgm.into() });
+        let (id, secret) = (pgm_core_internal::crypto::random_hex(8), pgm_core_internal::crypto::random_hex(24));
+        runs.insert(sx.key.clone(), Run { journal: Some(sessions::journal_file(a, sx)), id: id.clone(), tx, pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: prov.into(), project: project.into(), branch: branch.into(), started: now_ms(), secret: secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if sx.primary { String::new() } else { sx.sid.clone() }, started_by: started_by.into(), machines: Vec::new(), dir: dir.into(), tasks: Vec::new(), pgm: pgm.into() });
         drop(runs);
         self.busy_changed.notify_one();
-        Some((id, rx, true))
+        Some((id, rx, true, secret))
     }
+    /// What a run on the Jcode PGM Server gets as the hub's own Work runs do: the MCP servers (board, team, PC tools, with the
+    /// run's own secret) and the system prompt (the laws, the person's lines, the worktree).
+    pub(crate) fn pgm_extras(&self, a: &Account, sx: &Sx, wd: &Wt, secret: &str) -> (Value, String) { (self.mcp_json(a, sx, secret), self.system_prompt(a, wd, None)) }
     /// The PGM session the run of this session follows ("" = none, or a run of its own).
     pub(crate) fn pgm_run_of(&self, key: &str) -> String { self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(key).map(|r| r.pgm.clone()).unwrap_or_default() }
     /// The liveness check of a run (as `chat` starts for its own runs): a ping every 15 s, and a run silent for stallAfter ends.
@@ -998,7 +1002,9 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
 
 ---
 {ctx}") };
-        return crate::pgm_work::chat(hub, a, &sx, &prov, &state_model0, &wd, &text, fb_line.as_deref(), &test_started_by(&b).unwrap_or_else(|| a.username.clone()), srv).await;
+        // target "server" = continue on the server even while jcode on the person's computer has it (it hands its work over first)
+        let target = if s(&b, "target") == "server" { "server" } else { "auto" };
+        return crate::pgm_work::chat(hub, a, &sx, &prov, &state_model0, &wd, &text, target, fb_line.as_deref(), &test_started_by(&b).unwrap_or_else(|| a.username.clone()), srv).await;
     }
     let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else if kind == crate::openrouter::KIND { "openrouter".to_string() } else { String::new() };
     // a Claude session lives where it ran (relayed runs run here, on this hub); a Jcode PGM host's, on that host
