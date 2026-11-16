@@ -722,13 +722,20 @@
   #settings .setBody label.setRow > input[type="number"] { width: 7rem; justify-self: end; }
   #settings .slider { grid-template-columns: minmax(8rem, 13rem) 1fr 2.4rem; }
   #settings .slider > span:last-child { text-align: right; font-size: .8rem; color: var(--muted); }
-  .setSave { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: .6rem; margin: 0 -1.1rem; padding: .65rem 1.1rem; border-top: 1px solid var(--line); background: var(--panel); }
-  @media (min-width: 861px) { .setBox:not(.searching) .hasNav .setSave { margin-left: -12.6rem; padding-left: 12.6rem; } } /* under the section list too: the bar spans the box */
+  /* T-378: the Save bar (App, Sound & voice) is the box's own footer, under the scrolling body; web/profile.js hides it on the other tabs */
+  .setSave { flex: none; display: flex; align-items: center; gap: .6rem; padding: .65rem 1.1rem; border-top: 1px solid var(--line); background: var(--panel); border-radius: 0 0 12px 12px; }
+  .setSave[hidden] { display: none; }
+  /* Downloads: a window of its own (T-378), laid out like Settings */
+  #downloads .setBox { width: min(760px, 96vw); max-height: 86vh; }
+  #downloads .bar > span { display: inline-flex; align-items: center; font-size: .95rem; }
+  #downloads .setBody { flex: 1; min-height: 0; padding: 1rem 1.1rem; }
+  #downloads .dlJcode { display: flex; flex-direction: column; gap: .4rem; padding: .3rem 0 .5rem; }
+  #downloads .dlJcode + .dlJcode { border-top: 1px dashed var(--line); padding-top: .7rem; }
   .sfOut { display: none !important; }
   .setBox.searching #profilePreview, .setBox.searching .setNav { display: none; }
   .setBox.searching .setTabs button.on { background: transparent; color: var(--muted); box-shadow: none; }
   @media (max-width: 860px) { .setNav { display: none; } #settings [data-setpane].hasNav { display: flex; flex-direction: column; } }
-  @media (max-width: 700px) { #settings .setBox { width: 100vw; height: 100dvh; max-height: 100dvh; } #settings .setBody { padding: .8rem .8rem 0; } .setSave { margin: 0 -.8rem; padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom)); } }
+  @media (max-width: 700px) { #settings .setBox { width: 100vw; height: 100dvh; max-height: 100dvh; } #settings .setBody, #downloads .setBody { padding: .8rem .8rem 0; } .setSave { padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom)); border-radius: 0; } }
   @media (max-width: 560px) {
     #settings .setBody label.setRow { grid-template-columns: 1fr; }
     #settings .setBody label.setRow > input[type="number"] { justify-self: start; }
@@ -1254,12 +1261,14 @@
   <div class="box setBox">
     <!-- T-318: the title, a filter over every tab's settings (web/profile.js SETFIND) and Close (Escape too) -->
     <div class="bar"><span>Settings</span><input id="setFind" type="search" placeholder="Find a setting…" aria-label="Find a setting" spellcheck="false" autocomplete="off"><button class="ghost" id="closeSettings"><svg class="ic lead"><use href="#i-close"/></svg>Close</button></div>
-    <!-- four tabs (web/profile.js): Profile = what others see (user settings); App = how VibeRoller behaves for you
-         (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons;
-         Downloads = the native applications (Vibe Roller Desktop, Vibe Roller AI Host) for Windows and Linux, and how
-         each one stays up to date. Each tab is made of groups (.setGroup: a heading, one line on what is inside, the
-         controls); a tab with three or more groups gets a sticky list of them on wide screens (web/profile.js). -->
-    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button><button type="button" class="ghost" data-settab="downloads"><svg class="ic lead"><use href="#i-download"/></svg>Downloads</button></div>
+    <!-- five tabs (web/profile.js, T-378), all about your own account: Profile = what others see; App = how VibeRoller
+         looks and behaves for you; Sound & voice = sounds, read-aloud, calls; AI = whose AI answers you and your own AIs
+         and AI hosts; Connections = what connects to your account from outside (your API key and tools, signed-in
+         devices, your machines, Forgejo). App and Sound & voice are saved with one Save bar at the bottom (saved to your
+         account, so they follow you to every browser); the other tabs save as you go. Downloads is a window of its own
+         (#downloads). Each tab is made of groups (.setGroup: a heading, one line on what is inside, the controls); a tab
+         with three or more groups gets a sticky list of them on wide screens (web/profile.js). -->
+    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App</button><button type="button" class="ghost" data-settab="sound"><svg class="ic lead"><use href="#i-speaker"/></svg>Sound &amp; voice</button><button type="button" class="ghost" data-settab="ai"><svg class="ic lead"><use href="#i-bot"/></svg>AI</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button></div>
     <div class="setBody">
      <div id="setNone" class="setHint" hidden>No setting matches that. Try another word, or clear the box to see every tab.</div>
      <div data-setpane="profile">
@@ -1271,22 +1280,9 @@
       </section>
       <div id="profileBox"></div>
      </div>
-     <div data-setpane="app" hidden>
-      <section class="setGroup" id="sgSounds"><h3>Sounds</h3><p class="setHint">A short sound for each kind of news, each with its own volume; ▷ plays it in the style picked below.</p>
-       <label class="chk"><input type="checkbox" id="setSound"><span>Sound when a chat message arrives</span></label>
-       <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-       <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-       <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-       <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
-       <label class="setRow"><span>Sound style</span><select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
-      </section>
-      <section class="setGroup" id="sgAsk"><h3>When the AI asks</h3><p class="setHint">Off: the AI waits for you as long as it takes. The alert sound has its own volume under Sounds.</p>
-       <label class="chk"><input type="checkbox" id="setAskAuto"><span>If I do not respond, use the recommended answers<small>The ones marked "chosen by default".</small></span></label>
-       <label class="setRow"><span>…after this many minutes</span><input type="number" id="setAskMin" min="1" max="1440" step="1"></label>
-       <label class="chk"><input type="checkbox" id="setAskActivity"><span>Any activity on the page makes it wait for me again<small>While a question is open: a click, a key, coming back to the window.</small></span></label>
-       <label class="chk"><input type="checkbox" id="setAskTts"><span>Say "User action required" and the question aloud<small>Needs the text to speech master switch under Read aloud; Do not disturb mutes it.</small></span></label>
+     <div data-setpane="app" data-saves hidden>
+      <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
+       <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
       </section>
       <section class="setGroup" id="sgWork"><h3>Chat and Work</h3><p class="setHint">How conversations behave on your screen.</p>
        <label class="chk"><input type="checkbox" id="setToasts"><span>Floating pop-ups for new chat messages while in Work</span></label>
@@ -1296,6 +1292,33 @@
        <label class="setRow"><span>Auto-save Claude sessions to Past sessions</span><select id="setAutosave">
         <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
         <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
+      </section>
+      <section class="setGroup"><h3>My projects</h3><p class="setHint">The projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.</p>
+        <div id="projBox" class="apiBox"></div></section>
+      <section class="setGroup" id="sgAsk"><h3>When the AI asks</h3><p class="setHint">Off: the AI waits for you as long as it takes. The alert sound has its own volume under Sounds.</p>
+       <label class="chk"><input type="checkbox" id="setAskAuto"><span>If I do not respond, use the recommended answers<small>The ones marked "chosen by default".</small></span></label>
+       <label class="setRow"><span>…after this many minutes</span><input type="number" id="setAskMin" min="1" max="1440" step="1"></label>
+       <label class="chk"><input type="checkbox" id="setAskActivity"><span>Any activity on the page makes it wait for me again<small>While a question is open: a click, a key, coming back to the window.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setAskTts"><span>Say "User action required" and the question aloud<small>Needs the text to speech master switch under Read aloud; Do not disturb mutes it.</small></span></label>
+      </section>
+      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. She is off until you turn her on here.Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
+       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <button type="button" id="duReset" title="Back to herself: her default look, a fresh one filmed; where she stands goes back to the middle">Reset</button> <span id="duState" class="status"></span></span></div>
+       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
+       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
+      </section>
+      <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
+      <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
+     </div>
+     <div data-setpane="sound" data-saves hidden>
+      <section class="setGroup" id="sgSounds"><h3>Sounds</h3><p class="setHint">A short sound for each kind of news, each with its own volume; ▷ plays it in the style picked below.</p>
+       <label class="chk"><input type="checkbox" id="setSound"><span>Sound when a chat message arrives</span></label>
+       <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>@ mention / private</span><input type="range" id="volMention" min="0" max="100"><button type="button" class="ghost" data-test="mention" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Reply to you</span><input type="range" id="volReply" min="0" max="100"><button type="button" class="ghost" data-test="reply" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Incoming call</span><input type="range" id="volCall" min="0" max="100"><button type="button" class="ghost" data-test="call" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
+       <label class="setRow"><span>Sound style</span><select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
       </section>
       <section class="setGroup" id="sgSpeech"><h3>Read aloud</h3><p class="setHint">Everything VibeRoller says out loud: chat read-aloud and Unity's voice.</p>
        <label class="chk"><input type="checkbox" id="setTtsAll"><span><b>Text to speech</b>: the master switch<small>Off = silence, whatever the switches below say.</small></span></label>
@@ -1316,20 +1339,8 @@
        <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
        <label class="chk"><input type="checkbox" id="clipAuto"><span>Auto-play incoming voice clips<small>Queued together with read-aloud.</small></span></label>
       </section>
-      <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
-       <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
-      </section>
-      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
-       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <button type="button" id="duReset" title="Back to herself: her default look, a fresh one filmed; where she stands goes back to the middle">Reset</button> <span id="duState" class="status"></span></span></div>
-       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
-       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
-      </section>
-      <!-- one Save for the whole tab, always in reach at the bottom of the box -->
-      <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
-      <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
-      <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
      </div>
-     <div data-setpane="connections" hidden>
+     <div data-setpane="ai" hidden>
       <section class="setGroup"><h3>AI source</h3><p class="setHint">Whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).</p>
         <div id="srcBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
@@ -1338,6 +1349,8 @@
         <div id="orBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
         <div id="hostBox" class="apiBox"></div></section>
+     </div>
+     <div data-setpane="connections" hidden>
       <section class="setGroup"><h3>API access</h3><p class="setHint">Your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.</p>
         <div id="apiBox" class="apiBox"></div>
         <h4 class="apiSub">Connect a tool</h4><p class="setHint">Ready-to-paste setups for the tools people use, with this hub&#39;s address and your model filled in. The key itself is filled in only right after you make one; otherwise the setups say &lt;your key&gt;. A provider that is a Claude subscription login serves Claude Code only; other tools need a provider with an API key (the person who shares it can tell).</p>
@@ -1348,16 +1361,23 @@
         <div id="machBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My Forgejo</h3><p class="setHint">Your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.</p>
         <div id="fjBox" class="apiBox"></div></section>
-      <section class="setGroup"><h3>My projects</h3><p class="setHint">The projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.</p>
-        <div id="projBox" class="apiBox"></div></section>
      </div>
-     <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
-     <div data-setpane="downloads" hidden>
-      <section class="setGroup"><h3>Staying up to date</h3><p class="setHint">This page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</p></section>
+    </div>
+    <!-- one Save for App and Sound & voice (the panes marked data-saves), always in reach at the bottom of the box -->
+    <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
+  </div>
+</div>
+<!-- Downloads (T-378: its own window, no longer a Settings tab): VibeRoller (the native app and the AI host, pre-built
+     by the Rust hub, vr-hub downloads.rs), Jcode PGM and Jcode PGM Desktop, the team's other products (/api/releases),
+     the chat app from the browser and how everything stays up to date. Every Download button opens it. -->
+<div id="downloads" class="modal" hidden>
+  <div class="box setBox dlBox">
+    <div class="bar"><span><svg class="ic lead"><use href="#i-download"/></svg>Downloads</span><button class="ghost" id="closeDownloads"><svg class="ic lead"><use href="#i-close"/></svg>Close</button></div>
+    <div class="setBody">
       <div id="dlBody"></div>
       <section class="setGroup"><h3>VibeRoller Chat app from the browser</h3><p class="setHint">The chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).</p>
         <div id="appBox" class="apiBox"></div></section>
-     </div>
+      <section class="setGroup"><h3>Staying up to date</h3><p class="setHint">This page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</p></section>
     </div>
   </div>
 </div>
@@ -1745,12 +1765,12 @@ const store = {
 };
 let me = null;               // { username, display, admin, models, ... } from /api/check
 let USER_NAME = 'you';       // display name of whoever is signed in
-if (PRODUCT) { // a product's page: its name, only its screens on the menu, no Downloads / Connections (those are the hub's)
+if (PRODUCT) { // a product's page: its name, only its screens on the menu, no Downloads / AI / Connections (those are the hub's)
   document.title = PRODUCT.name; $('title').textContent = PRODUCT.name;
   $('loginHint').textContent = 'Sign in with your VibeRoller username and password. The first time, your ' + PRODUCT.name + ' account is made from it; after that it is its own.';
   for (const [s, id] of Object.entries({ shell: 'goWork', room: 'goChat', board: 'goBoard', cal: 'goCal', notes: 'goNotes', library: 'goFiles', assist: 'goAssist', workflows: 'goWorkflows' })) if (!PRODUCT.screens.includes(s)) $(id).hidden = true;
   $('goDownloads').hidden = true;
-  for (const t of ['connections', 'downloads']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
+  for (const t of ['ai', 'connections']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
 } else if ('__MILLS_SERVED__' === 'hub') $('menuProducts').hidden = false; // the hub's own page (the hub fills this in; SERVED_BY_HUB is defined further down): the products it serves
 // T-377: a menu section whose tiles are all hidden (Agents off, no Admin, a product's page …) hides with them; it follows
 // every later show / hide of a tile by itself
@@ -5984,13 +6004,17 @@ document.addEventListener('keydown', (e) => {
 });
 let settingsFrom = null; // the button Settings came out of (it goes back into it)
 document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = () => { settingsFrom = b; openSettings(); genieOut($('settings').querySelector('.box'), b); }; });
-// ── Downloads (Settings → Downloads): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by the
-// hub from the code it runs. Every Download button (menu, Work's bar, the chat app) opens Settings on this tab. ──
+// ── Downloads (T-378: a window of its own): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by
+// the hub from the code it runs, then Jcode PGM and the team's other products. Every Download button (menu, Work's bar,
+// the chat app) opens it; Close, a click beside it and Escape close it, back into its button. ──
+let downloadsFrom = null;
 function openDownloads() {
-  openSettings();
-  if (typeof PROFILE !== 'undefined') PROFILE.tab('downloads');
+  $('downloads').hidden = false;
   renderDownloads();
 }
+$('closeDownloads').onclick = () => { const from = downloadsFrom; downloadsFrom = null; genieIn($('downloads').querySelector('.box'), from, () => { $('downloads').hidden = true; }); };
+$('downloads').onclick = (e) => { if (e.target.id === 'downloads') $('closeDownloads').click(); };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.defaultPrevented && !$('downloads').hidden && !document.querySelector('.vrMenu')) $('closeDownloads').click(); });
 async function renderDownloads() {
   const box = $('dlBody'); if (!box) return;
   box.textContent = 'Loading…';
@@ -6043,11 +6067,32 @@ async function renderDownloads() {
   }
   renderProducts(box, note); // the team's other products (T-250)
 }
+// T-378: what the Downloads show of the team's releases (/api/releases), worked out apart from the page so it can be
+// checked on its own: Jcode PGM and Jcode PGM Desktop (products jcode-*) get a section of their own with the newest
+// version first, its files for this platform up front (the rest under "Other platforms") and the older versions under
+// it; every other product stays in Products, as before.
+const JCODE_ABOUT = {
+  'jcode-pgm': 'The coding agent in your terminal, signed in with your VibeRoller account: its sessions are your Work sessions on this site too (through Jcode PGM Server).',
+  'jcode-pgm-desktop': 'Jcode PGM in a desktop window of its own: it installs, opens and updates Jcode PGM for you.',
+};
+function dlReleasePlan(c, mine) {
+  const out = { jcode: [], others: [] };
+  for (const p of (c && c.products) || []) {
+    if (!/^jcode/.test(p.product || '')) { out.others.push(p); continue; }
+    const rel = p.releases || [], latest = rel[0] || null, files = (latest && latest.assets) || [];
+    out.jcode.push({ product: p, label: p.label || p.product, about: JCODE_ABOUT[p.product] || '', error: p.error || '', latest,
+      mine: files.filter((a) => a.platform === mine), others: files.filter((a) => a.platform !== mine), older: rel.slice(1) });
+  }
+  return out;
+}
 // Products (T-250): every product and version the team has released, through the hub (the hub holds the Forgejo token).
 // This person's platform first; kept apart from the app's own platform detection.
 async function renderProducts(box, note) {
+  const jsec = document.createElement('div'); jsec.className = 'setSection'; jsec.id = 'dlJcode'; jsec.hidden = true;
+  const jh = document.createElement('b'); jh.textContent = 'Jcode PGM'; jsec.append(jh);
+  box.append(jsec);
   const sec = document.createElement('div'); sec.className = 'setSection'; sec.id = 'dlProducts';
-  const h = document.createElement('b'); h.textContent = 'Products'; sec.append(h);
+  const h = document.createElement('b'); h.textContent = 'Other products'; sec.append(h);
   const info = document.createElement('div'); info.className = 'status'; info.textContent = 'Loading the team\'s products…'; sec.append(info);
   box.append(sec);
   let c; try { c = await json('/api/releases'); } catch (e) { info.textContent = 'The products could not be listed: ' + e.message; return; }
@@ -6062,26 +6107,48 @@ async function renderProducts(box, note) {
     } catch (e) { note.textContent = e.message; }
     b.disabled = false;
   };
-  info.textContent = (c.products || []).some((p) => (p.releases || []).length) ? 'Every product and version the team has released. Your platform comes first.' : 'No product releases yet.';
-  for (const p of c.products || []) {
+  const fileBtn = (p, v, a) => {
+    const b = document.createElement('button'); b.type = 'button'; if (a.platform !== mine) b.className = 'ghost';
+    b.append(ic('download', 'lead'), document.createTextNode((a.platform ? a.platform + ' · ' : '') + a.name + ' (' + size(a.size) + ')'));
+    b.onclick = () => grabFile(p, v, a, b); return b;
+  };
+  const vline = (v) => { const vb = document.createElement('div'); vb.className = 'status'; vb.textContent = v.version + (v.prerelease ? ' · pre-release' : '') + (v.date ? ' · ' + v.date.slice(0, 10) : '') + (v.notes ? ' · ' + v.notes.split('\n')[0].slice(0, 120) : ''); return vb; };
+  const versionRows = (into, p, v) => { into.append(vline(v)); const row = document.createElement('div'); row.className = 'row'; for (const a of (v.assets || []).slice().sort((x, y) => (y.platform === mine) - (x.platform === mine))) row.append(fileBtn(p, v, a)); into.append(row); };
+  const plan = dlReleasePlan(c, mine);
+  // Jcode PGM: the newest version for this platform up front
+  for (const j of plan.jcode) {
+    jsec.hidden = false;
+    const card = document.createElement('div'); card.className = 'dlJcode';
+    const t = document.createElement('b'); t.textContent = j.label; card.append(t);
+    if (j.about) { const ab = document.createElement('div'); ab.className = 'status'; ab.textContent = j.about; card.append(ab); }
+    if (!j.latest) { const n = document.createElement('div'); n.className = 'status'; n.textContent = j.error ? 'Unavailable right now: ' + j.error : 'No release yet.'; card.append(n); jsec.append(card); continue; }
+    card.append(vline(j.latest));
+    const row = document.createElement('div'); row.className = 'row';
+    for (const a of j.mine) row.append(fileBtn(j.product, j.latest, a));
+    if (!j.mine.length) { const n = document.createElement('div'); n.className = 'status'; n.textContent = 'No ' + (mine || 'build for this platform') + (mine ? ' build of this version' : '') + (mine === 'macOS' || mine === 'Android' ? ' (builds are for Windows and Linux)' : '') + '.'; row.append(n); }
+    card.append(row);
+    if (j.others.length) {
+      const det = document.createElement('details'); det.open = !j.mine.length;
+      const sm = document.createElement('summary'); sm.textContent = j.mine.length ? 'Other platforms' : 'Platforms available'; det.append(sm);
+      const r2 = document.createElement('div'); r2.className = 'row'; for (const a of j.others) r2.append(fileBtn(j.product, j.latest, a)); det.append(r2); card.append(det);
+    }
+    if (j.older.length) {
+      const det = document.createElement('details');
+      const sm = document.createElement('summary'); sm.textContent = 'Older versions (' + j.older.length + ')'; det.append(sm);
+      for (const v of j.older) versionRows(det, j.product, v);
+      card.append(det);
+    }
+    jsec.append(card);
+  }
+  info.textContent = plan.others.some((p) => (p.releases || []).length) ? 'Every version of the team\'s other products. Your platform comes first.' : 'No other product releases yet.';
+  for (const p of plan.others) {
     const d = document.createElement('details'); const s = document.createElement('summary');
     s.textContent = (p.label || p.product) + (p.releases && p.releases.length ? ' · ' + p.releases[0].version + ' (' + p.releases.length + ' version' + (p.releases.length === 1 ? '' : 's') + ')' : p.error ? ' · unavailable' : ' · no releases'); d.append(s);
-    if (p.releases && p.releases.length) d.open = p === c.products.find((x) => x.releases && x.releases.length);
-    for (const v of p.releases || []) {
-      const vb = document.createElement('div'); vb.className = 'status'; vb.textContent = v.version + (v.date ? ' · ' + v.date.slice(0, 10) : '') + (v.notes ? ' · ' + v.notes.split('\n')[0].slice(0, 120) : ''); d.append(vb);
-      const row = document.createElement('div'); row.className = 'row';
-      for (const a of (v.assets || []).slice().sort((x, y) => (y.platform === mine) - (x.platform === mine))) {
-        const b = document.createElement('button'); b.type = 'button'; if (a.platform !== mine) b.className = 'ghost';
-        b.append(ic('download', 'lead'), document.createTextNode((a.platform ? a.platform + ' · ' : '') + a.name + ' (' + size(a.size) + ')'));
-        b.onclick = () => grabFile(p, v, a, b); row.append(b);
-      }
-      d.append(row);
-    }
+    for (const v of p.releases || []) versionRows(d, p, v);
     sec.append(d);
   }
 }
-document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = () => { settingsFrom = b; openDownloads(); genieOut($('settings').querySelector('.box'), b); }; });
-document.querySelector('[data-settab="downloads"]').addEventListener('click', renderDownloads);
+document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = () => { downloadsFrom = b; openDownloads(); genieOut($('downloads').querySelector('.box'), b); }; });
 window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) applyLayout(); });
 
 // ── Shared Work sessions: share yours (watch-only for others), watch theirs in their own windows ──

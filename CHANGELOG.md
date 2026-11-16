@@ -7,6 +7,27 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.69.0 — 2026-11-16
+
+MINOR: **Settings in five tabs, Downloads in its own window, Desktop Unity off by default** (T-378).
+
+- **Settings is about your own account, in five tabs:**
+  - **Profile:** what others see.
+  - **App:** Appearance, Chat and Work, My projects, When the AI asks, Desktop Unity, the version.
+  - **Sound & voice:** Sounds, Read aloud, Calls and voice clips.
+  - **AI:** AI source, My AIs, OpenRouter budget, My AI hosts.
+  - **Connections:** API access, Signed-in devices, My machines, My Forgejo.
+- **One Save bar** at the bottom of the box saves App and Sound & voice. It shows only while one of those tabs is open, or while a search finds something there. The other tabs save as you go, as before.
+- **Downloads is a window of its own** and no longer a Settings tab. Every Download button opens it.
+  - Jcode PGM and Jcode PGM Desktop have their own section: the newest version with your platform's files first, then other platforms and older versions.
+  - The team's other products are listed below it.
+- **Desktop Unity is off until you turn her on** in Settings → App → Desktop Unity. This applies on the website and in the desktop app. A chat order ("show", a walk) never turns her on; `vr-desktop --companion show` on the PC still does.
+- web/index.html 1.53.0, web/polish.css 1.0.5, web/profile.js 1.2.0, web/deskunity.js 1.3.0, web/app.js 1.1.4, vr-desktop (with the project).
+- **Checks:**
+  - New R635 for Settings, Downloads and the website's Desktop Unity.
+  - New R636: the desktop app's unit test that she is off until turned on.
+  - R142 and R546 follow the new layout.
+
 ## 5.68.0 — 2026-11-16
 
 MINOR: **the main menu in four sections** (T-377).

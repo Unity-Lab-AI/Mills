@@ -92,7 +92,13 @@ const PROFILE = (() => {
     for (const b of document.querySelectorAll('[data-settab]')) { b.classList.toggle('on', b.dataset.settab === name); b.setAttribute('aria-selected', String(b.dataset.settab === name)); }
     for (const p of document.querySelectorAll('[data-setpane]')) p.hidden = p.dataset.setpane !== name;
     const body = document.querySelector('#settings .setBody'); if (body) body.scrollTop = 0;
-    markNav();
+    markNav(); saveBar();
+  }
+  // T-378: one Save bar for the tabs whose settings it saves (App, Sound & voice: the panes marked data-saves), shown while
+  // one of them is on screen (a tab, or a search that found something there)
+  function saveBar() {
+    const bar = document.querySelector('#settings .setBox > .setSave'); if (!bar) return;
+    bar.hidden = ![...document.querySelectorAll('#settings [data-setpane][data-saves]')].some((p) => !p.hidden);
   }
   for (const b of document.querySelectorAll('[data-settab]')) { b.setAttribute('role', 'tab'); b.onclick = () => tab(b.dataset.settab); }
 
@@ -108,6 +114,7 @@ const PROFILE = (() => {
     if (searching) for (const p of document.querySelectorAll('[data-setpane]')) p.hidden = !groups.some((g, i) => res.groups[i].show && p.contains(g));
     else for (const p of document.querySelectorAll('[data-setpane]')) p.hidden = p.dataset.setpane !== current;
     const none = document.getElementById('setNone'); if (none) none.hidden = !searching || res.any;
+    saveBar();
     return res;
   }
   const findBox = document.getElementById('setFind');
@@ -136,7 +143,7 @@ const PROFILE = (() => {
       bs.forEach((b) => b.classList.toggle('on', b === on));
     }
   }
-  buildNav();
+  buildNav(); saveBar();
   const setBody = document.querySelector('#settings .setBody'); if (setBody) setBody.addEventListener('scroll', markNav, { passive: true });
 
   // ── the Profile tab: editor + live preview ──
