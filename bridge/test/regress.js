@@ -7522,7 +7522,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         `items ${dl.map((i) => i.id).join(',')}; app ${appZip.status} ${appEntries.map((e) => e.name).join(',')}; host ${hostZip.status} ${hostEntries.map((e) => e.name).join(',')}; pub ${pubApp} anon ${anonApp}; native ${Array.isArray(dlAll.native)} release ${rel.status} ${Object.keys(relJson).join(',')}; install ${inst.status} "${String((inst.stdout || '') + (inst.stderr || '') + (inst.error || '')).trim().slice(0, 200)}" cfg ${instCfg.id === myHost.id} mode ${instMode.toString(8)}; again "${String(again.stdout || again.error || '').trim().slice(0, 100)}"`);
     } else skip('R167', 'the Downloads hand out the native programs, pre-built, and they install themselves', why || 'the Rust hub\'s alone: --rust-hub runs it');
     // R165: the desktop app (Tauri) starts on Linux, headless, against this hub
-    const L165 = 'the desktop app (vr-desktop, Tauri) starts on Linux (headless, Xvfb): its Tools window (its own page) loads, runs and reaches the app with the Tools permissions; its main window shows this hub\'s page, which sees the app (window.__TAURI__ → NATIVE) and is allowed the hub capability (app_info, notify) and shows the Tools tile; [static] the hub\'s page is never given the commands that touch the computer (files, terminal, runs, git, proxy, settings), and the Tools window\'s page is the app\'s own';
+    const L165 = 'the desktop app (vr-desktop, Tauri) starts on Linux (headless, Xvfb): its Tools window (its own page) loads, runs and reaches the app with the Tools permissions; its main window shows this hub\'s page, which sees the app (window.__TAURI__ → NATIVE) and is allowed the hub capability (app_info, notify) and shows the Tools tile; [static] the hub\'s page is never given the commands that touch the computer (files, terminal, runs, git, proxy, settings), and the Tools window\'s page is the app\'s own; every way of opening the Tools window is off the event loop (the IPC command is async and the tray entries go through open_tools_soon), because building a WebView2 window inside a synchronous command or menu handler deadlocks on Windows and leaves a pure white window (tauri-apps/wry#583)';
     const dsk = why ? { why } : buildDesktop();
     if (dsk.why) skip('R165', L165, dsk.why);
     else {
@@ -7535,7 +7535,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       else check('R165', L165,
         sm.status === 0 && /SMOKE smoke-ok/.test(sm.stdout) && new RegExp('SMOKE smoke-main 127\\.0\\.0\\.1:' + PORT + ' \\S+ tools-tile true share-field boolean').test(sm.stdout)
         && !!hubCap && !forbidden.some((f) => hubCap.includes(f)) && /window\("main"\)/.test(hubCap) && toolsCap.windows.join() === 'tools' && !toolsCap.remote
-        && /WebviewUrl::App\("tools\.html/.test(mainSrc),
+        && /WebviewUrl::App\(/.test(mainSrc) && /tools\.html/.test(mainSrc)
+        && /#\[tauri::command\]\s*\n\s*async fn open_tools\(/.test(mainSrc) && /fn open_tools_soon\(/.test(mainSrc)
+        && !/=> \{ let _ = show_tools\(/.test(mainSrc),
         `smoke ${sm.status} "${(sm.stdout + sm.stderr).replace(/\s+/g, ' ').slice(0, 400)}"; hub capability clean ${!!hubCap && !forbidden.some((f) => hubCap.includes(f))}`);
       // R290 (T-243): screen sharing in the app's webview is granted to the hub's own page only
       const capSrc = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'vr-desktop', 'src', 'capture.rs'), 'utf8');

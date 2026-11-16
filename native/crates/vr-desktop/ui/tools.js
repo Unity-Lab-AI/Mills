@@ -168,6 +168,9 @@ $('uApply').onclick = async () => { $('uState').textContent = 'updating…'; try
 
 // ---------- Desktop Unity: on / off, her look, her moves ----------
 window.openTab = (t) => { const b = document.querySelector('nav button[data-tab="' + t + '"]'); if (b) b.click(); };
+// the tray's "Desktop Unity: her look and settings…" opens this window at tools.html#unity (a fresh window loads the
+// page before any eval can run, so the page itself opens the tab the address names)
+if (location.hash.length > 1) window.openTab(decodeURIComponent(location.hash.slice(1)));
 async function unityRefresh() {
   let s; try { s = await call('companion_status'); } catch (e) { return fail(e); }
   const st = s.status || {};

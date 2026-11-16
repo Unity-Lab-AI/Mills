@@ -69,8 +69,11 @@ fn set_badge(app: AppHandle, count: u32) {
 /// this app's hub, and the releases stay checked against the release key built into this program whoever's session it is.
 #[tauri::command]
 fn set_session(st: S, token: String) -> R<()> { st.store.set_session(&token) }
+// Building a WebView2 window inside a synchronous command or menu handler deadlocks on Windows (the window comes up
+// pure white and the whole app hangs; tauri-apps/wry#583). So this command is async and every menu entry opens the
+// window on its own thread (open_tools_soon).
 #[tauri::command]
-fn open_tools(app: AppHandle) -> R<()> { show_tools(&app).map_err(|e| e.to_string()) }
+async fn open_tools(app: AppHandle) -> R<()> { show_tools(&app, None).map_err(|e| e.to_string()) }
 #[tauri::command]
 fn open_external(url: String) -> R<()> {
     if !(url.starts_with("https://") || url.starts_with("http://")) { return Err("Only web addresses open in the browser.".into()); }
@@ -427,10 +430,23 @@ static LAST_ORDER: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 fn companion_last() -> Value { std::mem::take(&mut *LAST_ORDER.lock().unwrap_or_else(|e| e.into_inner())) }
 
 fn show_main(app: &AppHandle) { if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus(); } }
-fn show_tools(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(w) = app.get_webview_window("tools") { w.show()?; w.set_focus()?; return Ok(()); }
-    WebviewWindowBuilder::new(app, "tools", WebviewUrl::App("tools.html".into())).title("VibeRoller Tools").inner_size(1100.0, 760.0).min_inner_size(640.0, 420.0).build()?;
-    Ok(())
+fn show_tools(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window("tools") {
+        w.show()?; w.set_focus()?;
+        if let Some(t) = tab { let _ = w.eval(&format!("window.openTab && openTab('{t}')")); }
+        return Ok(());
+    }
+    let url = match tab { Some(t) => format!("tools.html#{t}"), None => "tools.html".to_string() };
+    let built = WebviewWindowBuilder::new(app, "tools", WebviewUrl::App(url.into())).title("VibeRoller Tools").inner_size(1100.0, 760.0).min_inner_size(640.0, 420.0).build();
+    match built {
+        Ok(_) => Ok(()),
+        // two opens at once (a double click): the other call already made the window
+        Err(e) => match app.get_webview_window("tools") { Some(w) => { w.show()?; w.set_focus()?; Ok(()) }, None => Err(e) },
+    }
+}
+/// Open the Tools window off the event loop (see open_tools): never call the builder from a tray menu handler.
+fn open_tools_soon(app: AppHandle, tab: Option<String>) {
+    std::thread::spawn(move || { if let Err(e) = show_tools(&app, tab.as_deref()) { eprintln!("tools: {e}"); } });
 }
 
 fn main() {
@@ -503,7 +519,7 @@ fn main() {
                     let st = app.state::<App>();
                     match ev.id.as_ref() {
                         "show" => show_main(app),
-                        "tools" => { let _ = show_tools(app); }
+                        "tools" => open_tools_soon(app.clone(), None),
                         "host-resume" => { let d = st.host_dir.clone(); let _ = aihost::act(&d, if aihost::status(&d)["running"].as_bool() == Some(true) { "resume" } else { "start" }); }
                         "host-pause" => { let _ = aihost::act(&st.host_dir, "pause"); }
                         "gpu-free" | "image-on" | "image-off" => {
@@ -513,9 +529,9 @@ fn main() {
                                 let _ = notify(a, APP_NAME.to_string(), r.unwrap_or_else(|e| e));
                             });
                         }
-                        "update" => { let _ = show_tools(app); }
+                        "update" => open_tools_soon(app.clone(), None),
                         "unity-on" | "unity-off" => { let (a, on) = (app.clone(), ev.id.as_ref() == "unity-on"); tauri::async_runtime::spawn(async move { let _ = companion_set(a, on).await; }); }
-                        "unity-settings" => { let _ = show_tools(app); if let Some(w) = app.get_webview_window("tools") { let _ = w.eval("window.openTab && openTab('unity')"); } }
+                        "unity-settings" => open_tools_soon(app.clone(), Some("unity".into())),
                         "quit" => app.exit(0),
                         _ => {}
                     }
