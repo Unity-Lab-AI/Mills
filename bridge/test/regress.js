@@ -494,7 +494,7 @@ async function setup() {
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/security/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/security/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', 'bridge/pgm-server.secret', 'bridge/pgm-server.tmp-*', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
@@ -956,6 +956,7 @@ async function run() {
   if (process.argv.includes('--only-r580') && RUST_HUB) await r580Check(); // development: just R580 to R585 (with --stop-after R585)
   if (process.argv.includes('--only-r600') && RUST_HUB) await r600Check(); // development: just R600 to R605 (with --stop-after R605)
   if (process.argv.includes('--only-r591') && RUST_HUB) await r591Check(); // development: just R591 to R598 (with --stop-after R598)
+  if (process.argv.includes('--only-r620') && RUST_HUB) await r620Check(); // development: just R620 to R626 (with --stop-after R626)
   if (process.argv.includes('--only-r606') && RUST_HUB) await r606Check(); // development: just R606 to R612 (with --stop-after R612)
   if (process.argv.includes('--only-r614') && RUST_HUB) { await r614Check(); r619Check(); } // development: just R614 to R619 (with --stop-after R619)
   if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
@@ -3164,6 +3165,7 @@ async function run() {
     if (RUST_HUB) await r591Check(); else skip('R591', 'OpenRouter as a provider (pairs, routing, the key never shown) and the month budget (T-370)', 'the Rust hub\'s: --rust-hub runs it');
     await r600Check(); // R600-R605 (T-371): the browser sign-in for Jcode PGM (the hub flow with --rust-hub; the page's files always)
     if (RUST_HUB) await r606Check(); else skip('R606', 'a person\'s own OpenRouter key next to the team\'s (T-372)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r620Check(); else skip('R620', 'the hub side of the Jcode PGM Server: /__pgm/*, the /pgm/ forward, pgmServer in /api/check (T-376)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r586Check(); else skip('R586', 'the API gateway serves the Responses API (Codex) and shows each key\'s usage by day and model (T-369, G5)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
@@ -8551,6 +8553,192 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     if (!hadLocal) { try { fs.unlinkSync(localCfgFile); } catch {} } else await call('/api/openrouter/personal', A, { on: true });
     await call('/api/providers/remove', A, { id: tp.id });
     for (const k of [kA, kU]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
+  }
+  // R620-R626 (T-376, stage 1; team note plans/jcode-pgm-server.md B.1): the hub's side of the Jcode PGM Server. The server is a
+  // fake here (a node HTTP server that records what reaches it and checks the hub's signed x-pgm-hub-user with the shared secret);
+  // config pgmServer is switched in config.local.json (read fresh by the hub).
+  async function r620Check() {
+    const http = require('http'), assert = require('assert'), same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (method, p, token, body, headers = {}) => { try { const r = await fetch(H + p, { method, headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers }, body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json: json || {}, headers: r.headers }; } catch (e) { return { status: 0, text: String(e.message), json: {} }; } };
+    const secretFile = path.join(SB, 'pgm-server.secret');
+    const secret = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8').split('\n')[0].trim() : '';
+    const S = { 'x-pgm-secret': secret };
+    const api = (method, p, body, headers = S) => g(method, '/__pgm/' + p, null, body, headers);
+    const seenText = []; const note = (r) => { seenText.push(r.text); return r; };
+    const defer = () => { let res; const p = new Promise((x) => { res = x; }); return { p, res }; };
+    const within = (p, ms) => Promise.race([p, sleep(ms).then(() => null)]);
+    // the fake Jcode PGM Server
+    const fp = { reqs: [] }; const gates = { two: defer(), three: defer(), part1: defer(), longClosed: defer() };
+    const srv = http.createServer((req, res) => {
+      const rec = { method: req.method, url: req.url, headers: req.headers, parts: [], body: '' }; fp.reqs.push(rec);
+      if (req.url === '/pgm/upload') { req.on('data', (c) => { rec.parts.push(c.toString()); if (rec.parts.length === 1) gates.part1.res(true); }); req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ parts: rec.parts })); }); return; }
+      req.on('data', (c) => { rec.body += c; });
+      req.on('end', async () => {
+        if (req.url === '/pgm/stream') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write('data: one\n\n'); await within(gates.two.p, 8000); res.write('data: two\n\n'); await within(gates.three.p, 8000); res.end('data: three\n\n'); return; }
+        if (req.url === '/pgm/long') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write('data: first\n\n'); const t = setInterval(() => res.write('data: more\n\n'), 100); res.on('close', () => { clearInterval(t); gates.longClosed.res({ ended: res.writableEnded }); }); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'x-fake': 'pgm' }); res.end(JSON.stringify({ server: 'fake', url: req.url, method: req.method }));
+      });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const fakeUrl = `http://127.0.0.1:${srv.address().port}`;
+    const vouched = (rec) => { // the fake's check of the hub's header: HMAC-SHA256 with the shared secret over the payload
+      const h = (rec && rec.headers['x-pgm-hub-user']) || ''; const [payload, sig] = h.split('.');
+      if (!payload || !sig || crypto.createHmac('sha256', secret).update(payload).digest('base64url') !== sig) return null;
+      try { return JSON.parse(Buffer.from(payload, 'base64url').toString()); } catch { return null; }
+    };
+    const localCfgFile = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(localCfgFile), local0 = hadLocal ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : null;
+    const setPgm = (pgm) => { const c = fs.existsSync(localCfgFile) ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : {}; if (pgm) c.pgmServer = pgm; else delete c.pgmServer; fs.writeFileSync(localCfgFile, JSON.stringify(c, null, 2)); };
+    const stateDir = path.join(SB, 'pgm-state'), SIGN = 'r620SignKey_' + 'A'.repeat(31), SIGN_CFG = 'r620CfgKey_' + 'B'.repeat(32);
+    fs.mkdirSync(stateDir, { recursive: true }); fs.writeFileSync(path.join(stateDir, 'server.json'), JSON.stringify({ signKey: SIGN, version: 'fake' }));
+    // people, tokens, providers
+    const devTok = async (tok, client, device, extra = {}) => { const s = (await call('/api/device/start', null, { client, device, ...extra })).data || {}; await call('/api/device/approve', tok, { userCode: s.userCode }); const p = (await call('/api/device/poll', null, { deviceCode: s.deviceCode })).data || {}; return { token: p.token, id: p.deviceId }; };
+    const dev = await devTok(U, 'jcode', 'r620-laptop');
+    const kp = crypto.generateKeyPairSync('ed25519'), pub = kp.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
+    const mach = await devTok(U, 'vr-machine', 'r620-box', { publicKey: pub, machineId: 'mach-r620-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r620' });
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic', 'amazon-bedrock'], allowFallbacks: false }, { id: 'r620/qwen', label: 'Qwen', model: 'qwen/qwen3-coder', providers: [], allowFallbacks: true }];
+    const tp = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R620 team', apiKey: R591_KEY, pairs, shared: true })).data.provider || {};
+    const myA0 = (await call('/api/openrouter/mykey', A)).data || {};
+    await call('/api/openrouter/mykey', U, { apiKey: R606_KEY_U });
+    await call('/api/openrouter/mykey', A, { apiKey: R606_KEY, pairs: [{ id: 'r620/own-a', label: 'Admin own', model: 'x/admin-only', providers: [] }] });
+    const kU = (await call('/api/apikey/create', U, { label: 'r620 user' })).data;
+    const secrets = () => [R591_KEY, R606_KEY, R606_KEY_U, secret, dev.token, mach.token, U, A, kU.key].filter(Boolean);
+    const leaks = (texts) => texts.filter((t) => secrets().some((k) => String(t).includes(k))).length;
+    try {
+      // R620: the gate
+      const st = fs.statSync(secretFile);
+      const gate = { none: (await api('POST', 'whoami', { token: U }, {})).status, wrong: (await api('POST', 'whoami', { token: U }, { 'x-pgm-secret': secret.replace(/.$/, (c) => c === '0' ? '1' : '0') })).status, short: (await api('POST', 'whoami', { token: U }, { 'x-pgm-secret': secret.slice(0, 20) })).status,
+        xff: (await api('POST', 'whoami', { token: U }, { ...S, 'X-Forwarded-For': '203.0.113.9' })).status, xri: (await api('POST', 'whoami', { token: U }, { ...S, 'X-Real-IP': '203.0.113.9' })).status, cf: (await api('GET', 'models?user=t-user', undefined, { ...S, 'CF-Connecting-IP': '203.0.113.9' })).status,
+        routeNoSecret: note(await api('POST', 'route', { user: 't-user', pair: 'or/sonnet' }, {})), ok: (await api('POST', 'whoami', { token: U })).status };
+      const ignored = spawnSync('git', ['check-ignore', '-q', 'bridge/pgm-server.secret'], { cwd: MILLS }).status === 0;
+      check('R620', 'the hub\'s API for the Jcode PGM Server (/__pgm/*) answers only a program on this machine that has the shared secret: without x-pgm-secret, with a wrong or a cut-off one, and through a proxy (X-Forwarded-For, X-Real-IP, CF-Connecting-IP, even with the right secret) it is a plain 403 and no key comes out; the secret is bridge/pgm-server.secret, 64 hex characters the hub made, readable by its owner only and never shipped (gitignored)',
+        /^[0-9a-f]{64}$/.test(secret) && (st.mode & 0o777) === 0o600 && ignored && [gate.none, gate.wrong, gate.short, gate.xff, gate.xri, gate.cf].every((s) => s === 403) && gate.routeNoSecret.status === 403 && !gate.routeNoSecret.text.includes(R591_KEY) && gate.ok === 200,
+        `secret ${secret.length} chars mode ${(st.mode & 0o777).toString(8)} ignored ${ignored}; refused ${[gate.none, gate.wrong, gate.short, gate.xff, gate.xri, gate.cf, gate.routeNoSecret.status]}; with it ${gate.ok}`);
+
+      // R621: whoami
+      const wDev = note(await api('POST', 'whoami', { token: dev.token })), wSes = note(await api('POST', 'whoami', { token: U })), wAdm = note(await api('POST', 'whoami', { token: A }));
+      const wBad = note(await api('POST', 'whoami', { token: 'not-a-token-r620' })), wEmpty = note(await api('POST', 'whoami', {})), wMach = note(await api('POST', 'whoami', { token: mach.token }));
+      check('R621', 'the Jcode PGM Server asks who a token is (POST /__pgm/whoami): a person\'s device token gives their username, that device\'s id (the one their device list shows) and admin false; their page session gives the same person with a session device id (s-…); an admin\'s session says admin true; an unknown or missing token is 401, a linked machine\'s token is 403 (never a sign-in)',
+        wDev.status === 200 && wDev.json.username === 't-user' && wDev.json.deviceId === dev.id && wDev.json.admin === false && wDev.json.kind === 'device'
+        && wSes.status === 200 && wSes.json.username === 't-user' && /^s-[0-9a-f]{16}$/.test(wSes.json.deviceId) && wSes.json.kind === 'session' && wAdm.status === 200 && wAdm.json.username === 't-admin' && wAdm.json.admin === true
+        && wBad.status === 401 && wEmpty.status === 401 && wMach.status === 403 && leaks([wDev.text, wSes.text, wAdm.text, wBad.text, wMach.text]) === 0,
+        `device ${wDev.status} ${JSON.stringify(wDev.json)} (id ${dev.id}); session ${wSes.status} ${JSON.stringify(wSes.json)}; admin ${wAdm.json.admin}; bad ${wBad.status}/${wEmpty.status}; machine ${wMach.status}`);
+
+      // R622: models = the Work dropdown's OpenRouter pairs for that person, with the budget
+      const chk = (await call('/api/check', U)).data, bud = (await call('/api/openrouter/budget', U)).data;
+      const want = []; for (const p of (chk.providers || []).filter((x) => x.kind === 'openrouter').sort((a, b) => (a.personal === true) - (b.personal === true))) for (const pr of p.pairs || []) { const id = (p.personal ? 'my/' : '') + pr.id; if (!want.some((w) => w.id === id)) want.push({ id, source: p.personal ? 'mine' : 'team', model: pr.model }); }
+      const mU = note(await api('GET', 'models?user=t-user')), mA = note(await api('GET', 'models?user=t-admin')), mNo = note(await api('GET', 'models?user=nobody-r620'));
+      const got = (mU.json.pairs || []).map((p) => ({ id: p.id, source: p.source, model: p.model }));
+      const sonnet = (mU.json.pairs || []).find((p) => p.id === 'or/sonnet') || {};
+      check('R622', 'the models the Jcode PGM Server offers a person (GET /__pgm/models?user=) are the OpenRouter pairs the Work dropdown shows them, in its order: the team\'s by their ids, then their own key\'s as my/<id> (source team / mine, with model, providers and fallbacks), never another person\'s own pairs, with their month budget (cap, spent, reset); an unknown person is 404 and no key is in the answer',
+        mU.status === 200 && want.length >= 4 && same(got, want) && got.some((p) => p.id === 'my/or/sonnet' && p.source === 'mine') && !got.some((p) => /r620\/own-a/.test(p.id))
+        && same(sonnet.providers, ['anthropic', 'amazon-bedrock']) && sonnet.allowFallbacks === false && sonnet.label === 'Sonnet'
+        && mU.json.budget && mU.json.budget.capUsd === bud.capUsd && mU.json.budget.spentUsd === bud.spentUsd && mU.json.budget.resetsAt === bud.resetsAt
+        && (mA.json.pairs || []).some((p) => p.id === 'my/r620/own-a') && mNo.status === 404 && leaks([mU.text, mA.text]) === 0,
+        `got ${got.map((p) => p.id + ':' + p.source)}; dropdown ${want.map((p) => p.id + ':' + p.source)}; budget ${JSON.stringify(mU.json.budget)} vs ${bud.capUsd}/${bud.spentUsd}; admin has own ${(mA.json.pairs || []).some((p) => p.id === 'my/r620/own-a')}; unknown ${mNo.status}`);
+
+      // R623: route
+      const rTeam = await api('POST', 'route', { user: 't-user', pair: 'or/sonnet' }), rMine = await api('POST', 'route', { user: 't-user', pair: 'my/or/sonnet' }), rQwen = await api('POST', 'route', { user: 't-user', pair: 'r620/qwen' });
+      const rNope = note(await api('POST', 'route', { user: 't-user', pair: 'or/nope' })), rOther = note(await api('POST', 'route', { user: 't-user', pair: 'my/r620/own-a' })), rOther2 = note(await api('POST', 'route', { user: 't-user', pair: 'r620/own-a' })), rNoUser = note(await api('POST', 'route', { user: 'nobody-r620', pair: 'or/sonnet' }));
+      await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 0 });
+      const rOver = note(await api('POST', 'route', { user: 't-user', pair: 'or/sonnet' })), rOverMine = await api('POST', 'route', { user: 't-user', pair: 'my/or/sonnet' });
+      await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: null });
+      const orBase = `http://127.0.0.1:${OLLAMA_PORT}/orapi`;
+      check('R623', 'the key for one request (POST /__pgm/route {user, pair}): a team pair gives the team key with OpenRouter\'s address, the pair\'s model and exactly the provider routing the hub itself sends (order and no fallbacks; no order when the pair lists none, fallbacks as set) and kind team; my/<id> gives the person\'s own key and kind mine; a pair that is not theirs (unknown, another person\'s own, as my/<id> or plain) is 403 with a plain reason, over their month budget a team pair is 403 naming the budget while their own key still routes, an unknown person 404; no refusal carries a key',
+        rTeam.status === 200 && rTeam.json.apiKey === R591_KEY && rTeam.json.baseUrl === orBase && rTeam.json.model === 'anthropic/claude-sonnet-4.5' && same(rTeam.json.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && rTeam.json.kind === 'team' && rTeam.json.pair === 'or/sonnet' && rTeam.json.headers && rTeam.json.headers['X-Title'] === 'VibeRoller'
+        && rQwen.status === 200 && same(rQwen.json.provider, { allow_fallbacks: true }) && rQwen.json.model === 'qwen/qwen3-coder'
+        && rMine.status === 200 && rMine.json.apiKey === R606_KEY_U && rMine.json.kind === 'mine' && rMine.json.pair === 'my/or/sonnet' && rMine.json.model === 'anthropic/claude-sonnet-4.5'
+        && [rNope, rOther, rOther2].every((r) => r.status === 403 && /may use/.test(r.json.error || '')) && rNoUser.status === 404
+        && rOver.status === 403 && /budget/i.test(rOver.json.error || '') && rOverMine.status === 200 && rOverMine.json.apiKey === R606_KEY_U && leaks([rNope.text, rOther.text, rOther2.text, rOver.text, rNoUser.text]) === 0,
+        `team ${rTeam.status} key ${rTeam.json.apiKey === R591_KEY} ${JSON.stringify(rTeam.json.provider)} ${rTeam.json.baseUrl}; qwen ${JSON.stringify(rQwen.json.provider)}; mine ${rMine.status} ${rMine.json.apiKey === R606_KEY_U} ${rMine.json.kind}; refused ${rNope.status}/${rOther.status}/${rOther2.status} "${(rNope.json.error || '').slice(0, 60)}"; unknown ${rNoUser.status}; over ${rOver.status} "${(rOver.json.error || '').slice(0, 50)}" own ${rOverMine.status}`);
+
+      // R624: charge = a hub OpenRouter call of theirs; the sessions report; the security log
+      const bud0 = async () => (await call('/api/openrouter/budget', U)).data, ans = async () => (((await call('/api/usage', U)).data.answers || {}).by || {}).openrouter || { turns: 0, input: 0, output: 0 };
+      const settle = async (n) => { let b = await bud0(); for (let i = 0; i < 50 && b.calls < n; i++) { await sleep(100); b = await bud0(); } return b; };
+      const b0 = await bud0(), a0 = await ans();
+      const hubCall = note(await g('POST', '/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'r624 hub call COST=0.03' }] }));
+      const b1 = await settle(b0.calls + 1), a1 = await ans();
+      const ch = note(await api('POST', 'charge', { user: 't-user', pair: 'or/sonnet', kind: 'team', usd: 0.03, tokensIn: 20, tokensOut: 5, model: 'anthropic/claude-sonnet-4.5' }));
+      const b2 = await bud0(), a2 = await ans();
+      const chMine = note(await api('POST', 'charge', { user: 't-user', pair: 'my/or/sonnet', kind: 'mine', usd: 0.125, tokensIn: 7, tokensOut: 3, model: 'anthropic/claude-sonnet-4.5' }));
+      const b3 = await bud0();
+      const chBad = [note(await api('POST', 'charge', { user: 't-user', pair: 'or/sonnet', kind: 'team', usd: -1 })), note(await api('POST', 'charge', { user: 't-user', pair: 'or/sonnet', kind: 'other', usd: 0.1 })), note(await api('POST', 'charge', { user: 't-user', kind: 'team', usd: 0.1 }))].map((r) => r.status);
+      const chNo = note(await api('POST', 'charge', { user: 'nobody-r620', pair: 'or/sonnet', kind: 'team', usd: 0.1 })).status;
+      const d = (x, y, k) => Math.round(((y[k] || 0) - (x[k] || 0)) * 1e6) / 1e6;
+      const dHub = { usd: d(b0, b1, 'spentUsd'), calls: d(b0, b1, 'calls'), turns: d(a0, a1, 'turns'), input: d(a0, a1, 'input'), output: d(a0, a1, 'output') };
+      const dCh = { usd: d(b1, b2, 'spentUsd'), calls: d(b1, b2, 'calls'), turns: d(a1, a2, 'turns'), input: d(a1, a2, 'input'), output: d(a1, a2, 'output') };
+      const rep = note(await api('POST', 'sessions/report', { user: 't-user', device: 'r624-server', sessions: [{ id: 'pgm-r624', title: 'R624 server session', state: 'working', project: 'Jcode-PGM' }], ttlSec: 120 }));
+      const ext = ((await call('/api/work/sessions', U)).data.external || []).find((x) => x.id === 'pgm-r624') || {};
+      const audit = fs.readFileSync(path.join(SB, 'security', 'audit.jsonl'), 'utf8');
+      const actions = ['pgm.refused', 'pgm.whoami', 'pgm.models', 'pgm.route', 'pgm.charge', 'pgm.sessions'].filter((x) => audit.includes('"' + x + '"'));
+      check('R624', 'an answer the Jcode PGM Server charges (POST /__pgm/charge) moves the person\'s month exactly as the same answer through the hub\'s own OpenRouter call does (spent +0.03 USD, one more call, one more turn with its tokens in the usage view under the OpenRouter model); kind mine adds to their own-key counter and never to the team spend; a bad charge (negative cost, unknown kind, no pair) is 400 and an unknown person 404; the server\'s session report shows on the person\'s session list as source pgm-server; the security log has every kind of /__pgm/ call (refused, whoami, models, route, charge, sessions) and no key, token or secret',
+        hubCall.status === 200 && ch.status === 200 && ch.json.ok === true && same(dCh, dHub) && dHub.usd === 0.03 && dHub.calls === 1 && dHub.turns === 1 && dHub.input > 0 && a2.model === 'anthropic/claude-sonnet-4.5'
+        && chMine.status === 200 && Math.round((b3.mineUsd - b2.mineUsd) * 1e6) === 125000 && b3.mineCalls === b2.mineCalls + 1 && b3.spentUsd === b2.spentUsd && b3.calls === b2.calls
+        && chBad.every((s) => s === 400) && chNo === 404 && rep.status === 200 && rep.json.accepted === 1 && ext.source === 'pgm-server' && ext.state === 'working' && ext.device === 'r624-server'
+        && actions.length === 6 && leaks([audit]) === 0,
+        `hub ${hubCall.status} ${JSON.stringify(dHub)}; charge ${ch.status} ${JSON.stringify(dCh)}; mine ${chMine.status} +${Math.round((b3.mineUsd - b2.mineUsd) * 1e6) / 1e6}; bad ${chBad} unknown ${chNo}; report ${rep.status} ${JSON.stringify(ext)}; log ${actions}; leaks ${leaks([audit])}`);
+
+      // R625: the forward
+      setPgm({ url: fakeUrl, stateFile: 'pgm-state/server.json' });
+      const n0 = fp.reqs.length;
+      const hello = note(await g('POST', '/pgm/hello?v=1', dev.token, { proto: [1] }, { 'x-pgm-hub-user': 'forged.sig', 'x-pgm-secret': 'guess', 'X-PGM-Other': '1', 'x-vr-user': 't-admin', Cookie: 'a=b' })), recH = fp.reqs[fp.reqs.length - 1] || { headers: {} };
+      const vH = vouched(recH);
+      const helloS = note(await g('POST', '/pgm/hello', U, { proto: [1] })), vS = vouched(fp.reqs[fp.reqs.length - 1]);
+      const n1 = fp.reqs.length;
+      const anon = note(await g('POST', '/pgm/hello', null, { proto: [1] })), bad = note(await g('POST', '/pgm/v1/call', 'not-a-token-r620', {})), anonGet = note(await g('GET', '/pgm/models', null));
+      const mHello = note(await g('POST', '/pgm/hello', mach.token, { proto: [1] })), mInfo = note(await g('GET', '/pgm/info', mach.token));
+      const n2 = fp.reqs.length;
+      const info = note(await g('GET', '/pgm/info', null)), recI = fp.reqs[fp.reqs.length - 1] || { headers: {} };
+      setPgm(null);
+      const noSrv = note(await g('GET', '/pgm/info', null)), noSrv2 = note(await g('POST', '/pgm/hello', dev.token, {}));
+      const n3 = fp.reqs.length;
+      const sentHeaders = Object.keys(recH.headers);
+      check('R625', 'the hub forwards /pgm/* to the Jcode PGM Server with the person it vouches for: a device token or a page session as the bearer goes on (path, query, body and the server\'s answer as they are) with x-pgm-hub-user signed by the shared secret (the fake server checks the HMAC: that person, that device, a fresh time) and without the client\'s own x-pgm-* (a forged one is replaced), x-vr-*, cookie or bearer; nobody signed in, a bad token and a linked machine\'s token never reach the server (401, 401, 403), except GET /pgm/info, which goes on without one (and unsigned); with no pgmServer.url /pgm/ is a plain 404 "this hub has no Jcode PGM Server"',
+        hello.status === 200 && hello.json.url === '/pgm/hello?v=1' && recH.body === JSON.stringify({ proto: [1] }) && hello.headers.get('x-fake') === 'pgm' && vH && vH.user === 't-user' && vH.deviceId === dev.id && Math.abs(Date.now() - vH.at) < 60000
+        && !sentHeaders.some((h) => (h.startsWith('x-pgm-') && h !== 'x-pgm-hub-user') || h.startsWith('x-vr-') || h === 'cookie' || h === 'authorization')
+        && helloS.status === 200 && vS && vS.user === 't-user' && /^s-/.test(vS.deviceId) && n1 - n0 === 2
+        && anon.status === 401 && bad.status === 401 && anonGet.status === 401 && mHello.status === 403 && mInfo.status === 403 && n2 === n1
+        && info.status === 200 && info.json.server === 'fake' && !recI.headers['x-pgm-hub-user'] && noSrv.status === 404 && noSrv.json.error === 'this hub has no Jcode PGM Server' && noSrv2.status === 404 && n3 === n2 + 1 && leaks(seenText) === 0,
+        `hello ${hello.status} ${JSON.stringify(hello.json)} vouched ${JSON.stringify(vH)} headers ${sentHeaders.filter((h) => /^x-|cookie|authorization/.test(h))}; session ${helloS.status} ${vS && vS.deviceId}; refused ${anon.status}/${bad.status}/${anonGet.status} machine ${mHello.status}/${mInfo.status} reached ${n2 - n1}; info ${info.status} signed ${!!recI.headers['x-pgm-hub-user']}; none ${noSrv.status} "${noSrv.json.error}"/${noSrv2.status}; leaks ${leaks(seenText)}`);
+
+      // R626: streaming both ways, the hang-up, and /api/check
+      setPgm({ url: fakeUrl, stateFile: 'pgm-state/server.json' });
+      const s = {};
+      { // the answer, chunk by chunk: the second chunk is written only after the client has the first
+        const r = await fetch(H + '/pgm/stream', { method: 'POST', headers: { Authorization: 'Bearer ' + dev.token }, body: '{}' });
+        const rd = r.body.getReader(), dec = new TextDecoder(); let got = '';
+        const until = async (w) => { while (!got.includes(w)) { const x = await within(rd.read(), 5000); if (!x || x.done) return false; got += dec.decode(x.value); } return true; };
+        s.one = await until('one'); s.twoBefore = got.includes('two'); gates.two.res(); s.two = await until('two'); s.threeBefore = got.includes('three'); gates.three.res(); s.three = await until('three');
+        s.sse = r.headers.get('content-type'); s.buffering = r.headers.get('x-accel-buffering');
+      }
+      { // the request body, piece by piece: the server has the first piece before the client sends the second
+        let ctl; const rs = new ReadableStream({ start(c) { ctl = c; } }); const enc = new TextEncoder();
+        const pr = fetch(H + '/pgm/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + dev.token, 'Content-Type': 'application/octet-stream' }, body: rs, duplex: 'half' });
+        ctl.enqueue(enc.encode('part-one;')); s.early = (await within(gates.part1.p, 5000)) === true; ctl.enqueue(enc.encode('part-two;')); ctl.close();
+        const ur = await pr; s.upload = (await ur.json()).parts || [];
+      }
+      { // a client that hangs up closes the server's side
+        const ac = new AbortController(); const lr = await fetch(H + '/pgm/long', { headers: { Authorization: 'Bearer ' + dev.token }, signal: ac.signal }); const rd = lr.body.getReader(); await within(rd.read(), 5000); ac.abort();
+        s.closed = await within(gates.longClosed.p, 5000);
+      }
+      const c1 = (await call('/api/check', U)).data.pgmServer;
+      setPgm({ url: fakeUrl, signKey: SIGN_CFG }); const c2 = (await call('/api/check', U)).data.pgmServer;
+      setPgm({ url: fakeUrl }); const c3 = (await call('/api/check', U)).data.pgmServer;
+      setPgm(null); const c4 = (await call('/api/check', U)).data;
+      check('R626', 'a stream passes through /pgm/ as it is made, both ways: the client has the server\'s first SSE chunk before the server writes the second (and the second before the third), the server has the first piece of a streamed request body before the client sends the next, nginx is told not to buffer; a client that hangs up mid-stream closes the server\'s side within moments; /api/check carries pgmServer {url: <hub>/pgm, signKey} from the server\'s state file (else config pgmServer.signKey) when the server is set up, and no pgmServer at all without a sign key or without pgmServer.url',
+        s.one && !s.twoBefore && s.two && !s.threeBefore && s.three && /event-stream/.test(s.sse || '') && s.buffering === 'no' && s.early && same(s.upload.join(''), 'part-one;part-two;') && s.upload.length >= 2
+        && s.closed && s.closed.ended === false && c1 && /^https?:\/\/.+\/pgm$/.test(c1.url) && c1.signKey === SIGN && c2 && c2.signKey === SIGN_CFG && c3 === undefined && c4.username === 't-user' && c4.pgmServer === undefined,
+        `stream ${JSON.stringify({ one: s.one, twoBefore: s.twoBefore, two: s.two, three: s.three, sse: s.sse, buffering: s.buffering })}; upload early ${s.early} ${JSON.stringify(s.upload)}; hang-up ${JSON.stringify(s.closed)}; check ${JSON.stringify(c1)} / ${c2 && c2.signKey} / ${JSON.stringify(c3)} / ${JSON.stringify(c4.pgmServer)}`);
+    } finally {
+      for (const gt of Object.values(gates)) gt.res(null);
+      if (hadLocal) fs.writeFileSync(localCfgFile, JSON.stringify(local0, null, 2)); else { try { fs.unlinkSync(localCfgFile); } catch {} }
+      srv.close(); if (srv.closeAllConnections) srv.closeAllConnections();
+      try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch {}
+      await call('/api/openrouter/mykey/remove', U, {});
+      if (myA0.hasKey) await call('/api/openrouter/mykey', A, { pairs: (myA0.pairs || []).length ? myA0.pairs : [] }); else await call('/api/openrouter/mykey/remove', A, {});
+      await call('/api/providers/remove', A, { id: tp.id });
+      await call('/api/apikey/revoke', U, { id: kU.id });
+      await call('/api/devices/revoke', U, { id: dev.id }); await call('/api/devices/revoke', U, { id: mach.id });
+    }
   }
   // R546 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
   // it had (each id once, inside the Settings box) and every group has a heading and a one-line hint; the page's own Save

@@ -7,6 +7,29 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.66.0 — 2026-11-16
+
+MINOR: **the hub side of Jcode PGM Server, stage 1** (T-376; spec plans/jcode-pgm-server.md; Sponge, 2026-11-16: a
+server variant of Jcode PGM next to the hub as the team's remote gateway: the team's OpenRouter models in every Jcode PGM
+through an OpenRouter-shaped `pgm` provider, encrypted between client and server, VibeRoller login required, backwards
+compatible from day 1). Jcode PGM 0.99.8 is the other half (`jcodepgm server`, the `pgm` provider, the `pgm-wire`
+protocol).
+
+- **`/pgm/*` forward** to the server (config `pgmServer.url`, loopback only): streamed both ways without reading the
+  body; every request needs a VibeRoller device token or page session except `GET /pgm/info`; linked-machine tokens are
+  refused; the client's `authorization`, `cookie`, `x-pgm-*` and `x-vr-*` headers are stripped and the hub adds
+  `x-pgm-hub-user` (who the person is, HMAC-signed with the shared secret). No server configured: a plain 404.
+- **`/__pgm/*`, the server's API** (from this machine only, no proxy headers, `x-pgm-secret` from
+  `bridge/pgm-server.secret`, made owner-only at start): `whoami`, `models` (the Work dropdown's OpenRouter pairs, team and
+  your own, and your month budget), `route` (the key for exactly one request; refused when not allowed or over the team
+  budget), `charge` (the same budget, usage and ledger records as the hub's own OpenRouter calls), `sessions/report`.
+  The hub never decrypts the client ⇄ server envelope. Every call is in the security log, never with a key or token.
+  `/__sync/*` now uses the same local gate.
+- **`/api/check`** gives `pgmServer: {url, signKey}` when a server is configured (the sign key from the server's
+  `server.json`, config `pgmServer.stateFile`, or `pgmServer.signKey`), so jcode pins the server's key from your login.
+- `bridge/pgm-server.secret` is hub data: gitignored, in the deploy snapshot, pack-data, restore and the handoff
+  (handoff.js 1.2.6). Config keys: `pgmServer.url`, `pgmServer.stateFile`, `pgmServer.signKey`. Checks R620–R626.
+
 ## 5.65.0 — 2026-11-16
 
 MINOR: **`/transfer` in Work: a handoff and a fresh session that picks up where the last one left off** (T-375; Sponge,

@@ -31,6 +31,7 @@ pub mod machines;
 pub mod guilds;
 pub mod hyperwork;
 pub mod perms;
+pub mod pgm;
 pub mod native_releases;
 pub mod notes;
 pub mod openai;
@@ -111,6 +112,8 @@ pub struct Modules {
     pub instance: Instance,
     /// the data bridge to the other hub on this machine (T-324), when config sync names one
     pub sync: std::sync::OnceLock<Arc<sync::Bridge>>,
+    /// the Jcode PGM Server next to this hub (T-376): the shared secret and the /pgm/ forward
+    pub pgm: pgm::Pgm,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -126,7 +129,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), instance: Instance::from_cfg(cfg), sync: Default::default(), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), instance: Instance::from_cfg(cfg), sync: Default::default(), pgm: pgm::Pgm::new(root), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -406,6 +409,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules(), "alone": hub.alone() }))); }
     // the data bridge's hub-to-hub routes (T-324): the other hub on this machine only, with the shared secret
     if let Some(rest) = p.strip_prefix("/__sync/") { return sync::route(hub, r, rest).await; }
+    // the Jcode PGM Server asking this hub (T-376): this machine only, never through a proxy, with the shared secret
+    if let Some(rest) = p.strip_prefix("/__pgm/") { return pgm::api(hub, r, rest).await; }
     // the JavaScript hub asking a module of this one (with the front's secret, from this machine only)
     if let Some(rest) = p.strip_prefix("/__front/") {
         if !from_front(hub, r) { return answer(403, json!({ "ok": false, "error": "forbidden" })); }

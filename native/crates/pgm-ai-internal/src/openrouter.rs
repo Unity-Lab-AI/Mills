@@ -380,6 +380,61 @@ pub async fn relay(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
     }
 }
 
+// ---------- the Jcode PGM Server (T-376, team note plans/jcode-pgm-server.md B.1) ----------
+// The server next to the hub serves these same pairs to jcode clients: it asks the hub (/__pgm/*) what a person may use,
+// the key for one request, and charges each answer here, so keys, pairs and budgets have one source of truth.
+/// The OpenRouter providers a person may pick (the Work dropdown's: the team's / shared ones, then their own key's), as
+/// full records (the key is in them: never hand one on but through [`pgm_route`]).
+fn usable(hub: &dyn AiHub, u: &str) -> Vec<Value> {
+    let w = hub.work();
+    let mut out: Vec<Value> = crate::work::providers_list(hub, u).into_iter().filter(|p| p["kind"] == json!(KIND)).filter_map(|p| w.provider_get(hub.ai(), &s(&p, "id"), u)).collect();
+    out.sort_by_key(is_personal);
+    out
+}
+/// The pair ids as the server's clients pick them: a team pair by its id, a pair of the person's own key as `my/<id>` (as on /v1).
+fn pgm_id(p: &Value, pr: &Value) -> String { if is_personal(p) { format!("my/{}", s(pr, "id")) } else { s(pr, "id") } }
+/// The pairs a person may use (team and their own key's): `{ id, label, model, providers, allowFallbacks, source, provider }`.
+pub fn pgm_pairs(hub: &dyn AiHub, u: &str) -> Vec<Value> {
+    let mut out: Vec<Value> = vec![];
+    for p in usable(hub, u) { for pr in pairs_of(&p) {
+        let id = pgm_id(&p, &pr);
+        if out.iter().any(|x| x["id"] == json!(id)) { continue; }
+        out.push(json!({ "id": id, "label": pr["label"], "model": pr["model"], "providers": pr["providers"], "allowFallbacks": pr["allowFallbacks"] == json!(true), "source": if is_personal(&p) { "mine" } else { "team" }, "provider": p["id"] }));
+    } }
+    out
+}
+/// The person's month as the server's clients see it.
+pub fn pgm_budget(hub: &dyn AiHub, u: &str) -> Value { let m = month_view(hub, u); json!({ "capUsd": m["capUsd"], "spentUsd": m["spentUsd"], "resetsAt": m["resetsAt"] }) }
+/// The provider and pair an id names for that person: `my/<id>` = their own key's; a plain id = the team's pair, else their
+/// own pair with that id (as /v1 routes it).
+pub fn pgm_resolve(hub: &dyn AiHub, u: &str, asked: &str) -> Option<(Value, Value)> {
+    let all = usable(hub, u);
+    let find = |own: bool, id: &str| all.iter().filter(|p| is_personal(p) == own).find_map(|p| pair(p, id).map(|pr| (p.clone(), pr)));
+    match asked.strip_prefix("my/") { Some(id) => find(true, id).or_else(|| find(false, asked)), None => find(false, asked).or_else(|| find(true, asked)) }
+}
+/// The key and routing for exactly one request of that person on that pair: `{ baseUrl, apiKey, model, provider, kind,
+/// pair, headers }` (`provider` exactly as the hub itself sends it to OpenRouter: [`shape`]). Err((403 | 503, the plain
+/// reason)) when it is not a pair they may use, a team pair over their month budget, or a provider without a key.
+pub fn pgm_route(hub: &dyn AiHub, u: &str, asked: &str) -> Result<Value, (u16, String)> {
+    let Some((p, pr)) = pgm_resolve(hub, u, asked) else { return Err((403, format!("\"{}\" is not one of the OpenRouter models you may use (see the models list).", asked.chars().take(80).collect::<String>()))) };
+    if let Some(m) = guard(hub, u, &p) { return Err((403, m)); }
+    if s(&p, "apiKey").is_empty() { return Err((503, "This OpenRouter provider has no key set; an admin adds it in Settings → My AIs.".into())); }
+    let mut b = json!({ "model": pr["id"] });
+    shape(&p, &mut b);
+    Ok(json!({ "baseUrl": base_url(hub), "apiKey": s(&p, "apiKey"), "model": b["model"], "provider": b["provider"], "kind": if is_personal(&p) { "mine" } else { "team" }, "pair": pgm_id(&p, &pr),
+        "headers": { "HTTP-Referer": hub.public_url(), "X-Title": "VibeRoller" } }))
+}
+/// The provider an answer the server made is charged to: the pair's (when it still resolves), else a stand-in of the
+/// right kind (a key removed between the request and its charge still counts).
+pub fn pgm_charge_provider(hub: &dyn AiHub, u: &str, asked: &str, mine: bool) -> (Value, String) {
+    let plain = asked.strip_prefix("my/").unwrap_or(asked).to_string();
+    let want = if mine { format!("my/{plain}") } else { plain.clone() };
+    match pgm_resolve(hub, u, &want).filter(|(p, _)| is_personal(p) == mine) {
+        Some((p, pr)) => (p, s(&pr, "id")),
+        None => (json!({ "id": if mine { personal_id(u) } else { "pgm-server".to_string() }, "kind": KIND, "personal": mine }), plain),
+    }
+}
+
 // ---------- routes (signed in) ----------
 /// `GET /api/openrouter/budget` (the person's month and fallback), `GET /api/openrouter/budget/all` (admins: everyone's
 /// month), `POST /api/openrouter/budget/cap { username, capUsd | null }` (admins), `POST /api/openrouter/fallback { on,
