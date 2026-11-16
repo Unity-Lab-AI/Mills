@@ -143,15 +143,20 @@ fn cap_first(t: &str) -> String { let mut c = t.chars(); match c.next() { Some(f
 // ---------- the runs that follow a PGM session ----------
 /// A run's controls: messages for it to send, and Stop.
 /// A message is `{text, target, pair, mcp, systemPrompt}` (F.3 / F.8 message body without user, worktree, project, branch).
-struct Ctl { inbox: mpsc::UnboundedSender<Value>, stop: Arc<Notify> }
+/// `stopping`: Stop was asked (the run ends stopped, even when the server's "not running" comes first).
+struct Ctl { inbox: mpsc::UnboundedSender<Value>, stop: Arc<Notify>, stopping: Arc<std::sync::atomic::AtomicBool> }
 static CTL: LazyLock<Mutex<HashMap<String, Ctl>>> = LazyLock::new(Mutex::default);
 
 /// Stop (the page's Stop, the liveness check): the server is told, and the run that follows the session ends.
 pub fn stop(hub: &dyn AiHub, user: &str, pid: &str, run: &str) {
-    if let Some(c) = CTL.lock().unwrap_or_else(|e| e.into_inner()).get(run) { c.stop.notify_one(); }
-    let Some(sv) = srv_of(hub) else { return };
+    let stopper = CTL.lock().unwrap_or_else(|e| e.into_inner()).get(run).map(|c| { c.stopping.store(true, std::sync::atomic::Ordering::SeqCst); c.stop.clone() });
+    let Some(sv) = srv_of(hub) else { if let Some(s) = stopper { s.notify_one(); } return };
     let (user, pid) = (user.to_string(), pid.to_string());
-    tokio::spawn(async move { if let Err(e) = call(&sv, reqwest::Method::POST, &format!("/__srv/sessions/{}/stop", q(&pid)), Some(&json!({ "user": user })), Duration::from_secs(10)).await { eprintln!("[work] pgm: stop of {pid} did not reach the Jcode PGM Server: {e}"); } });
+    // the server first (it may take a moment to end its run), then the run here ends: never longer than 5 s
+    tokio::spawn(async move {
+        if let Err(e) = call(&sv, reqwest::Method::POST, &format!("/__srv/sessions/{}/stop", q(&pid)), Some(&json!({ "user": user })), Duration::from_secs(5)).await { eprintln!("[work] pgm: stop of {pid} did not reach the Jcode PGM Server: {e}"); }
+        if let Some(s) = stopper { s.notify_one(); }
+    });
 }
 
 /// The server's frames for one session: its events and state changes, from the SSE stream (and from polling while that is not
@@ -202,7 +207,7 @@ fn frames(sv: Srv, user: String, pid: String, after: u64) -> mpsc::UnboundedRece
 /// One run following PGM session `pid` for Work session `sx`, until its turn is over (or Stop): the history since `after`, then
 /// each message from the inbox sent, and the server's frames shown as they come.
 #[allow(clippy::too_many_arguments)]
-async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, pid: String, mut after: u64, mut inbox: mpsc::UnboundedReceiver<Value>, stopper: Arc<Notify>, extra: (String, String, String)) {
+async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, pid: String, mut after: u64, mut inbox: mpsc::UnboundedReceiver<Value>, stopper: Arc<Notify>, stopping: Arc<std::sync::atomic::AtomicBool>, extra: (String, String, String)) {
     let w = hub.work().clone();
     let (dir, project, branch) = extra;
     let emit = |ev: Value| w.on_event(&*hub, &a, &sx, ev, "openrouter");
@@ -236,7 +241,10 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
     let mut batch: Vec<Value> = vec![]; let mut polled: Option<bool> = None;
     loop {
         // nothing to wait for: a run that only follows the session ends when it is not running (and no message is on its way)
-        if !waiting && !is_running && !sent_any_pending(&inbox) { break; }
+        if !waiting && !is_running && !sent_any_pending(&inbox) {
+            if stopping.load(std::sync::atomic::Ordering::SeqCst) { let _ = tokio::time::timeout(Duration::from_secs(6), stopper.notified()).await; set_pgm(&w, &a, &sx, &pid, after); return end(&hub, &a, &sx, &run, &pid, after, Value::Null); }
+            break;
+        }
         if !ready && now_ms().saturating_sub(started) > 2000 { ready = true; }
         let tick = tokio::time::sleep(Duration::from_millis(500));
         tokio::select! {
@@ -323,10 +331,11 @@ fn begin(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, sv: &Srv, prov: &str, pid: 
         if new {
             let (itx, irx) = mpsc::unbounded_channel(); let stopper = Arc::new(Notify::new());
             if let Some(m) = message.clone() { let _ = itx.send(m); }
-            CTL.lock().unwrap_or_else(|e| e.into_inner()).insert(run.clone(), Ctl { inbox: itx, stop: stopper.clone() });
+            let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            CTL.lock().unwrap_or_else(|e| e.into_inner()).insert(run.clone(), Ctl { inbox: itx, stop: stopper.clone(), stopping: stopping.clone() });
             for b in &banner { w.emit_key(&sx.key, info(b.clone())); }
             Work::watch_liveness(hub, a, sx, &run);
-            tokio::spawn(follow(hub.clone(), a.clone(), sx.clone(), run.clone(), sv.clone(), pid.to_string(), after, irx, stopper, wd.clone()));
+            tokio::spawn(follow(hub.clone(), a.clone(), sx.clone(), run.clone(), sv.clone(), pid.to_string(), after, irx, stopper, stopping, wd.clone()));
             return Some((run, rx));
         }
         // the run going takes the message (it may be just ending: then a new one starts)
