@@ -297,7 +297,7 @@ pub fn fallback_for(hub: &dyn AiHub, u: &str, chosen: Option<&Value>) -> Option<
     if f["on"] != json!(true) { return None; }
     let p = hub.work().provider_get(hub.ai(), &s(&f, "provider"), u).filter(|p| p["kind"] == json!(KIND))?;
     let pr = pair(&p, &s(&f, "pair"))?;
-    if jcode_cmd(hub).is_err() || guard(hub, u, &p).is_some() { return None; }
+    if (jcode_cmd(hub).is_err() && hub.pgm_server().is_none()) || guard(hub, u, &p).is_some() { return None; }
     Some((p, s(&pr, "id"), format!("{why}, so this run uses OpenRouter ({}) through Jcode PGM on the server, as your setting \"use OpenRouter when Claude is unavailable\" says.", s(&pr, "label"))))
 }
 
@@ -315,7 +315,8 @@ pub fn jcode_cmd(hub: &dyn AiHub) -> Result<(String, Vec<String>), String> {
 }
 /// Can this provider run Work here? Some(reason) when it cannot (a direct kind with no Jcode PGM). None = it can, or it is
 /// not a direct kind.
-pub fn work_off(hub: &dyn AiHub, p: &Value) -> Option<String> { if direct_kind(p["kind"].as_str().unwrap_or("")) { jcode_cmd(hub).err() } else { None } }
+/// With a Jcode PGM Server next to the hub (T-376 stage 3) the server runs it: on.
+pub fn work_off(hub: &dyn AiHub, p: &Value) -> Option<String> { if direct_kind(p["kind"].as_str().unwrap_or("")) && hub.pgm_server().is_none() { jcode_cmd(hub).err() } else { None } }
 /// How a Work run of a direct-kind provider goes: the jcode harness's provider entry (jcode.rs `command`: the binary, its
 /// args, `-p openrouter`, the model), the model jcode runs, the model id the relay routes to (a pair id for OpenRouter),
 /// the environment (no key in it: the relay's address is added once the run has its token, [`relay_env`]).
@@ -390,6 +391,15 @@ fn usable(hub: &dyn AiHub, u: &str) -> Vec<Value> {
     let mut out: Vec<Value> = crate::work::providers_list(hub, u).into_iter().filter(|p| p["kind"] == json!(KIND)).filter_map(|p| w.provider_get(hub.ai(), &s(&p, "id"), u)).collect();
     out.sort_by_key(is_personal);
     out
+}
+/// The pair a Work session of this provider runs (the person's pick, else the provider's first) as the server's clients name
+/// it (`my/<id>` for their own key's), and its label; Err = the plain reason it cannot run (over the budget, no key, no pairs).
+pub fn pgm_work_pair(hub: &dyn AiHub, u: &str, p: &Value, state_model: &str) -> Result<(String, String), String> {
+    if let Some(m) = guard(hub, u, p) { return Err(m); }
+    if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in Settings → My AIs.".into()); }
+    let ps = pairs_of(p);
+    let Some(pr) = ps.iter().find(|x| s(x, "id") == state_model).or(ps.first()).cloned() else { return Err("This OpenRouter provider offers no models.".into()) };
+    Ok((pgm_id(p, &pr), format!("{} · {}", if is_personal(p) { "my OpenRouter" } else { "OpenRouter" }, s(&pr, "label"))))
 }
 /// The pair ids as the server's clients pick them: a team pair by its id, a pair of the person's own key as `my/<id>` (as on /v1).
 fn pgm_id(p: &Value, pr: &Value) -> String { if is_personal(p) { format!("my/{}", s(pr, "id")) } else { s(pr, "id") } }
