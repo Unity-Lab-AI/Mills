@@ -7142,7 +7142,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // the page as a product's shell (5.2.0): PRODUCT from the placeholder, everything stored under NS, the base path, only its screens
       && /const PRODUCT = \(\(\) => \{ const v = '__MILLS_PRODUCT__';/.test(page170) && /const NS = PRODUCT \? PRODUCT\.id \+ '\.' : '';/.test(page170) && /const TOKEN_KEY = NS \+ 'mills\.token';/.test(page170)
       && /localStorage\.getItem\(NS \+ k\)/.test(page170) && /indexedDB\.open\(NS \+ 'mills', 1\)/.test(page170) && !/localStorage\.(get|set)Item\('mills/.test(page170) && !/sessionStorage\.(get|set)Item\('/.test(page170)
-      && /return location\.origin \+ \(PRODUCT \? PRODUCT\.base : ''\);/.test(page170) && /if \(PRODUCT && !\['menu', 'admin', \.\.\.PRODUCT\.screens\]\.includes\(name\)\) name = 'menu';/.test(page170)
+      && /return location\.origin \+ \(PRODUCT \? PRODUCT\.base : ''\);/.test(page170) && /if \(PRODUCT && !\['menu', 'admin', 'settingsPage', \.\.\.PRODUCT\.screens\]\.includes\(name\)\) name = 'menu';/.test(page170)
       && (await call('/')).status === 200 && /__MILLS_PRODUCT__/.test(await fetch(H + '/').then((r) => r.text())); // the hub leaves the placeholder: PRODUCT stays null here
     if (RUST_HUB) {
       const notAdmin = await call('/api/admin/gateway/products', U, { id: 'prodsuit', name: 'PGM Prod Suit' });
@@ -9277,7 +9277,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const screens = [...page.matchAll(/<div id="(\w+)" class="screen"[^>]*>\s*<header>([\s\S]*?)<\/header>/g), ...page.matchAll(/<div id="(shell)" hidden>\s*<header>([\s\S]*?)<\/header>/g)];
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
-    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
+    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings' && !\$\('settings'\)\.classList\.contains\('asPage'\)\) \$\('closeSettings'\)\.click\(\); \};/.test(page) // the modal; the page (T-380) has its own way back && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
     const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 13 && !seen.headless && seen.aiGroups === 'AI source,My AIs,My OpenRouter,My AI hosts' && seen.appGroups === 'Appearance,Desktop Unity' && seen.workGroups === 'Chat and Work,My projects,When the AI asks' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
       && seen.connGroups === 'API access,Signed-in devices,My machines,My Forgejo'
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
