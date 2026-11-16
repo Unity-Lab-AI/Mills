@@ -165,6 +165,7 @@ fn frames(sv: Srv, user: String, pid: String, after: u64) -> mpsc::UnboundedRece
                 let rq = http().get(format!("{}/__srv/sessions/{}/events?user={}&after={last}", sv.url, q(&pid), q(&user))).header(SECRET_HEADER, &sv.secret).header("accept", "text/event-stream");
                 match rq.send().await {
                     Ok(r) if r.status().is_success() && r.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|c| c.contains("event-stream")) => {
+                        if tx.send(json!({ "type": "_connected" })).is_err() { return; }
                         let mut body = r.bytes_stream(); let mut buf: Vec<u8> = vec![]; let mut data = String::new();
                         loop {
                             let chunk: Option<Result<Bytes, reqwest::Error>> = tokio::select! { _ = tx.closed() => return, c = body.next() => c };
@@ -210,7 +211,7 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
     // what this run waits for: a message sent and its turn not over yet; the turn's last answer (the result's text)
     let (mut waiting, mut active, mut device, mut last_text, mut last_at, mut skip, mut shown) = (false, false, false, String::new(), 0u64, None::<String>, 0u32);
     // the history since the last event shown, and where it runs
-    let mut is_running = false;
+    let mut is_running;
     match call(&sv, reqwest::Method::GET, &format!("/__srv/sessions/{}?user={}&after={after}", q(&pid), q(&user)), None, Duration::from_secs(15)).await {
         Ok((200, v)) => {
             for e in v["events"].as_array().cloned().unwrap_or_default() {
@@ -227,13 +228,17 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
     set_pgm(&w, &a, &sx, &pid, after);
     if is_running { active = true; }
     let mut sent_any = false;
+    // a message goes once the stream is there (its state changes are not replayed), or after 2 s without one
+    let mut ready = false; let mut last_poll = now_ms();
+    let mut batch: Vec<Value> = vec![]; let mut polled: Option<bool> = None;
     loop {
         // nothing to wait for: a run that only follows the session ends when it is not running (and no message is on its way)
         if !waiting && !is_running && !sent_any_pending(&inbox) { break; }
+        if !ready && now_ms().saturating_sub(started) > 2000 { ready = true; }
         let tick = tokio::time::sleep(Duration::from_millis(500));
         tokio::select! {
             _ = stopper.notified() => { set_pgm(&w, &a, &sx, &pid, after); return end(&hub, &a, &sx, &run, &pid, after, Value::Null); }
-            m = inbox.recv() => {
+            m = inbox.recv(), if ready => {
                 let Some(text) = m else { continue };
                 let body = json!({ "user": user, "text": text, "worktree": dir, "project": project, "branch": branch });
                 match call(&sv, reqwest::Method::POST, &format!("/__srv/sessions/{}/message", q(&pid)), Some(&body), Duration::from_secs(600)).await {
@@ -243,7 +248,7 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
                         Ok(l) => {
                             if let Some(l) = l { line(info(l)); }
                             device = s(&v, "routed") == "device";
-                            waiting = true; active = false; skip = Some(text.trim().to_string()); last_at = now_ms(); sent_any = true;
+                            waiting = true; active = false; skip = Some(text.trim().to_string()); last_at = now_ms(); sent_any = true; last_text.clear();
                         }
                     },
                 }
@@ -251,6 +256,7 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
             f = fr.recv() => {
                 let Some(f) = f else { break };
                 let ty = s(&f, "type");
+                if ty == "_connected" { ready = true; continue; }
                 if ty == "ping" { continue; }
                 if ty == "session" || ty == "state" {
                     if let Some(r) = running(&f) {
@@ -260,19 +266,32 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
                     continue;
                 }
                 if ty == "handover" { line(info(format!("The server asked jcode{} to hand its unfinished work over (stage, commit, push).", { let d = s(&f, "device"); if d.is_empty() { String::new() } else { format!(" on {d}") } }))); continue; }
-                let n = f["seq"].as_u64().unwrap_or(0);
-                if n == 0 || n <= after { continue; }
-                after = n; last_at = now_ms();
-                if s(&f, "kind") == "assistant" { last_text = s(&f, "text"); active = true; }
-                if matches!(s(&f, "kind").as_str(), "tool" | "note") { active = true; }
-                for x in map_event(&f, &mut skip) { emit(x); }
-                shown += 1; if shown % 20 == 0 { set_pgm(&w, &a, &sx, &pid, after); }
+                batch.push(f);
             }
             _ = tick => {
                 // a turn in jcode: over once jcode has answered and gone quiet (the server may never say)
                 if waiting && device && !last_text.is_empty() && now_ms().saturating_sub(last_at) > quiet { waiting = false; is_running = false; }
+                // the session's state now and then (a change the stream did not carry: it came before the stream was there)
+                if (waiting || is_running) && now_ms().saturating_sub(last_poll) > 1500 {
+                    last_poll = now_ms();
+                    if let Ok((200, v)) = call(&sv, reqwest::Method::GET, &format!("/__srv/sessions/{}?user={}&after={after}", q(&pid), q(&user)), None, Duration::from_secs(5)).await {
+                        // events the stream has not brought (yet) are shown now (the stream's copies are skipped by their seq), then whether it runs
+                        batch.extend(v["events"].as_array().cloned().unwrap_or_default());
+                        polled = running(&state_in(&v));
+                    }
+                }
             }
         }
+        for f in batch.drain(..) {
+            let n = f["seq"].as_u64().unwrap_or(0);
+            if n == 0 || n <= after { continue; }
+            after = n; last_at = now_ms();
+            if s(&f, "kind") == "assistant" { last_text = s(&f, "text"); active = true; }
+            if matches!(s(&f, "kind").as_str(), "tool" | "note") { active = true; }
+            for x in map_event(&f, &mut skip) { emit(x); }
+            shown += 1; if shown % 20 == 0 { set_pgm(&w, &a, &sx, &pid, after); }
+        }
+        match polled.take() { Some(false) => { is_running = false; if waiting && active { waiting = false; } } Some(true) => { is_running = true; if waiting { active = true; } } None => {} }
     }
     set_pgm(&w, &a, &sx, &pid, after);
     if sent_any || !last_text.is_empty() {

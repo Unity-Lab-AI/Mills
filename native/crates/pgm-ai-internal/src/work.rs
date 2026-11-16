@@ -656,8 +656,6 @@ impl Work {
     }
     /// The PGM session the run of this session follows ("" = none, or a run of its own).
     pub(crate) fn pgm_run_of(&self, key: &str) -> String { self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(key).map(|r| r.pgm.clone()).unwrap_or_default() }
-    /// Is the run with this id still the run of that session?
-    pub(crate) fn run_is(&self, key: &str, run: &str) -> bool { self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(key).is_some_and(|r| r.id == run) }
     /// The liveness check of a run (as `chat` starts for its own runs): a ping every 15 s, and a run silent for stallAfter ends.
     pub(crate) fn watch_liveness(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, run: &str) {
         let (h, u, id, sid, a2) = (hub.clone(), sx.key.clone(), run.to_string(), sx.sid.clone(), a.clone()); let stall = hub.work().stall_after();
@@ -1866,7 +1864,7 @@ mod tests {
     fn put_run(w: &Work, key: &str, account: &str, sid: &str, sess_env: &str, secret: &str, id: &str, remote: &str) {
         let (tx, _rx) = mpsc::unbounded_channel();
         w.runs.lock().unwrap().insert(key.into(), Run { journal: None, id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
-            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new(), dir: String::new(), tasks: Vec::new() });
+            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new(), dir: String::new(), tasks: Vec::new(), pgm: String::new() });
     }
     /// T-308: the per-run secret names the run; the account and session come from the run record; a header that disagrees is refused;
     /// the deprecated shared secret still works (and says so); nothing else is ours.
