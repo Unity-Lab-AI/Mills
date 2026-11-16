@@ -25,7 +25,7 @@ struct Form { title: String, intro: Vec<String>, fields: Vec<Field>, cur: usize,
 impl Form {
     fn one(title: &str, intro: &str, label: &str, value: &str, secret: bool, kind: Kind) -> Form { Form { title: title.into(), intro: vec![intro.into()], fields: vec![Field { label: label.into(), value: value.into(), secret }], cur: 0, kind } }
     fn setup(paste: bool) -> Form {
-        let intro = vec!["Where the values come from: VibeRoller → Settings → My AI hosts → make a host, then \"show config\" (or download its package: it holds an ai-node.json).".to_string(),
+        let intro = vec!["Where the values come from: VibeRoller → AI Admin → My AI hosts → make a host, then \"show config\" (or download its package: it holds an ai-node.json).".to_string(),
             if paste { "Paste the ai-node.json text here, or type the path to a downloaded ai-node.json. (F2: type the three values instead)".to_string() } else { "Type the three values. (F2: paste the ai-node.json text or give its path instead)".to_string() }];
         let fields = if paste { vec![Field { label: "ai-node.json text or path".into(), value: String::new(), secret: false }] } else { vec![
             Field { label: "Hub address".into(), value: DEFAULT_HUB.into(), secret: false }, Field { label: "Host id".into(), value: String::new(), secret: false }, Field { label: "Token (hidden)".into(), value: String::new(), secret: true }] };

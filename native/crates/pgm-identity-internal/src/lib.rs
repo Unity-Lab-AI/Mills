@@ -11,10 +11,13 @@
 //! - sign-in limits per address: 5 wrong for one name from one address → that address waits 15 minutes for it; 20
 //!   from one address → it waits; at most 3 sign-ins at once from one address
 //! - the caller's address behind Cloudflare (CF-Connecting-IP) or nginx (X-Real-IP / X-Forwarded-For)
+//! - site roles (siteroles.rs, T-379): the hub's own ladder of roles and permissions (the chat servers' model), custom
+//!   roles, the site-wide settings
 //! On its first start it takes over an older hub's sessions (`<root>/hub-state.json`) and locks (each account's
 //! state.json `lockedDevice`), so nobody is signed out or loses a device by the move.
 pub mod devices;
 pub mod appsignin;
+pub mod siteroles;
 use pgm_core_internal::json::{read_json, write_json_private as write_json};
 use pgm_core_internal::now_ms;
 use pgm_core_internal::audit;
@@ -126,6 +129,12 @@ impl Auth {
 
     /// Is that account an admin? (what accounts() says, for one name)
     pub fn is_admin(&self, user: &str) -> bool { admin_in(&self.root, &self.default_user, user) }
+    /// The site roles (T-379): who may do what on this hub.
+    pub fn site_roles(&self) -> siteroles::SiteRoles { siteroles::SiteRoles::new(&self.root, &self.default_user) }
+    /// Does that account hold that site permission?
+    pub fn may(&self, user: &str, perm: &str) -> bool { self.site_roles().has(user, perm) }
+    /// The default account (the hub's own: the owner).
+    pub fn default_user(&self) -> &str { &self.default_user }
     /// The accounts: the default one (`root` itself) and every profile with a config.json or an auth.json.
     pub fn accounts(&self) -> Vec<Account> {
         let profile = |dir: PathBuf, username: String| -> Account {

@@ -16,6 +16,8 @@
 //!                   either hub counts on both
 //!   avatar          profile pictures, by content
 //!   work.archive    saved Work transcripts (Past sessions), per person and id; deletes travel
+//!   site            the custom site roles and the site-wide settings (T-379), each file whole, newest wins; the default AI
+//!                   (config.local.json defaultProvider) stays each hub's own (its hosts differ)
 //! Not synced yet: chat attachments (the files behind a message), the servers / channels / groups (Chat/guilds.json), and the
 //! live Work session records (work.json, work-sessions/: a session's harness state belongs to the hub that runs it).
 //! Config: `"sync": { "peer": "http://127.0.0.1:<port>", "secretFile": "<path>", "name": "dev" }` (bridge/config.local.json);
@@ -49,7 +51,7 @@ pub fn start(hub: &Arc<Hub>) {
     let w = Arc::downgrade(hub);
     let kinds: Vec<Arc<dyn Kind>> = vec![
         Arc::new(Tasks(w.clone())), Arc::new(Activity(w.clone(), Mutex::default())), Arc::new(Boards(w.clone())), Arc::new(Notes(w.clone())),
-        Arc::new(Messages(w.clone())), Arc::new(Keys(w.clone())), Arc::new(Seen(w.clone())), Arc::new(Accounts(w.clone())), Arc::new(Avatars(w.clone())), Arc::new(Archive(w.clone())), Arc::new(Locks(w.clone())),
+        Arc::new(Messages(w.clone())), Arc::new(Keys(w.clone())), Arc::new(Seen(w.clone())), Arc::new(Accounts(w.clone())), Arc::new(Avatars(w.clone())), Arc::new(Archive(w.clone())), Arc::new(Locks(w.clone())), Arc::new(Site(w.clone())),
     ];
     let engine = Arc::new(Engine::open(&hub.root.join("sync"), &name, kinds, tag));
     println!("{tag} on: this hub is \"{name}\" ({}), its peer {peer}", engine.id());
@@ -303,6 +305,28 @@ impl Kind for Seen {
         h.mods.chat.sync_put_seen(u, c, v["mid"].as_str().unwrap_or(""));
         Ok(self.get(id).unwrap_or_else(|| v.clone()))
     }
+}
+
+// ---------- site roles and settings (T-379) ----------
+/// "roles" (site-roles.json: the custom site roles) and "settings" (site-settings.json), each file whole, the newer change
+/// wins: a role or a setting made on dev counts on live too (who has which role travels with the account's config).
+struct Site(Weak<Hub>);
+impl Site { fn file(h: &Hub, id: &str) -> Option<PathBuf> { match id { "roles" => Some(h.root.join("site-roles.json")), "settings" => Some(h.root.join("site-settings.json")), _ => None } } }
+impl Kind for Site {
+    fn name(&self) -> &str { "site" }
+    fn snapshot(&self) -> Vec<(String, Value)> { let Some(h) = self.0.upgrade() else { return vec![] }; ["roles", "settings"].iter().filter_map(|id| Self::file(&h, id).and_then(|f| read_obj(&f)).map(|v| (id.to_string(), v))).collect() }
+    fn get(&self, id: &str) -> Option<Value> { let h = self.0.upgrade()?; read_obj(&Self::file(&h, id)?) }
+    fn stamp(&self, id: &str, _v: &Value) -> Option<(i64, i64)> { let h = self.0.upgrade()?; Some((0, mtime_ms(&Self::file(&h, id)?))) }
+    fn check(&self, id: &str, v: &Value) -> Result<(), String> {
+        use pgm_identity_internal::siteroles as sr;
+        let ok = match id {
+            "roles" => v["roles"].as_array().is_some_and(|a| a.len() <= 200 && a.iter().all(|r| r["id"].as_str().is_some_and(|i| i.starts_with("c-")) && sr::custom_from(r["id"].as_str(), r).is_ok())),
+            "settings" => sr::settings_from(&json!({}), v).is_ok(),
+            _ => false,
+        };
+        if ok { Ok(()) } else { Err("site roles are { roles: [custom roles] }; site settings { motd, defaultTheme, newAccountRole }".into()) }
+    }
+    fn put(&self, id: &str, v: &Value) -> Result<Value, String> { let h = self.0.upgrade().ok_or("the hub is stopping")?; let f = Self::file(&h, id).ok_or("not a site record")?; pgm_core_internal::json::write_json(&f, v); Ok(v.clone()) }
 }
 
 // ---------- accounts ----------

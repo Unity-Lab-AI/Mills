@@ -1,5 +1,5 @@
 //! Controls from the hub (the cap `control`, 5.12.0): the person who owns this host pauses, resumes, restarts, updates
-//! it or looks at its log from Settings → My AI hosts. Each action is exactly what the local control app (`vr-host`)
+//! it or looks at its log from AI Admin → My AI hosts. Each action is exactly what the local control app (`vr-host`)
 //! does: pause / resume = the off file, restart / update = the request files that wait until nothing is in flight. The
 //! host also tells the hub how it is doing (`POST /node/status`, small, never a message): the hub only shows it.
 use serde_json::{json, Map, Value};
@@ -103,12 +103,12 @@ pub fn apply(h: &crate::host::runner::Host, action: &str, body: &Value) -> Value
             let mut s = match crate::host::settings::HostSettings::load(&h.cfg.path) { Ok(s) => s, Err(e) => return json!({ "ok": false, "result": e.to_string() }) };
             if let Err(e) = s.set_session_limits(&body["limits"]) { return json!({ "ok": false, "result": e.to_string() }); }
             if let Err(e) = s.save() { return json!({ "ok": false, "result": format!("Could not save the settings: {e}") }); }
-            log("session limits changed from the hub (its owner, in Settings → My AI hosts)");
+            log("session limits changed from the hub (its owner, in AI Admin → My AI hosts)");
             json!({ "ok": true, "result": "Session limits saved.", "limits": s.session_limits() })
         }
         "pause" => {
             let _ = std::fs::write(f.off(), format!("{MARK} at {}\n", now_ms()));
-            log("paused from the hub (its owner asked in Settings → My AI hosts)");
+            log("paused from the hub (its owner asked in AI Admin → My AI hosts)");
             h.set_status(json!({ "paused": true, "pausedBy": "hub" }));
             json!({ "ok": true, "result": "Paused: this host lends nothing new until it is resumed (jobs already running finish)." })
         }

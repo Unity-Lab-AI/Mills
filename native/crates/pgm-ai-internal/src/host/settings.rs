@@ -276,10 +276,10 @@ impl HostSettings {
                 self.raw.insert("hub".into(), json!(h));
             }
             "id" => {
-                if v.is_empty() || v.len() > 64 || !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') { return Err(Error::msg("The host id is letters, digits, - _ . (the one VibeRoller → Settings → My AI hosts shows).")); }
+                if v.is_empty() || v.len() > 64 || !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') { return Err(Error::msg("The host id is letters, digits, - _ . (the one VibeRoller → AI Admin → My AI hosts shows).")); }
                 self.raw.insert("id".into(), json!(v));
             }
-            "token" => { if v.len() < 24 { return Err(Error::msg("A token is at least 24 characters (VibeRoller → Settings → My AI hosts).")); } self.raw.insert("token".into(), json!(v)); }
+            "token" => { if v.len() < 24 { return Err(Error::msg("A token is at least 24 characters (VibeRoller → AI Admin → My AI hosts).")); } self.raw.insert("token".into(), json!(v)); }
             "autoUpdate" => { self.raw.insert("autoUpdate".into(), json!(yes(v))); }
             "update.quietMinutes" => { let n = range(1.0, 60.0)?; sub(self, "update", "quietMinutes", json!(n)); }
             "update.checkMinutes" => { let n = range(1.0, 60.0)?; sub(self, "update", "checkMinutes", json!(n)); }

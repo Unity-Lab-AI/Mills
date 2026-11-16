@@ -113,6 +113,42 @@ header b { font-weight: 750; letter-spacing: .01em; }
 #menu .menuSec > h2 { margin: 0; padding: 0 .2rem; text-align: left; font-size: .78rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: .6rem; }
 #menu .menuSec > h2::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
 #menu .menuSec .choices { width: 100%; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); } /* a full section (4) fits one row */
+/* T-379: Productivity two to a row; Settings / Downloads under My status / Team now, the same small buttons; the site-wide message */
+#menu .menuSec[data-menusec="productivity"] .choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#menu .menuQuick { margin-top: -.1rem; }
+#menu .menuQuick .ic { width: 1em; height: 1em; }
+.menuMotd { max-width: min(900px, 94vw); padding: .6rem .9rem; border-radius: var(--r-m); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft); white-space: pre-wrap; text-align: center; font-size: .9rem; }
+.menuMotd[hidden] { display: none; }
+/* T-379: Site admin and AI Admin, a column of groups like Settings; AI Admin's Global part, a line, then Yours */
+.adminPage { overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; width: min(1000px, 100%); margin: 0 auto; box-sizing: border-box; }
+.adminPart { display: flex; flex-direction: column; gap: 1rem; }
+.adminPart[hidden], .adminPage .setGroup[hidden] { display: none; }
+.adminPartHead { margin: .2rem 0 0; font-size: 1.05rem; display: flex; flex-direction: column; gap: .15rem; }
+.adminPartHead small { font-size: .8rem; font-weight: 400; color: var(--muted); }
+.adminSplit { border: 0; border-top: 2px solid var(--hairline); margin: .4rem 0; width: 100%; }
+.adminSplit[hidden] { display: none; }
+.adminPage .setGroup { padding: .9rem 1rem; border: 1px solid var(--hairline); border-radius: var(--r-m); background: var(--panel); }
+.adminPage table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.adminPage th, .adminPage td { border-bottom: 1px solid var(--line); padding: .4rem; text-align: left; vertical-align: middle; }
+.adminPage .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.adminPage label.setRow { display: grid; grid-template-columns: 1fr minmax(11rem, 24rem); gap: .4rem 1rem; align-items: center; }
+.adminPage label.setRow small, .adminPage label.chk small { display: block; color: var(--muted); font-size: .78rem; }
+.adminPage label.chk { display: grid; grid-template-columns: auto 1fr; gap: .5rem; align-items: start; }
+.roleRow { display: flex; flex-direction: column; gap: .35rem; padding: .55rem 0; border-bottom: 1px dashed var(--line); }
+.roleHead { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; } .roleHead small { color: var(--muted); }
+.roleCell { display: inline-flex; align-items: center; white-space: nowrap; }
+.roleChip { display: inline-flex; align-items: center; gap: .35rem; font-weight: 600; }
+.roleDot { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; flex: none; margin-right: .25rem; }
+.rolePerms { display: flex; flex-wrap: wrap; gap: .3rem; }
+.permChip { font-size: .75rem; padding: .1rem .5rem; border-radius: 999px; background: var(--surface-sunk); border: 1px solid var(--hairline); }
+.permChip.all { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+.roleForm { display: flex; flex-direction: column; gap: .6rem; padding: .6rem 0; }
+.permSet { border: 1px solid var(--hairline); border-radius: var(--r-s); padding: .5rem .7rem; display: flex; flex-direction: column; gap: .4rem; }
+.permSet legend { font-size: .8rem; font-weight: 700; color: var(--muted); padding: 0 .3rem; }
+.orWhich { display: flex; flex-direction: column; gap: .4rem; margin: .4rem 0; }
+.orWhich label.chk { display: grid; grid-template-columns: auto 1fr; gap: .5rem; align-items: start; }
+.orWhich small { display: block; color: var(--muted); font-size: .78rem; }
+@media (max-width: 560px) { .adminPage label.setRow { grid-template-columns: 1fr; } .adminPage table { display: block; overflow-x: auto; white-space: nowrap; } }
 /* "Also here": the PGM products as rounded-rectangle buttons (same links) */
 .menuProducts { align-items: center; }
 .menuProducts .prodBtn { display: inline-flex; align-items: center; padding: .45rem .9rem; border-radius: var(--r-m); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: .9rem; text-decoration: none; transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .12s ease; }

@@ -529,7 +529,7 @@ pub async fn messages_via_openai(hub: &Arc<dyn AiHub>, user: &str, key: &openai:
 // ---------- G5: the Responses API (Codex) ----------
 
 /// Does this provider speak OpenAI's Responses API itself? An OpenAI-compatible endpoint at api.openai.com, or one its admin
-/// marked `responses: true` (the optional provider field, add-only in providers.json; Settings → AI providers or
+/// marked `responses: true` (the optional provider field, add-only in providers.json; AI Admin → My AIs or
 /// `/api/providers/add|update`). A host's ChatGPT / Codex login (`host-codex`) speaks it too ([`responses`] takes it apart).
 /// A host's own OpenAI-compatible server (`host-openai`) is not asked: it gets the translation.
 pub fn speaks_responses(p: &Value) -> bool {

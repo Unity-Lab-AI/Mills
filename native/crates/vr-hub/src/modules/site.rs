@@ -119,5 +119,7 @@ pub fn check(hub: &Arc<Hub>, a: &Account) -> Value {
         "instance": hub.mods.instance.name(), "aiHost": !hub.root.join("ai-host.off").exists(), "aiNodes": ai.status(), "pcHost": ai.pc_host_for(&a.username) });
     // T-376: where the Jcode PGM Server is and the key its hello is signed with (absent when there is none)
     if let Some(p) = super::pgm::check_field(hub) { v["pgmServer"] = p; }
+    // T-379: the person's site role and permissions, the message of the day, the default theme (add-only)
+    v["site"] = super::siteadmin::check_field(hub, a);
     v
 }

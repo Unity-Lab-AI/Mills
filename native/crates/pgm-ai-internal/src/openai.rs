@@ -1,5 +1,5 @@
 //! The external API (moved from bridge/openai.js and bridge/providers.js): OpenAI- and Anthropic-compatible, one key
-//! per person, both formats on every provider, and the providers themselves (Settings → AI providers).
+//! per person, both formats on every provider, and the providers themselves (AI Admin → My AIs).
 //!   GET  /v1/models                  the models of the key's provider (Anthropic's list shape with anthropic-version)
 //!   POST /v1/chat/completions        OpenAI chat format in (stream or not)
 //!   POST /v1/messages                Anthropic Messages format in (stream or not: Anthropic's SSE events)
@@ -124,7 +124,7 @@ fn key_view(k: &Value, id: &str, label: &str) -> Value {
 }
 fn clamp_days(d: &Value) -> u64 { let n = d.as_f64().or_else(|| d.as_str().and_then(|x| x.parse().ok())).unwrap_or(0.0).round() as i64; if [0, 1, 7, 30, 90].contains(&n) { n as u64 } else { 0 } }
 
-// ---------- providers (Settings → AI providers): bridge/providers.json ----------
+// ---------- providers (AI Admin → My AIs): bridge/providers.json ----------
 fn providers_file(hub: &dyn AiHub) -> PathBuf { hub.root().join("providers.json") }
 fn providers_db(hub: &dyn AiHub) -> Vec<Value> { read_json(&providers_file(hub)).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default() }
 fn save_providers(hub: &dyn AiHub, list: Vec<Value>) { write_json(&providers_file(hub), &json!({ "providers": list })); }
@@ -147,10 +147,12 @@ fn pub_view(p: &Value) -> Value {
 /// machine: admins only.
 pub fn admin_only(p: &Value) -> bool { matches!(p["kind"].as_str(), Some("openai") | Some("claude-cli") | Some("jcode") | Some("openrouter")) }
 fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String> {
-    if admin_only(b) {
+    // the team's OpenRouter key lives here: the Manage AI permission's (T-379)
+    if s(b, "kind") == crate::openrouter::KIND { if !crate::openrouter::manages_ai(hub, user) { return Err(pgm_identity_internal::siteroles::needs(pgm_identity_internal::siteroles::MANAGE_AI)); } }
+    else if admin_only(b) {
         // a Jcode PGM binary runs here on the hub, and the team's OpenRouter key lives here too, so only being an admin counts; the others need an AI host of theirs
         let needs_host = s(b, "kind") != crate::jcode::KIND && s(b, "kind") != crate::openrouter::KIND;
-        if !hub.is_admin(user) || (needs_host && !hub.ai().owns_online_host(user)) { return Err("A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (Settings → My AI hosts); a Jcode PGM binary and an OpenRouter provider are for admins. An Anthropic API key works for everyone.".into()); }
+        if !hub.is_admin(user) || (needs_host && !hub.ai().owns_online_host(user)) { return Err("A custom endpoint or a Claude config folder is for admins signed in on an AI host of their own (AI Admin → My AI hosts); a Jcode PGM binary and an OpenRouter provider are for admins. An Anthropic API key works for everyone.".into()); }
     }
     let kind = s(b, "kind");
     if !["anthropic", "claude-cli", "openai", "jcode", "openrouter"].contains(&kind.as_str()) { return Err("kind must be anthropic, claude-cli, openai, openrouter or jcode.".into()); }
@@ -991,7 +993,7 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/providers/add" if post => match add_provider(&**hub, u, &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
         "/api/providers/update" if post => match update_provider(&**hub, u, &s(&b, "id"), &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
         "/api/providers/remove" if post => match remove_provider(&**hub, u, &s(&b, "id")) { Ok(()) => answer(200, json!({ "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
-        // Settings → My AI hosts' list (+ the default provider, which this module knows)
+        // AI Admin → My AI hosts' list (+ the default provider, which this module knows)
         "/api/hosts" if get => {
             let ai = hub.ai();
             let all: Vec<Value> = ai.all().into_iter().map(|h| { let owner = h["user"] == json!(u.as_str()); json!({ "id": h["id"], "nickname": h["nickname"], "user": h["user"], "online": h["online"], "providers": h["providers"].as_array().cloned().unwrap_or_default().into_iter().filter(|x| owner || x["allowedUsers"].as_array().map(|l| l.contains(&json!(u.as_str()))).unwrap_or(false)).map(|x| json!({ "id": x["id"], "kind": x["kind"], "label": x["label"], "models": x["models"], "capped": x["capped"] })).collect::<Vec<_>>() }) }).collect();

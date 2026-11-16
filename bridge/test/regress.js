@@ -74,6 +74,12 @@ const L614 = { // T-375: /transfer in Work (a handoff, then a fresh session that
   R618: 'a Jcode PGM session (an OpenRouter provider) transfers the same way: the handoff is written through its own OpenRouter provider (its key, the handoff writer\'s prompt), and the new session uses the same provider, model and engine (its first run is a Jcode PGM run in the same worktree)',
   R619: 'the page offers /transfer: typed with a focus, in the Commands panel with a tooltip and a confirm modal with a focus box that says what happens (a handoff, a fresh session in the same project and worktree, the switch), a progress line while it works, then it opens the new session; the old session shows "Transferred to …" and the new one "Continued from …" with a link to the other, the session list says "transferred →", and its icons are SVG symbols (no emoji)',
 };
+const L637 = { // T-379: Site admin and AI Admin (siteRolesCheck)
+  R637: 'site roles are the chat\'s ladder: the catalogue and the six roles are served, an existing admin is Super Admin and the hub\'s own account Co-owner; a member is refused the accounts list in words ("Needs the View accounts permission."); an admin gives a member Moderator, who then sees the accounts but cannot make one; nobody gives a role at or above their own, changes their own role or touches the owner; the admin flag follows the role (Admin on, back to Member off), and the security log has each role given',
+  R638: 'custom roles: an admin makes "AI keeper" (position 35, Manage AI) and gives it to a member, who then reads AI Admin and the team\'s OpenRouter budgets but still not the accounts; a bad position is refused; an Admin (not Super Admin) cannot make a role with a permission they do not hold; deleting the role puts its people back to Member',
+  R639: 'site settings: only Manage hub changes them; the message of the day and the default theme reach everyone\'s /api/check; a message over 500 characters, an unknown role and a role not below yours are refused; a new account gets the role newAccountRole names',
+  R640: 'AI Admin: a Manage AI role (not View accounts) sees every AI host with its owner, every account\'s Unity own-computer tools, and switches them; a View AI hosts role sees the hosts but may not change anything; the default AI set to "host:<someone>" is what /api/check names at once (no restart) and is kept in config.local.json; a value that is not a choice is refused',
+};
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -974,6 +980,7 @@ async function run() {
   if (process.argv.includes('--only-r532')) { if (RUST_HUB) { await r532Check(); await r545Check(); } await r532bCheck(); } // development: just R532 / R545 / R532b (with --stop-after R532b)
   if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R538 to R543 (with --stop-after R532)
   if (process.argv.includes('--only-r546')) await r546Check(); // development: just R546 (with --stop-after R546)
+  if (process.argv.includes('--only-r637') && RUST_HUB) await siteRolesCheck(); // development: just R637 to R640 (with --stop-after R640)
   if (process.argv.includes('--only-r533') && RUST_HUB) await r533Check(); // development: just R533 to R537 (with --stop-after R537)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
@@ -3336,12 +3343,12 @@ async function run() {
     const pubSigned = (await fetch(H + '/api/pub/versions', { headers: { Authorization: 'Bearer ' + U } })).status;
     const page = await (await fetch(H + '/')).text();
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
-    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download tile sits next to Settings in the menu\'s Administration section and above Settings in the app\'s user panel, and every Download button opens the Downloads window (no longer a Settings tab)',
+    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the menu\'s Downloads button sits next to Settings under My status / Team now and above Settings in the app\'s user panel, and every Download button opens the Downloads window (no longer a Settings tab)',
       anon.status === 401 && anonNative.status === 401 && pubGone.every((s) => s === 410) && pubSigned === 410
       && (RUST_HUB ? dl.status === 200 && Array.isArray(items) && items.every((it) => it.native === true && /^(app|host)-/.test(it.id)) && unknown.status === 404 : dl.status === 503 && unknown.status === 503)
       && !fs.existsSync(path.join(BRIDGE, 'downloads.js')) && !fs.existsSync(path.join(BRIDGE, 'desktop'))
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
-      && /<section class="menuSec" data-menusec="admin"[\s\S]*?id="goSettings" class="tile" data-settings[\s\S]*?id="goDownloads" class="tile" data-downloads[\s\S]*?<\/section>/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
+      && /<div class="psBar menuQuick" id="menuQuick"><button type="button" id="goSettings" class="ghost psBtn" data-settings[\s\S]*?id="goDownloads" class="ghost psBtn" data-downloads/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
       // Work's bar: Download right above Settings; Downloads is a window of its own (T-378), which every Download button opens
       && (() => { const rail = (html.match(/<nav id="rail">[\s\S]*?<\/nav>/) || [''])[0]; return rail.indexOf('data-downloads') > -1 && rail.indexOf('data-downloads') < rail.indexOf('data-settings'); })()
       && !/data-settab="downloads"|data-setpane="downloads"|PROFILE\.tab\('downloads'\)/.test(html) && /<div id="downloads" class="modal" hidden>[\s\S]*?id="dlBody"[\s\S]*?id="appBox"/.test(html) && /function openDownloads\(\) \{\s*\$\('downloads'\)\.hidden = false;/.test(html),
@@ -4275,6 +4282,103 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB) { if (!process.argv.includes('--only-r533')) await r533Check(); } else for (const id of Object.keys(L533)) skip(id, L533[id], 'the Rust hub\'s: --rust-hub runs it');
   // R533 to R537 (T-341 / T-342, plans/multi-session.md § 4a): every session, the first one too, can be deleted. An account of
   // its own (t-r533), so t-user's first session, which many checks use, stays as it is.
+  // R637 to R640 (T-379): see L637
+  async function siteRolesCheck() {
+    const made = [];
+    const mkAcct = async (name, by = A) => { const c = (await call('/api/admin/create', by, { username: name, display: name })).data || {}; if (c.password) made.push(name); return c.password ? (await login(name, c.password, 'device-' + (name + 'xxxxxxxxxxxxxxxx').slice(0, 16))).data.token : ''; };
+    const role = async (tok) => (((await call('/api/check', tok)).data || {}).site || {});
+    const give = (by, username, r) => call('/api/admin/roles/assign', by, { username, role: r });
+    const Dname = ((await call('/api/check', D)).data || {}).username;
+    try { // R637
+      const seen = {};
+      const ro = (await call('/api/admin/roles', A)).data || {};
+      seen.ladder = (ro.roles || []).filter((r) => r.builtin).map((r) => `${r.id}:${r.position}`).join(',');
+      seen.cats = (ro.categories || []).map((c) => c[0]).join(',');
+      seen.members = [ro.members && ro.members['t-admin'], ro.members && ro.members[Dname], ro.members && ro.members['t-user']].join(',');
+      const M = await mkAcct('t-r637m');
+      const m0 = await call('/api/admin/accounts', M), mr0 = await role(M);
+      const g1 = await give(A, 't-r637m', 'moderator');
+      const m1 = await call('/api/admin/accounts', M), mc1 = await call('/api/admin/create', M, { username: 't-r637-no' }), mr1 = await role(M), mRoles = await call('/api/admin/roles', M), mGive = await give(M, 't-user', 'moderator');
+      const tooHigh = await give(A, 't-r637m', 'superadmin'), own = await give(A, 't-admin', 'member'), owner = await give(A, Dname, 'member');
+      const gA = await give(A, 't-r637m', 'admin');
+      const listed = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-r637m') || {};
+      const mGiveAdmin = await give(M, 't-user', 'admin'), mDel = await call('/api/admin/delete', M, { username: 't-admin' });
+      const gM = await give(A, 't-r637m', 'member');
+      const back = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-r637m') || {};
+      const au = ((await call('/api/admin/audit?action=roles&limit=200', A)).data.entries || []).filter((e) => e.action === 'roles.assign' && e.target === 't-r637m' && e.actor === 't-admin').map((e) => e.detail.role).reverse().join(','); // (the log answers newest first)
+      Object.assign(seen, { m0: `${m0.status} "${m0.data.error}"`, mr0: mr0.role && mr0.role.id, g1: `${g1.status} ${g1.data.role}/${g1.data.admin}`, m1: m1.status, mc1: `${mc1.status} "${mc1.data.error}"`, mr1: `${mr1.role && mr1.role.id} [${mr1.perms}]`, mRoles: mRoles.status, mGive: mGive.status,
+        refused: [tooHigh.status, own.status, owner.status].join('/'), gA: `${gA.status} ${gA.data.admin}`, listed: `${listed.admin} ${listed.role && listed.role.id}`, mGiveAdmin: mGiveAdmin.status, mDel: mDel.status, gM: `${gM.status} ${gM.data.admin}`, back: `${back.admin} ${back.role && back.role.id}`, au });
+      check('R637', L637.R637, seen.ladder === 'coowner:60,superadmin:50,admin:40,supermod:30,moderator:20,member:10' && seen.cats === 'Accounts,Hub,AI,Advanced' && seen.members === 'superadmin,coowner,member'
+        && m0.status === 403 && m0.data.error === 'Needs the View accounts permission.' && mr0.role && mr0.role.id === 'member' && (mr0.perms || []).length === 0
+        && g1.status === 200 && g1.data.role === 'moderator' && g1.data.admin === false && m1.status === 200 && mc1.status === 403 && mc1.data.error === 'Needs the Manage accounts permission.'
+        && mr1.role.id === 'moderator' && JSON.stringify(mr1.perms) === '["VIEW_ACCOUNTS"]' && mRoles.status === 200 && mGive.status === 403
+        && tooHigh.status === 403 && own.status === 403 && owner.status === 403 && gA.status === 200 && gA.data.admin === true && listed.admin === true && listed.role.id === 'admin'
+        && mGiveAdmin.status === 403 && mDel.status === 403 && gM.status === 200 && gM.data.admin === false && back.admin === false && back.role.id === 'member' && au === 'moderator,admin,member',
+        JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R637', L637.R637, false, 'the check itself failed: ' + e.message); }
+    try { // R638
+      const seen = {};
+      const bad = await call('/api/admin/roles/save', A, { name: 'Bad', color: '#112233', position: 40, perms: [] });
+      const sv = await call('/api/admin/roles/save', A, { name: 'AI keeper', color: '#22aa88', position: 35, perms: ['MANAGE_AI'] });
+      const id = (sv.data.role || {}).id || '';
+      const K = await mkAcct('t-r638k'), G = await mkAcct('t-r638g');
+      const gk = await give(A, 't-r638k', id); await give(A, 't-r638g', 'admin');
+      const kAi = await call('/api/admin/ai', K), kOr = await call('/api/openrouter/budget/all', K), kAcc = await call('/api/admin/accounts', K), kr = await role(K);
+      const gBig = await call('/api/admin/roles/save', G, { name: 'Too big', color: '#000000', position: 25, perms: ['ADMINISTRATOR'] });
+      const del = await call('/api/admin/roles/delete', A, { id });
+      const kAfter = await role(K), kAi2 = await call('/api/admin/ai', K), gone = !((await call('/api/admin/roles', A)).data.roles || []).some((r) => r.id === id);
+      Object.assign(seen, { bad: bad.status, sv: `${sv.status} ${id} ${JSON.stringify((sv.data.role || {}).perms)}`, gk: `${gk.status} ${gk.data.admin}`, kAi: `${kAi.status} ${kAi.data.canManage}`, kOr: kOr.status, kAcc: kAcc.status, kr: kr.role && kr.role.name,
+        gBig: `${gBig.status} "${gBig.data.error}"`, del: `${del.status} [${del.data.cleared}]`, kAfter: kAfter.role && kAfter.role.id, kAi2: kAi2.status, gone });
+      check('R638', L637.R638, bad.status === 400 && sv.status === 200 && /^c-/.test(id) && JSON.stringify(sv.data.role.perms) === '["MANAGE_AI"]' && gk.status === 200 && gk.data.admin === false
+        && kAi.status === 200 && kAi.data.canManage === true && kOr.status === 200 && kAcc.status === 403 && kr.role.name === 'AI keeper' && kr.role.position === 35
+        && gBig.status === 403 && /permissions you do not hold/.test(gBig.data.error || '') && del.status === 200 && JSON.stringify(del.data.cleared) === '["t-r638k"]' && kAfter.role.id === 'member' && kAi2.status === 403 && gone,
+        JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R638', L637.R638, false, 'the check itself failed: ' + e.message); }
+    try { // R639
+      const seen = {}; const f = path.join(SB, 'site-settings.json'), had = fs.existsSync(f) ? fs.readFileSync(f) : null;
+      const uSet = await call('/api/admin/site-settings', U, { motd: 'no' });
+      const set = await call('/api/admin/site-settings', A, { motd: 'R639 hello team', defaultTheme: 'gruvbox_dark', newAccountRole: 'moderator' });
+      const uSite = await role(U), get = await call('/api/admin/site-settings', A);
+      const long = await call('/api/admin/site-settings', A, { motd: 'x'.repeat(501) }), unknown = await call('/api/admin/site-settings', A, { newAccountRole: 'no-such-role' }), high = await call('/api/admin/site-settings', A, { newAccountRole: 'superadmin' });
+      const N = await mkAcct('t-r639n'), nSite = await role(N);
+      await call('/api/admin/site-settings', A, { motd: '', defaultTheme: '', newAccountRole: 'member' });
+      if (had) fs.writeFileSync(f, had); else fs.rmSync(f, { force: true });
+      Object.assign(seen, { uSet: `${uSet.status} "${uSet.data.error}"`, set: set.status, uSite: `${uSite.motd}|${uSite.defaultTheme}`, get: JSON.stringify(get.data), long: long.status, unknown: unknown.status, high: high.status, n: nSite.role && nSite.role.id });
+      check('R639', L637.R639, uSet.status === 403 && uSet.data.error === 'Needs the Manage hub permission.' && set.status === 200 && uSite.motd === 'R639 hello team' && uSite.defaultTheme === 'gruvbox_dark'
+        && get.data.newAccountRole === 'moderator' && long.status === 400 && unknown.status === 400 && high.status === 403 && !!N && nSite.role.id === 'moderator', JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R639', L637.R639, false, 'the check itself failed: ' + e.message); }
+    try { // R640
+      const seen = {}; const local = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(local) ? fs.readFileSync(local) : null;
+      const sv = await call('/api/admin/roles/save', A, { name: 'R640 AI', color: '#8844cc', position: 33, perms: ['MANAGE_AI'] }), id = (sv.data.role || {}).id || '';
+      const X = await mkAcct('t-r640x'), Y = await mkAcct('t-r640y');
+      await give(A, 't-r640x', id); await give(A, 't-r640y', 'supermod');
+      const xa = (await call('/api/admin/ai', X)).data || {}, ya = await call('/api/admin/ai', Y), xAcc = await call('/api/admin/accounts', X);
+      const accts = (await call('/api/admin/accounts', A)).data.accounts || [];
+      const unityOk = accts.length > 0 && accts.every((a) => { const u = (xa.unity || []).find((x) => x.username === a.username); return u && u.pc === a.unityPc && u.code === a.unityCode && typeof u.display === 'string'; });
+      const sw = await call('/api/admin/unity-tools', X, { username: 't-user', pc: false }), swBack = await call('/api/admin/unity-tools', X, { username: 't-user', pc: true });
+      const ySw = await call('/api/admin/unity-tools', Y, { username: 't-user', pc: false }), yDef = await call('/api/admin/ai/default', Y, { defaultProvider: '' });
+      const pick = (xa.choices || []).find((c) => /^host:/.test(c.value)) || {}, owner = (pick.value || '').slice(5);
+      const ownerTok = { 't-admin': A, 't-user': U }[owner] || (owner === Dname ? D : '');
+      const was = xa.defaultProvider;
+      const setDef = await call('/api/admin/ai/default', X, { defaultProvider: pick.value });
+      const chk = ownerTok ? (await call('/api/check', ownerTok)).data || {} : {}, after = (await call('/api/admin/ai', X)).data || {};
+      const kept = (() => { try { return JSON.parse(fs.readFileSync(local, 'utf8')).defaultProvider; } catch { return undefined; } })();
+      const badDef = await call('/api/admin/ai/default', X, { defaultProvider: 'host:nobody-r640' }), oddDef = await call('/api/admin/ai/default', X, { defaultProvider: 'weird' });
+      await call('/api/admin/ai/default', X, { defaultProvider: was || '' });
+      if (hadLocal) fs.writeFileSync(local, hadLocal);
+      await call('/api/admin/roles/delete', A, { id });
+      const prov = (chk.providers || []).find((p) => p.id === chk.defaultProvider) || {};
+      Object.assign(seen, { hosts: (xa.hosts || []).map((h) => `${h.id}@${h.owner}`).join(','), canManage: xa.canManage, unity: (xa.unity || []).length, unityOk, ya: `${ya.status} ${ya.data.canManage} ${(ya.data.unity || []).length} hosts ${(ya.data.hosts || []).length}`, xAcc: xAcc.status,
+        sw: `${sw.status} ${JSON.stringify(sw.data)}`, swBack: `${swBack.status} ${swBack.data.pc}`, ySw: `${ySw.status} "${ySw.data.error}"`, yDef: `${yDef.status} "${yDef.data.error}"`, choices: (xa.choices || []).map((c) => c.value).join(','), pick: pick.value, setDef: setDef.status, check: `${chk.defaultProvider} (owner ${prov.owner})`, after: after.defaultProvider, kept, badDef: badDef.status, oddDef: oddDef.status });
+      check('R640', L637.R640, sv.status === 200 && xa.canManage === true && (xa.hosts || []).length > 0 && (xa.hosts || []).every((h) => typeof h.owner === 'string' && 'online' in h && Array.isArray(h.inUse) && Array.isArray(h.users)) && unityOk && xAcc.status === 403
+        && ya.status === 200 && ya.data.canManage === false && (ya.data.unity || []).length === 0 && (ya.data.hosts || []).length === (xa.hosts || []).length
+        && sw.status === 200 && sw.data.username === 't-user' && sw.data.pc === false && typeof sw.data.code === 'boolean' && swBack.status === 200 && swBack.data.pc === true
+        && ySw.status === 403 && ySw.data.error === 'Needs the Manage AI permission.' && yDef.status === 403
+        && (xa.choices || [])[0] && xa.choices[0].value === '' && !!owner && !!ownerTok && setDef.status === 200 && after.defaultProvider === pick.value && kept === pick.value && /^h:/.test(chk.defaultProvider || '') && prov.owner === owner
+        && badDef.status === 400 && oddDef.status === 400, JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R640', L637.R640, false, 'the check itself failed: ' + e.message); }
+    finally { for (const u of made) await call('/api/admin/delete', A, { username: u }); }
+  }
   async function r533Check() {
     const seen = {};
     const created = (await call('/api/admin/create', A, { username: 't-r533', display: 'R533' })).data || {};
@@ -4816,6 +4920,56 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R641 (T-379): the menu's Settings / Downloads beside My status; Site admin and AI Admin on the page; who sees what
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8');
+    const sa = fs.readFileSync(path.join(MILLS, 'web', 'siteadmin.js'), 'utf8'), aa = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'), seen = {};
+    const vm = require('vm');
+    // the menu: Settings and Downloads are the small buttons right under My status / Team now (presence.js puts those after #menuWho)
+    seen.quick = /<div id="menuWho" class="menuWho" hidden><\/div>\n[^\n]*\n  <div class="psBar menuQuick" id="menuQuick"><button type="button" id="goSettings" class="ghost psBtn" data-settings[^>]*>(?:(?!<small>)[\s\S])*?Settings<\/button><button type="button" id="goDownloads" class="ghost psBtn" data-downloads[^>]*>(?:(?!<small>)[\s\S])*?Downloads<\/button><\/div>/.test(page);
+    seen.twoPerRow = /#menu \.menuSec\[data-menusec="productivity"\] \.choices \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(css);
+    // a fake page, enough for the two files: elements with children, text, value, hidden
+    const mkDoc = () => {
+      const byId = {};
+      const el = (tag) => { const e = { tagName: String(tag).toUpperCase(), children: [], hidden: false, value: '', checked: false, disabled: false, title: '', className: '', style: {}, dataset: {}, parentElement: null, _text: '',
+        append(...k) { for (const c of k) { const n = typeof c === 'string' ? { tagName: '#text', _text: c, children: [] } : c; n.parentElement = e; e.children.push(n); } }, after() {}, remove() {}, setAttribute(k, v) { e[k] = v; }, querySelector: () => null,
+        get textContent() { return e._text + e.children.map((c) => c.textContent !== undefined ? c.textContent : c._text).join(''); }, set textContent(v) { e._text = String(v); e.children = []; },
+        set innerHTML(v) { e._text = ''; e.children = []; }, get options() { return e.children; }, get selectedIndex() { return e.children.findIndex((o) => o.value === e.value); } };
+        return e; };
+      const doc = { createElement: el, getElementById: (id) => (byId[id] || (byId[id] = Object.assign(el('div'), { id, parentElement: el('div') }))) };
+      return { doc, byId };
+    };
+    // Site admin's role column: a picker only for people below you (never yourself), with only the roles below you
+    const R = { categories: [], roles: [{ id: 'member', name: 'Member', position: 10, perms: [] }, { id: 'moderator', name: 'Moderator', position: 20, perms: ['VIEW_ACCOUNTS'] }, { id: 'admin', name: 'Admin', position: 40, perms: ['MANAGE_ROLES'] }, { id: 'superadmin', name: 'Super Admin', position: 50, perms: ['ADMINISTRATOR'] }],
+      members: { boss: 'superadmin', ann: 'admin', bob: 'member' }, me: { role: 'admin', position: 40, perms: ['VIEW_ACCOUNTS', 'MANAGE_ROLES'] } };
+    try {
+      const { doc } = mkDoc();
+      const ctx = { document: doc, json: async (u) => { if (u === '/api/admin/roles') return JSON.parse(JSON.stringify(R)); throw new Error('no'); }, siteCan: (p) => R.me.perms.includes(p), me: { username: 'ann' }, confirmButton: () => doc.createElement('button'), loadAdmin() {}, THEMES: {}, themeLabel: (x) => x, console };
+      vm.runInNewContext(sa + '\nthis.S = SITEADMIN;', ctx);
+      await ctx.S.load();
+      const cell = (u) => { const td = ctx.S.roleCell({ username: u, admin: false }, () => {}); const w = td.children[0]; const sel = w && w.children.find((c) => c.tagName === 'SELECT'); return sel ? 'pick:' + sel.children.map((o) => o.value).join('/') : 'shown'; };
+      seen.cells = ['boss', 'ann', 'bob'].map((u) => u + '=' + cell(u)).join(' ');
+    } catch (e) { seen.saErr = e.message; }
+    // AI Admin: everyone gets their own part; the Global part (and the line) only with Manage AI or See AI hosts, each group by its permission
+    const aiFor = async (perms) => {
+      const { doc, byId } = mkDoc(); const calls = [];
+      const ctx = { document: doc, siteCan: (p) => perms.includes(p), json: async (u) => { calls.push(u); throw new Error('offline'); }, renderSource: () => calls.push('mine:source'), renderProviders: () => calls.push('mine:providers'), renderOrBudget: () => calls.push('mine:openrouter'), renderHosts: () => calls.push('mine:hosts'), me: { username: 'x' }, console };
+      vm.runInNewContext(aa + '\nthis.A = AIADMIN;', ctx); ctx.A.open(); await new Promise((r) => setTimeout(r, 20));
+      const vis = ['aiGlobal', 'aiSplit', 'agDefault', 'agOpenRouter', 'agHosts', 'agUnity'].filter((id) => byId[id] && !byId[id].hidden).join(',');
+      return (vis || 'none') + ' | ' + calls.filter((c) => c.startsWith('mine:')).length + ' of mine' + (calls.includes('/api/admin/ai') ? ' | asks /api/admin/ai' : '');
+    };
+    try { seen.aiMember = await aiFor([]); seen.aiHostsOnly = await aiFor(['VIEW_AI_HOSTS']); seen.aiManage = await aiFor(['MANAGE_AI']); } catch (e) { seen.aaErr = e.message; }
+    // the page's own siteCan: ADMINISTRATOR is all; an older hub (no site in /api/check) falls back to the admin flag
+    const sc = (page.match(/\nconst SITE_ADMIN_PERMS = [^\n]*\nfunction siteCan\([^\n]*\nfunction siteAdminAny\([^\n]*\n/) || [''])[0];
+    const can = (meV, perm) => vm.runInNewContext(sc + `\nme = ${JSON.stringify(meV)}; [siteCan(${JSON.stringify(perm)}), siteAdminAny()]`, { me: null }).join('/');
+    try { seen.siteCan = [can({ site: { perms: ['ADMINISTRATOR'] } }, 'MANAGE_HUB'), can({ site: { perms: ['MANAGE_AI'] } }, 'MANAGE_HUB'), can({ admin: true }, 'VIEW_HEALTH'), can({ admin: false }, 'VIEW_HEALTH')].join(' '); } catch (e) { seen.scErr = e.message; }
+    seen.screens = /<div id="aiAdmin" class="screen" hidden>[\s\S]*?<b>AI Admin<\/b>[\s\S]*?id="aiGlobal"[\s\S]*?<hr class="adminSplit" id="aiSplit" hidden>[\s\S]*?id="aiPersonal"[\s\S]*?id="srcBox"[\s\S]*?id="provBox"[\s\S]*?id="orBox"[\s\S]*?id="hostBox"/.test(page)
+      && /<div id="admin" class="screen" hidden>[\s\S]*?<b>Site admin<\/b>/.test(page) && /<script src="siteadmin\.js"><\/script>\n<script src="aiadmin\.js"><\/script>/.test(page);
+    check('R641', 'the menu shows Settings and Downloads as small buttons right under My status / Team now (no description lines) and Productivity two to a row; Site admin gives a role picker only for people below you, with only the roles below yours (yourself and those above just show their role); AI Admin shows everyone their own AI settings and the Global part (with the line under it) only to Manage AI (default AI, team OpenRouter, AI hosts, Unity tools) or See AI hosts (the hosts list alone); ADMINISTRATOR counts as every permission and an older hub without site roles falls back to the admin flag',
+      seen.quick && seen.twoPerRow && seen.cells === 'boss=shown ann=shown bob=pick:moderator/member'
+      && seen.aiMember === 'none | 4 of mine' && seen.aiHostsOnly === 'aiGlobal,aiSplit,agHosts | 4 of mine | asks /api/admin/ai' && seen.aiManage === 'aiGlobal,aiSplit,agDefault,agOpenRouter,agHosts,agUnity | 4 of mine | asks /api/admin/ai'
+      && seen.siteCan === 'true/true false/false true/true false/false' && seen.screens && !seen.saErr && !seen.aaErr && !seen.scErr,
+      JSON.stringify(seen));
+  }
   { // R635 (T-378): Settings in five tabs about your own account; Downloads a window of its own with Jcode PGM; Desktop Unity off by default
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), pjs = fs.readFileSync(path.join(MILLS, 'web', 'profile.js'), 'utf8');
     const duJs = fs.readFileSync(path.join(MILLS, 'web', 'deskunity.js'), 'utf8'), seen = {};
@@ -4858,8 +5012,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       U.setOn(false); seen.offAgain = U.isOn() === false && store.vrDeskUnityOn === 'false';
     }
     seen.hint = /<h3>Desktop Unity<\/h3><p class="setHint">[^<]*She is off until you turn her on here\./.test(page);
-    check('R635', 'Settings is five tabs about your own account: Profile, App (look, Chat and Work, projects, when the AI asks, Desktop Unity), Sound & voice (sounds, read aloud, calls), AI (AI source, my AIs, OpenRouter budget, my AI hosts) and Connections (API access, signed-in devices, my machines, Forgejo); one Save bar under the box shows only while App or Sound & voice is on screen; Downloads is a window of its own where Jcode PGM and Jcode PGM Desktop have their own section (the newest version with this platform\'s files first, other platforms and older versions below; one that cannot be listed says so) and the other products stay in a list; Desktop Unity is off until Settings turns her on, and no order (show, a walk) turns her on',
-      seen.tabs === 'profile=Profile | app=App | sound=Sound &amp; voice | ai=AI | connections=Connections' && seen.panes === 'profile,app+save,sound+save,ai,connections'
+    check('R635', 'Settings is five tabs about your own account: Profile, App (look, Desktop Unity), Work (Chat and Work, projects, when the AI asks), Sound & voice (sounds, read aloud, calls) and Connections (API access, signed-in devices, my machines, Forgejo), the AI settings being in AI Admin; one Save bar under the box shows only while App, Work or Sound & voice is on screen; Downloads is a window of its own where Jcode PGM and Jcode PGM Desktop have their own section (the newest version with this platform\'s files first, other platforms and older versions below; one that cannot be listed says so) and the other products stay in a list; Desktop Unity is off until Settings turns her on, and no order (show, a walk) turns her on',
+      seen.tabs === 'profile=Profile | app=App | work=Work | sound=Sound &amp; voice | connections=Connections' && seen.panes === 'profile,app+save,work+save,sound+save,connections'
       && seen.saveOutside && seen.saveShown === 'false,true,false' && seen.saveCalled && !seen.err && seen.dlWindow
       && seen.jcode === 'Jcode PGM,Jcode PGM Desktop | others ShaDow Chat'
       && seen.newest === 'v0.99.10-pgm.1 mine jcodepgm-windows-x86_64.zip other jcodepgm-linux-x86_64.tar.gz older v0.99.9-pgm.1 about true' && seen.unavailable
@@ -4872,8 +5026,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const secs = [...menu.matchAll(/<section class="menuSec" data-menusec="(\w+)" aria-label="([^"]+)">\s*<h2>([^<]+)<\/h2>\s*<div class="choices">([\s\S]*?)<\/div>\s*<\/section>/g)]
       .map((m) => ({ key: m[1], title: m[3], tiles: [...m[4].matchAll(/<button (?:id="(\w+)" class="tile"|class="tile" id="(\w+)")/g)].map((t) => t[1] || t[2]) }));
     seen.sections = secs.map((x) => x.title + ':' + x.tiles.join('+')).join(' | ');
-    seen.layout = seen.sections === 'Productivity:goWork+goChat+goBoard+goCal | Utility:goWorkflows+goFiles+goNotes+goTools | AI:goAgents+goAssist | Administration:goSettings+goDownloads+goAdmin+goPgmMenu';
-    seen.settingsTile = /<button id="goSettings" class="tile" data-settings>/.test(menu) && /<button id="goDownloads" class="tile" data-downloads /.test(menu);
+    seen.layout = seen.sections === 'Productivity:goWork+goChat+goBoard+goCal | Utility:goWorkflows+goFiles+goNotes+goTools | AI:goAgents+goAssist | Administration:goAdmin+goAiAdmin+goPgmMenu';
+    seen.settingsTile = /id="goSettings" class="ghost psBtn" data-settings/.test(menu) && /id="goDownloads" class="ghost psBtn" data-downloads/.test(menu); // T-379: under My status / Team now
     const foot = menu.slice(menu.lastIndexOf('<div class="menuFoot">'));
     seen.footOnlySignOut = /id="menuLogout"/.test(foot) && !/goSettings|goDownloads|data-settings|data-downloads/.test(foot) && !/menuDl/.test(page);
     const prods = (menu.match(/<div class="menuFoot menuProducts" id="menuProducts" hidden>([\s\S]*?)<\/div>/) || [, ''])[1];
@@ -4887,7 +5041,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     try { require('vm').runInNewContext(fn + '\nmenuSections(); menuSections();', { document: { querySelectorAll: () => [a, b, c] } }); } catch (e) { seen.err = e.message; }
     seen.logic = a.hidden === false && b.hidden === true && c.hidden === true && a.writes === 0 && b.writes === 1 && c.writes === 1;
     seen.observed = /new MutationObserver\(menuSections\)\.observe\(\$\('menu'\), \{ subtree: true, attributes: true, attributeFilter: \['hidden'\] \}\);/.test(page);
-    check('R634', 'the main menu is four sections with headings: Productivity (Work, Chat, Board, Calendar), Utility (Workflows, Files, Notes, Tools), AI (Agents, Unity) and Administration (Settings, Download, Admin, Exit to menu); Settings and Download are tiles there (Sign out alone stays below); a section whose tiles are all hidden hides itself and follows later changes; "Also here" shows the PGM products as rounded-rectangle buttons with the same links',
+    check('R634', 'the main menu is four sections with headings: Productivity (Work, Chat, Board, Calendar), Utility (Workflows, Files, Notes, Tools), AI (Agents, Unity) and Administration (Site admin, AI Admin, Exit to menu); Settings and Downloads sit under My status / Team now (Sign out alone stays below); a section whose tiles are all hidden hides itself and follows later changes; "Also here" shows the PGM products as rounded-rectangle buttons with the same links',
       Object.values(seen).every((v) => v === true || typeof v === 'string') && seen.layout && seen.settingsTile && seen.footOnlySignOut && seen.alsoHere && seen.buttonLook && seen.logic && seen.observed && !seen.err,
       JSON.stringify(seen));
   }
@@ -6706,19 +6860,26 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const local = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(local), before = hadLocal ? fs.readFileSync(local) : null;
     if (hadLocal) fs.chmodSync(local, 0o600);
     const dflt = (await sum()).find((x) => !['t-admin', 't-user'].includes(x.username)) || {};
+    const adminsBefore = (await sum()).filter((x) => x.admin).map((x) => x.username);
     const mkD = await call('/api/admin/set-admin', A, { username: dflt.username, admin: true });
-    const afterD = await sum(), localMode = fs.statSync(local).mode & 0o777;
+    const afterD = await sum(), localMode = fs.statSync(local).mode & 0o777, localSame = !hadLocal || fs.readFileSync(local).equals(before);
     const leak = afterD.filter((x) => x.admin).map((x) => x.username).sort().join(',');
     await call('/api/admin/set-admin', A, { username: dflt.username, admin: false });
     if (hadLocal) fs.writeFileSync(local, before);
     const rm = await call('/api/admin/set-admin', A, { username: 't-user', admin: false });
     const uAfter = await call('/api/admin/accounts', U);
-    check('R171', 'Admin → Make admin / Remove admin: non-admin 403; the new admin can use Admin at once (both hubs); nobody removes their own admin; the default account\'s flag goes into config.local.json (its permissions kept) and never makes the profiles admins; removed again → 403',
+    // the Rust hub (T-379): set-admin gives the site role Admin / Member, and nobody acts on the hub's own account (the owner)
+    const dfltOk = RUST_HUB ? mkD.status === 403 && localSame && leak === [...new Set([...adminsBefore, 't-user'])].sort().join(',')
+      : mkD.status === 200 && mkD.data.admin === true && leak === [dflt.username, 't-admin', 't-user'].sort().join(',') && (!hadLocal || localMode === 0o600);
+    check('R171', 'Admin → Make admin / Remove admin: non-admin 403; the new admin can use Admin at once (both hubs); nobody removes their own admin; the default account\'s flag goes into config.local.json (its permissions kept) and never makes the profiles admins (on the Rust hub nobody changes the default account, the owner: refused, its file untouched); removed again → 403',
       notAdm.status === 403 && mk.status === 200 && mk.data.admin === true && uSees.status === 200 && uPw.status !== 403 && uPw.status < 500 && self.status === 400
-      && mkD.status === 200 && mkD.data.admin === true && leak === [dflt.username, 't-admin', 't-user'].sort().join(',') && (!hadLocal || localMode === 0o600)
+      && dfltOk
       && rm.status === 200 && rm.data.admin === false && uAfter.status === 403 && /set-admin/.test(html),
       `${notAdm.status} ${mk.status} ${uSees.status}/${uPw.status} self ${self.status} default ${dflt.username} ${mkD.status} admins ${leak} mode ${localMode.toString(8)} rm ${rm.status} after ${uAfter.status}`);
   }
+  // R637-R640 (T-379): Site admin (site roles on the chat's ladder, custom roles, the site-wide settings) and AI Admin. The Rust
+  // hub's: the JavaScript hub has none of these routes. Each check makes its own accounts / roles and takes them away again.
+  if (RUST_HUB) await siteRolesCheck(); else for (const id of Object.keys(L637)) skip(id, L637[id], 'the Rust hub\'s: --rust-hub runs it');
   check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
   { // 5.46.1: the @ picker wrote Unity's account name (@claude), which calls nobody (R36), so a picked or Tab / Enter-completed mention never reached her
     const pickerUsesHandle = /b\.dataset\.user = h;/.test(html) && /insertMention\(h\)/.test(html) && !/insertMention\(m\.username\)/.test(html) && !/b\.dataset\.user = m\.username;/.test(html);
@@ -9038,17 +9199,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const dlBox = (page.match(/<div id="downloads" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
     const ids = ['setNick', 'setColors', 'setSound', 'volMessage', 'volMention', 'volReply', 'volCall', 'volBoard', 'volAsk', 'soundSet', 'setAskAuto', 'setAskMin', 'setAskActivity', 'setAskTts',
       'setToasts', 'setReopen', 'setEnhance', 'setAutoScroll', 'setTtsAll', 'setTtsUnity', 'setTts', 'ttsVolume', 'ttsTest', 'ttsRate', 'ttsRateVal', 'ttsVoice', 'ttsScope', 'audNoise', 'audEcho', 'audAgc',
-      'callVolume', 'callQuality', 'clipVolume', 'clipAuto', 'ttsStop', 'setAutosave', 'setTheme', 'saveSettings', 'setMsg', 'aboutVibeRoller', 'aboutModules', 'apiBox', 'devBox', 'machBox', 'srcBox',
-      'hostBox', 'provBox', 'fjBox', 'projBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
+      'callVolume', 'callQuality', 'clipVolume', 'clipAuto', 'ttsStop', 'setAutosave', 'setTheme', 'saveSettings', 'setMsg', 'aboutVibeRoller', 'aboutModules', 'apiBox', 'devBox', 'machBox',
+      'fjBox', 'projBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
+    const aiBox = (page.match(/<div id="aiAdmin" class="screen" hidden>([\s\S]*?)<div id="admin" class="screen" hidden>/) || [])[1] || ''; // T-379: the AI groups live in AI Admin
     seen.missing = ids.filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !box.includes('id="' + id + '"'))
-      .concat(['dlVersion', 'dlBody', 'appBox', 'closeDownloads'].filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !dlBox.includes('id="' + id + '"')));
+      .concat(['dlVersion', 'dlBody', 'appBox', 'closeDownloads'].filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !dlBox.includes('id="' + id + '"')))
+      .concat(['srcBox', 'provBox', 'orBox', 'hostBox'].filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !aiBox.includes('id="' + id + '"')));
     const groups = [...box.matchAll(/<section class="setGroup"[^>]*>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
     seen.groups = groups.length; seen.headless = groups.filter((g) => !/^\s*<h3>[^<]+<\/h3><p class="setHint">[\s\S]+?<\/p>/.test(g)).length;
     const pane = (n) => (box.match(new RegExp('<div data-setpane="' + n + '"[^>]*>([\\s\\S]*?)\\n     </div>')) || [])[1] || '';
     const strip = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
     const served = (n) => [...pane(n).matchAll(/<section class="setGroup"[^>]*>\s*<h3>([^<]+)<\/h3><p class="setHint">([\s\S]*?)<\/p>([\s\S]*?)<\/section>/g)].map((m) => ({ title: m[1], text: m[1] + ' ' + strip(m[2]), rows: [strip(m[3])] }));
-    const app = served('app'), sound = served('sound'), ai = served('ai'), conn = served('connections');
-    seen.appGroups = app.map((g) => g.title).join(','); seen.soundGroups = sound.map((g) => g.title).join(','); seen.aiGroups = ai.map((g) => g.title).join(','); seen.connGroups = conn.map((g) => g.title).join(',');
+    const app = served('app'), work = served('work'), sound = served('sound'), conn = served('connections');
+    seen.appGroups = app.map((g) => g.title).join(','); seen.workGroups = work.map((g) => g.title).join(','); seen.soundGroups = sound.map((g) => g.title).join(','); seen.connGroups = conn.map((g) => g.title).join(',');
     // the page's own Save app settings body, on a stand-in form
     const bodySrc = (page.match(/\$\('saveSettings'\)\.onclick = async \(\) => \{\s*try \{\s*const d = await json\('\/api\/prefs', \{ method: 'POST', body: JSON\.stringify\((\{[\s\S]*?\n    \})\) \}\);/) || [])[1] || '';
     seen.saveIds = [...bodySrc.matchAll(/\$\('(\w+)'\)/g)].map((m) => m[1]).filter((id) => !box.includes('id="' + id + '"'));
@@ -9075,7 +9238,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const shape = (r) => r.groups.map((g) => (g.show ? g.rows.map((x) => (x ? 1 : 0)).join('') : '-')).join(' ') + (r.any ? '' : ' none');
       seen.empty = shape(M('', G)); seen.echo = shape(M('  ECHO ', G)); seen.voice = shape(M('voice', G)); seen.style = shape(M('style sound', G)); seen.nothing = shape(M('zzz', G));
       const titles = (q, gs) => { const r = M(q, gs); return gs.filter((g, i) => r.groups[i].show).map((g) => g.title).join(','); };
-      seen.realEcho = titles('echo', sound); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn); seen.realBudget = titles('openrouter budget', ai);
+      seen.realEcho = titles('echo', sound); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn); seen.realAsks = titles('if i do not respond', work);
     }
     seen.wired = /id="setFind" type="search"/.test(box) && /id="setNone"/.test(box) && /findBox\.addEventListener\('input', \(\) => find\(findBox\.value\)\)/.test(src) && /settingsMatch\(q, groups\.map/.test(src);
     // every screen: a title and ← Menu, which goes to the menu; Settings: Close, beside it and Escape are one way out
@@ -9083,11 +9246,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
     seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
-    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Appearance,Chat and Work,My projects,When the AI asks,Desktop Unity' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
-      && seen.aiGroups === 'AI source,My AIs,OpenRouter budget,My AI hosts' && seen.connGroups === 'API access,Signed-in devices,My machines,My Forgejo'
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Appearance,Desktop Unity' && seen.workGroups === 'Chat and Work,My projects,When the AI asks' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
+      && seen.connGroups === 'API access,Signed-in devices,My machines,My Forgejo'
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
       && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
-      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.realBudget === 'OpenRouter budget' && seen.wired
+      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.realAsks === 'When the AI asks' && seen.wired
       && seen.screens >= 9 &&!seen.noWayBack.length && seen.back && seen.close;
     check('R546', 'Settings keeps every setting it had (each control once, with its id, inside a group that has a heading and a one-line explanation) and the page\'s own Save app settings still saves through /api/prefs, where the hub keeps what it sent; Find a setting shows only the groups and rows that have every word typed (any case; a heading match shows the whole group; nothing matching says so); every screen has a title and a way back to the menu, and Settings closes the same way from Close, a click beside it and Escape',
       ok, JSON.stringify(seen));

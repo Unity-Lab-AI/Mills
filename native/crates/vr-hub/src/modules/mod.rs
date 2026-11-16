@@ -16,6 +16,7 @@ pub mod ai_hosts;
 pub mod profile;
 pub mod re;
 pub mod site;
+pub mod siteadmin;
 pub mod sync;
 mod traits;
 pub mod auth;
@@ -615,9 +616,15 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = agents::route(hub, r, &acc).await { return x; } // agent to agent (T-296): the Rust hub's only
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
+            // clearing the chat's history is the Manage hub permission's (T-379); the chat library still asks for an admin
+            if p == "/api/admin/room/clear" && r.method == hyper::Method::POST {
+                if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::MANAGE_HUB) { return x; }
+                if let Some(x) = chat::route(hub, r, &auth::Account { admin: true, ..acc.clone() }).await { return x; }
+            }
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
             if let Some(x) = unity_routes::route(hub, r, &acc).await { return x; } // Unity's section
             if p == "/api/check" && r.method == hyper::Method::GET { return answer(200, site::check(hub, &acc)); }
+            if let Some(x) = siteadmin::route(hub, r, &acc).await { return x; } // Site admin's roles and settings, AI Admin (T-379)
             if p == "/api/version" && r.method == hyper::Method::GET { let b = hub.mods.build.get(hub).0; return answer(200, json!({ "version": b.split('+').next().unwrap_or(""), "build": b })); }
             if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
@@ -625,8 +632,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = gateway::admin(hub, r, &acc) { return x; } // the admin's gateway products
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
             if let Some(x) = releases::route(hub, r).await { return x; } // the products' releases (T-250)
-            if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
-                if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }
+            if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // AI Admin switches Unity's own-computer tools for one account
+                if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::MANAGE_AI) { return x; }
                 let b = r.json();
                 let Some(t) = b["username"].as_str().and_then(|x| a.account(x)) else { return answer(400, json!({ "error": "No such account." })) };
                 let u = &hub.mods.unity;
@@ -635,7 +642,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             }
         }
     }
-    // ----- Settings → My AI hosts, monitor and control (5.12.0): the person's own hosts, how they are doing, pause / resume / restart / update / log -----
+    // ----- AI Admin → My AI hosts, monitor and control (5.12.0): the person's own hosts, how they are doing, pause / resume / restart / update / log -----
     if p == "/api/hosts/status" && r.method == hyper::Method::GET {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         return answer(200, json!({ "hosts": hub.mods.ai.status_for(&u), "now": pgm_core_internal::now_ms() }));
@@ -646,7 +653,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let (id, action) = (b["id"].as_str().unwrap_or("").to_string(), b["action"].as_str().unwrap_or("").to_string());
         return match hub.mods.ai.control(&u, &id, &action, &b["limits"]).await { Ok(v) => answer(200, v), Err(e) => answer(e.status, json!({ "error": e.msg })) };
     }
-    // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
+    // ----- AI Admin → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
     if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/scope" | "/api/hosts/config") {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         let (ai, b) = (&hub.mods.ai, r.json());
@@ -668,7 +675,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // Health (T-331 § 4): the hub's metrics, its write buffer, and one run's trace (every log line about it), for admins
     if r.method == hyper::Method::GET && matches!(p, "/api/admin/metrics" | "/api/admin/trace") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
-        if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
+        if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::VIEW_HEALTH) { return x; }
         if p == "/api/admin/metrics" {
             return Routed::Answer(jresp(200, &json!({ "version": crate::VERSION, "instance": if hub.is_dev() { "dev" } else { "live" }, "uptimeSec": pgm_core_internal::obs::uptime_s(),
                 "metrics": pgm_core_internal::obs::snapshot(), "store": pgm_core_internal::store::global().stats(), "sync": hub.mods.sync.get().map(|b| b.summary()) })));
@@ -680,10 +687,11 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // the admin's account switches that are this module's (the JavaScript hub keeps making / deleting accounts)
     if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/allow-device" | "/api/admin/signout") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
-        if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
+        if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::MANAGE_ACCOUNTS) { return x; }
         let keep_machines = r.json()["keepMachines"].as_bool() == Some(true);
         let target = r.json()["username"].as_str().and_then(|t| a.account(t));
         let Some(t) = target else { return Routed::Answer(jresp(400, &json!({ "error": "No such account." }))) };
+        if let Some(x) = siteadmin::may_act(hub, u, &t.username, true) { return x; } // T-379: only accounts below yours (and your own)
         return Routed::Answer(match p {
             "/api/admin/password" => {
                 let pw = auth::new_password();
@@ -938,6 +946,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
             v["providers"] = json!(work::providers_list(hub, &acc.username));
             v["defaultProvider"] = json!(w.default_for(&hub.mods.ai, &acc.username).map(|p| s_of(&p, "id")).unwrap_or_default());
             v["hubClaude"] = json!(hub.cfg.get("hubClaude") != Some(&json!(false)));
+            v["site"] = siteadmin::check_field(hub, &acc); // T-379 (add-only)
             Some(v.to_string().into_bytes())
         }
         _ => None,

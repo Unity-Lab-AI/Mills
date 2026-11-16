@@ -8,7 +8,7 @@ VibeRoller in its own window: chat, Work, the board, notes, Files and Unity, sig
 ({hub}), plus what only an app on your computer can do: the Tools window has your projects folder (no permission
 prompts), a real terminal, build & run buttons, git with your Forgejo token, a local API proxy (tools on this computer
 use VibeRoller's AI through http://127.0.0.1:<port>/v1, OpenAI or Anthropic format, with your key), and the switch to
-share this computer's AI with the team (Settings → My AI hosts → \"Run on this PC\" sets it up).
+share this computer's AI with the team (AI Admin → My AI hosts → \"Run on this PC\" sets it up).
 Pre-built: nothing to install first{}.
 
   - Run {}: it works right from this folder (portable).
@@ -46,5 +46,5 @@ Pre-built: one program, nothing else to install (no Node.js).
         if win { "%LOCALAPPDATA%\\VibeRoller\\AIHost" } else { "~/.local/share/viberoller/ai-host" },
         if win { "service" } else { "user" },
         if win { "the VibeRollerAIHost service; or sign-in" } else { "a user service; or service (sudo) for the system" },
-        match nickname { Some(n) => format!("ai-node.json here is your host \"{n}\" (keep it private: the token is its key to the hub)."), None => "Make your host in VibeRoller → Settings → My AI hosts, then download its own package (its ai-node.json inside).".into() })
+        match nickname { Some(n) => format!("ai-node.json here is your host \"{n}\" (keep it private: the token is its key to the hub)."), None => "Make your host in VibeRoller → AI Admin → My AI hosts, then download its own package (its ai-node.json inside).".into() })
 }
