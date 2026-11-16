@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.68.0 — 2026-11-16
+
+MINOR: **the main menu in four sections** (T-377).
+
+- **Four headed sections of tiles:** Productivity (Work, Chat, Board, Calendar), Utility (Workflows, Files, Notes,
+  Tools), AI (Agents, Unity) and Administration (Settings, Download, Admin, Exit to menu). Settings and Download are
+  tiles in Administration now, no longer separate buttons below the menu; Sign out stays below on its own. A section
+  whose tiles are all hidden (no Admin, Agents off, …) hides itself and follows later changes.
+- **"Also here" as buttons:** the PGM products are rounded-rectangle buttons instead of links, with the same targets.
+- web/index.html 1.52.0, web/polish.css 1.0.4. New check R634; R142 now finds Download next to Settings in the
+  Administration section.
+
 ## 5.67.0 — 2026-11-16
 
 MINOR: **one session across the website and jcode, through Jcode PGM Server** (T-376 stage 3, hub side; spec
