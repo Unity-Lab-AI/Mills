@@ -7,6 +7,13 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.70.1 — 2026-11-16
+
+PATCH: **Site admin and AI Admin scroll as a whole page** (T-379 follow-up, from Sponge on dev). The scrolling box was the centred
+1000px column itself, so the wheel only worked with the mouse over it and its scrollbar sat in the middle of the page next
+to the boxes. Now the screen's body spans the window and scrolls, its scrollbar at the window edge; the content stays a
+centred column by its padding. web/polish.css 1.1.1. R641 now checks it (it failed before the fix).
+
 ## 5.70.0 — 2026-11-16
 
 MINOR: **Site admin with site roles, AI Admin, and a calmer menu** (T-379).
