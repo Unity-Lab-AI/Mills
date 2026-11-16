@@ -33,6 +33,8 @@
 //!   each stdout line onto the one hub event shape ([`harness::HubEvent`])
 //! - [`jcode`]: Jcode PGM as a Work harness (a `jcode` provider: `jcodepgm run --ndjson` in the worktree, a private
 //!   jcode home per person, its events mapped onto the page's event shape)
+//! - [`pgm_work`]: Work on a PGM session through the Jcode PGM Server next to the hub (T-376 stage 3): create, message, its
+//!   events onto the page's event shape, stop, its sessions in the list and opened from it
 
 pub mod agents;
 pub mod ai_hosts;
@@ -50,6 +52,7 @@ pub mod machine_jobs;
 pub mod machine_transfer;
 pub mod openai;
 pub mod openrouter;
+pub mod pgm_work;
 pub mod plan;
 pub mod planner;
 pub mod projects;

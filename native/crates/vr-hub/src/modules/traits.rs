@@ -56,6 +56,7 @@ impl AiHub for Hub {
     fn team_tool(&self, name: &str, args: &Value, a: &Account) -> Value { pgm_hcom_internal::chat::team_tool(self, name, args, a) }
     fn re_tool<'a>(&'a self, name: &'a str, args: &'a Value, a: &'a Account) -> Fut<'a, Value> { Box::pin(async move { self.mods.re.tool(name, args, a).await }) }
     fn machines_of(&self, u: &str) -> Vec<Value> { self.mods.auth.devices.machines_of(u) }
+    fn pgm_server(&self) -> Option<(String, String)> { super::pgm::work_server(self) }
     fn chat_has_key(&self, u: &str) -> bool { self.mods.chat.has_key(u) }
     // (the sign-in greeting asks this: on the dev hub the agents are off, T-327)
     fn chat_agent_on(&self, users: &[(String, String, bool)]) -> bool { self.allows("agents") && self.mods.chat.agent_on(users) }

@@ -207,8 +207,30 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
     // a /transfer (T-375): the links both ways, {id, title (as it is now), at, gone (deleted since)}; and that it gave its worktree on
     for k in ["transferredTo", "transferredFrom"] { if m[k].is_object() { out[k] = link_view(v, &m[k]); } }
     if sx.gave { out["gaveTree"] = json!(true); }
+    // a PGM session on the Jcode PGM Server (T-376 stage 3): its id (the list adds where it runs, crate::pgm_work)
+    if st["pgm"]["id"].is_string() { out["pgm"] = json!({ "id": st["pgm"]["id"] }); }
     out
 }
+/// A new session (not on screen unless `open`) with this state and meta title / worktree (T-376 stage 3: a PGM session opened
+/// from the list). Err = the plain reason.
+pub(crate) fn create(a: &Account, title: &str, state: Value, worktree: Value, open: bool) -> Result<String, String> {
+    let sid = new_sid();
+    save_file(a, &sid, &json!({ "state": state, "current": {} }));
+    let r = with_index(a, |v| {
+        if v["sessions"].as_object().map(|o| o.len()).unwrap_or(0) >= MAX_SESSIONS { return Err(format!("You have {MAX_SESSIONS} sessions; delete some first.")); }
+        let mut meta = meta_new(&one_line(&json!(title), 120));
+        if worktree.is_object() { meta["worktree"] = worktree.clone(); }
+        v["sessions"][&sid] = meta;
+        let mut order = vec![json!(sid)]; order.extend(v["order"].as_array().cloned().unwrap_or_default()); v["order"] = json!(order);
+        if open { v["current"] = json!(sid); }
+        Ok(())
+    });
+    match r { Ok(()) => Ok(sid), Err(e) => { let _ = std::fs::remove_file(session_file(a, &sid)); Err(e) } }
+}
+/// The session open on screen now.
+pub(crate) fn set_current(a: &Account, sid: &str) { with_index(a, |v| { if v["sessions"].get(sid).is_some() { v["current"] = json!(sid); } }); }
+/// The ids of the person's sessions, in the list's order.
+pub(crate) fn ids(a: &Account) -> Vec<String> { ids_of(&index(a)) }
 /// A transfer link as the list shows it: the other session's title as it is now (the stored one when it is gone).
 fn link_view(v: &Value, l: &Value) -> Value {
     let id = s(l, "id"); let there = &v["sessions"][&id];
@@ -379,7 +401,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let b = r.json(); let id = s(&b, "id");
     let exists = |sid: &str| index(a)["sessions"].get(sid).is_some();
     Some(match p {
-        "/api/work/sessions" if get => answer(200, list(w, hub.ai(), a, r.param("archived").as_deref() == Some("1"))),
+        "/api/work/sessions" if get => { let mut v = list(w, hub.ai(), a, r.param("archived").as_deref() == Some("1")); crate::pgm_work::merge_list(hub, a, &mut v).await; answer(200, v) }
+        // a PGM session of the Jcode PGM Server (one started in jcode too): its Work session, made on the fly (T-376 stage 3)
+        "/api/work/sessions/pgm/open" if post => crate::pgm_work::open(hub, a, &b).await,
         "/api/work/sessions/report" if post => ext_report(a, &b, now_ms()),
         "/api/work/sessions/new" if post => {
             let v = index(a);
@@ -420,6 +444,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/work/sessions/open" if post => {
             if !exists(&id) { return Some(answer(404, json!({ "error": "No such session." }))); }
             with_index(a, |v| { v["current"] = json!(id); if let Some(m) = v["sessions"].get_mut(&id) { m["hidden"] = json!(false); m["archived"] = json!(false); m["seenAt"] = json!(now_ms()); } });
+            // a PGM session (T-376 stage 3): what happened on the server or in jcode since, followed live while it runs
+            crate::pgm_work::watch(hub, a, &id).await;
             answer(200, json!({ "current": id }))
         }
         "/api/work/sessions/rename" | "/api/work/sessions/pin" | "/api/work/sessions/seen" | "/api/work/sessions/hide" | "/api/work/sessions/move" if post => {

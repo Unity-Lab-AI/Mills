@@ -61,6 +61,10 @@ pub trait AiHub: Send + Sync {
     // ---- the chat's AI member
     /// A person's own linked machines (T-311; the cards of `Devices::machines_of`: id, name, online, paused). A program without them has none.
     fn machines_of(&self, _user: &str) -> Vec<Value> { vec![] }
+    /// The Jcode PGM Server next to this program (T-376 stage 3, team note plans/jcode-pgm-server-stage3.md F.4): its loopback
+    /// address and the shared secret its `/__srv/*` calls carry (`x-pgm-secret`). None = no server: Work on OpenRouter runs
+    /// Jcode PGM itself (`jcode.command`), as before.
+    fn pgm_server(&self) -> Option<(String, String)> { None }
     fn chat_has_key(&self, u: &str) -> bool;
     fn chat_agent_on(&self, users: &[(String, String, bool)]) -> bool;
     fn chat_room_changed(&self);

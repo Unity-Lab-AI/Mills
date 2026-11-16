@@ -7,6 +7,26 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.67.0 — 2026-11-16
+
+MINOR: **one session across the website and jcode, through Jcode PGM Server** (T-376 stage 3, hub side; spec
+plans/jcode-pgm-server-stage3.md F.3, F.4, F.8; Jcode PGM 0.99.9 is the server and jcode side).
+
+- **Work on OpenRouter goes through the server.** When the hub has a Jcode PGM Server (`pgmServer`) and a Work session's
+  AI is the team's or your own OpenRouter, the run no longer starts `jcodepgm` itself: the hub creates a PGM session on
+  the server (its project, branch, model pair and worktree) and sends each message to it, passing the MCP tools and
+  prompt Work runs get; the server's events are drawn as an ordinary Work transcript, and Stop tells the server first.
+  The Work session keeps the PGM session's id (`pgm: {id}`, add-only). Without a server: the old engine, unchanged.
+- **Messages go where the work is.** If your jcode is open and running that session, a message from the website goes
+  to it ("sent to jcode on <device>") and jcode's own turns appear live. `/onserver` (or "continue on the server")
+  asks for the run to happen on the server: with jcode open, it first commits and pushes your unfinished work and
+  the server checks it out ("handed over from <device>: <branch> @ <commit>"); with jcode closed, the server continues
+  from your last push and says so; never pushed, a plain refusal.
+- **Your jcode sessions are in the list.** PGM sessions started in jcode show in the website's session list
+  ("running in jcode on <device>" / "on the server"); opening one shows its transcript live and sending continues it.
+- web/index.html 1.51.0, web/sessions.js 1.2.2. Checks R627–R633 (R633 runs the real `jcodepgm server` when
+  `VR_TEST_JCODEPGM` points at one).
+
 ## 5.66.0 — 2026-11-16
 
 MINOR: **the hub side of Jcode PGM Server, stage 1** (T-376; spec plans/jcode-pgm-server.md; Sponge, 2026-11-16: a
