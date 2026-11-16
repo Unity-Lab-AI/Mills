@@ -1,5 +1,5 @@
 {
-  "project": "5.67.0",
+  "project": "5.68.0",
   "modules": {
     "bridge/ai-node.js": "3.4.1",
     "bridge/ai-nodes-front.js": "1.0.0",
@@ -56,14 +56,14 @@
     "web/guild-settings.js": "1.1.2",
     "web/guilds.js": "1.2.0",
     "web/hyperwork.js": "1.0.0",
-    "web/index.html": "1.51.0",
+    "web/index.html": "1.52.0",
     "web/library.js": "1.2.0",
     "web/localai.js": "1.0.0",
     "web/machines.js": "1.0.0",
     "web/md.js": "1.0.1",
     "web/menu.js": "1.0.0",
     "web/notes.js": "1.1.0",
-    "web/polish.css": "1.0.3",
+    "web/polish.css": "1.0.4",
     "web/presence.js": "1.0.0",
     "web/profile.js": "1.1.0",
     "web/queue.js": "1.0.0",

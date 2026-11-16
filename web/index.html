@@ -1119,26 +1119,47 @@
   <svg class="brandMark small" aria-hidden="true"><use href="#i-mills"/></svg>
   <h1 id="menuUser"></h1>
   <div id="menuWho" class="menuWho" hidden></div>
-  <!-- the menu is a grid of tiles: icon, name, one line on what is inside (styles in web/polish.css) -->
-  <div class="choices">
-    <button id="goWork" class="tile"><svg class="ic lead"><use href="#i-code"/></svg>Work<small>Claude, your files and the team, side by side</small></button>
-    <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
-    <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
-    <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
-    <button id="goAgents" class="tile" hidden><svg class="ic lead"><use href="#i-bot"/></svg>Agents<small>What your agent and the others' say to each other, and your say in it</small><span class="badge" id="agentsTileBadge" hidden></span></button>
-    <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
-    <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
-    <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
-    <button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"/></svg>Exit to menu<small>Back to Jcode PGM Desktop's menu (Jcode or VibeRoller)</small></button>
-    <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
-    <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
-    <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
+  <!-- the menu: four sections of tiles (T-377: Productivity, Utility, AI, Administration); a section whose tiles are all
+       hidden hides itself (menuSections()); each tile: icon, name, one line on what is inside (styles in web/polish.css) -->
+  <div class="menuSections">
+    <section class="menuSec" data-menusec="productivity" aria-label="Productivity">
+      <h2>Productivity</h2>
+      <div class="choices">
+        <button id="goWork" class="tile"><svg class="ic lead"><use href="#i-code"/></svg>Work<small>Claude, your files and the team, side by side</small></button>
+        <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
+        <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
+        <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
+      </div>
+    </section>
+    <section class="menuSec" data-menusec="utility" aria-label="Utility">
+      <h2>Utility</h2>
+      <div class="choices">
+        <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
+        <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
+        <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
+        <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
+      </div>
+    </section>
+    <section class="menuSec" data-menusec="ai" aria-label="AI">
+      <h2>AI</h2>
+      <div class="choices">
+        <button id="goAgents" class="tile" hidden><svg class="ic lead"><use href="#i-bot"/></svg>Agents<small>What your agent and the others' say to each other, and your say in it</small><span class="badge" id="agentsTileBadge" hidden></span></button>
+        <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
+      </div>
+    </section>
+    <section class="menuSec" data-menusec="admin" aria-label="Administration">
+      <h2>Administration</h2>
+      <div class="choices">
+        <button id="goSettings" class="tile" data-settings><svg class="ic lead"><use href="#i-gear"/></svg>Settings<small>Your profile, sounds, look, AI and connections</small></button>
+        <button id="goDownloads" class="tile" data-downloads title="Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Download<small>The desktop app and the AI host, for Windows and Linux</small></button>
+        <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
+        <button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"/></svg>Exit to menu<small>Back to Jcode PGM Desktop's menu (Jcode or VibeRoller)</small></button>
+      </div>
+    </section>
   </div>
-  <div class="menuFoot menuDl"><button class="ghost" id="goDownloads" data-downloads title="Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Download</button></div>
   <!-- the PGM products this hub serves (PGM Gateway, 5.2.0): each its own program and account, signed in with the same VibeRoller login -->
-  <div class="menuFoot menuProducts" id="menuProducts" hidden><span class="folder">Also here:</span> <a href="/p/prodsuit/" target="_blank" rel="noopener">PGM Prod Suit</a> · <a href="/p/shadowchat/" target="_blank" rel="noopener">PGM ShaDow Chat</a> · <a href="/p/hyperprodman/" target="_blank" rel="noopener">PGM Hyper Prod Man</a></div>
+  <div class="menuFoot menuProducts" id="menuProducts" hidden><span class="folder">Also here:</span> <a class="prodBtn" href="/p/prodsuit/" target="_blank" rel="noopener">PGM Prod Suit</a> <a class="prodBtn" href="/p/shadowchat/" target="_blank" rel="noopener">PGM ShaDow Chat</a> <a class="prodBtn" href="/p/hyperprodman/" target="_blank" rel="noopener">PGM Hyper Prod Man</a></div>
   <div class="menuFoot">
-    <button class="ghost" id="goSettings" data-settings><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button>
     <button class="ghost" id="menuLogout"><svg class="ic lead"><use href="#i-logout"/></svg>Sign out</button>
   </div>
 </div>
@@ -1731,6 +1752,14 @@ if (PRODUCT) { // a product's page: its name, only its screens on the menu, no D
   $('goDownloads').hidden = true;
   for (const t of ['connections', 'downloads']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
 } else if ('__MILLS_SERVED__' === 'hub') $('menuProducts').hidden = false; // the hub's own page (the hub fills this in; SERVED_BY_HUB is defined further down): the products it serves
+// T-377: a menu section whose tiles are all hidden (Agents off, no Admin, a product's page …) hides with them; it follows
+// every later show / hide of a tile by itself
+function menuSections() {
+  // only on a change: setting `hidden` again would be a mutation of its own and wake the observer in a loop
+  document.querySelectorAll('#menu .menuSec').forEach((sec) => { const empty = ![...sec.querySelectorAll('.choices > button')].some((b) => !b.hidden); if (sec.hidden !== empty) sec.hidden = empty; });
+}
+menuSections();
+new MutationObserver(menuSections).observe($('menu'), { subtree: true, attributes: true, attributeFilter: ['hidden'] });
 // The dev hub (T-327) puts its DEV band (#devBand) at the top of the page and "DEV · " in front of the title; every title
 // this page sets later keeps that prefix. A page without the band (the live hub's, a product's copy of web/) is unchanged.
 if ($('devBand')) {

@@ -3336,12 +3336,12 @@ async function run() {
     const pubSigned = (await fetch(H + '/api/pub/versions', { headers: { Authorization: 'Bearer ' + U } })).status;
     const page = await (await fetch(H + '/')).text();
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
-    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
+    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download tile sits next to Settings in the menu\'s Administration section and above Settings in the app\'s user panel',
       anon.status === 401 && anonNative.status === 401 && pubGone.every((s) => s === 410) && pubSigned === 410
       && (RUST_HUB ? dl.status === 200 && Array.isArray(items) && items.every((it) => it.native === true && /^(app|host)-/.test(it.id)) && unknown.status === 404 : dl.status === 503 && unknown.status === 503)
       && !fs.existsSync(path.join(BRIDGE, 'downloads.js')) && !fs.existsSync(path.join(BRIDGE, 'desktop'))
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
-      && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
+      && /<section class="menuSec" data-menusec="admin"[\s\S]*?id="goSettings" class="tile" data-settings[\s\S]*?id="goDownloads" class="tile" data-downloads[\s\S]*?<\/section>/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
       // Work's bar: Download right above Settings; Settings has its own Downloads tab, which every Download button opens
       && (() => { const rail = (html.match(/<nav id="rail">[\s\S]*?<\/nav>/) || [''])[0]; return rail.indexOf('data-downloads') > -1 && rail.indexOf('data-downloads') < rail.indexOf('data-settings'); })()
       && /data-settab="downloads"/.test(html) && /<div data-setpane="downloads" hidden>[\s\S]*id="dlBody"[\s\S]*id="appBox"/.test(html) && /PROFILE\.tab\('downloads'\)/.test(html) && !/id="downloads" class="modal"/.test(html),
@@ -4816,6 +4816,31 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R634 (T-377): the main menu in four sections; Settings and Download inside one; "Also here" as buttons
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8'), seen = {};
+    const menu = (page.match(/<div id="menu" hidden>[\s\S]*?\n<\/div>\n/) || [''])[0];
+    const secs = [...menu.matchAll(/<section class="menuSec" data-menusec="(\w+)" aria-label="([^"]+)">\s*<h2>([^<]+)<\/h2>\s*<div class="choices">([\s\S]*?)<\/div>\s*<\/section>/g)]
+      .map((m) => ({ key: m[1], title: m[3], tiles: [...m[4].matchAll(/<button (?:id="(\w+)" class="tile"|class="tile" id="(\w+)")/g)].map((t) => t[1] || t[2]) }));
+    seen.sections = secs.map((x) => x.title + ':' + x.tiles.join('+')).join(' | ');
+    seen.layout = seen.sections === 'Productivity:goWork+goChat+goBoard+goCal | Utility:goWorkflows+goFiles+goNotes+goTools | AI:goAgents+goAssist | Administration:goSettings+goDownloads+goAdmin+goPgmMenu';
+    seen.settingsTile = /<button id="goSettings" class="tile" data-settings>/.test(menu) && /<button id="goDownloads" class="tile" data-downloads /.test(menu);
+    const foot = menu.slice(menu.lastIndexOf('<div class="menuFoot">'));
+    seen.footOnlySignOut = /id="menuLogout"/.test(foot) && !/goSettings|goDownloads|data-settings|data-downloads/.test(foot) && !/menuDl/.test(page);
+    const prods = (menu.match(/<div class="menuFoot menuProducts" id="menuProducts" hidden>([\s\S]*?)<\/div>/) || [, ''])[1];
+    const links = [...prods.matchAll(/<a class="prodBtn" href="(\/p\/\w+\/)" target="_blank" rel="noopener">([^<]+)<\/a>/g)].map((m) => m[1]);
+    seen.alsoHere = links.join(',') === '/p/prodsuit/,/p/shadowchat/,/p/hyperprodman/' && !/ · /.test(prods);
+    seen.buttonLook = /\.menuProducts \.prodBtn \{[^}]*border-radius: var\(--r-m\)[^}]*border: 1px solid[^}]*\}/.test(css) && /\.menuProducts \.prodBtn:hover/.test(css);
+    // the section logic, run on stand-ins: a section with no visible tile hides; a write only happens on a change
+    const fn = (page.match(/function menuSections\(\) \{[\s\S]*?\n\}/) || [''])[0];
+    const mk = (hiddens) => { const sec = { writes: 0, _h: false, tiles: hiddens.map((h) => ({ hidden: h })) }; Object.defineProperty(sec, 'hidden', { get() { return this._h; }, set(v) { this.writes++; this._h = v; } }); sec.querySelectorAll = () => sec.tiles; return sec; };
+    const a = mk([true, false]), b = mk([true, true]), c = mk([]);
+    try { require('vm').runInNewContext(fn + '\nmenuSections(); menuSections();', { document: { querySelectorAll: () => [a, b, c] } }); } catch (e) { seen.err = e.message; }
+    seen.logic = a.hidden === false && b.hidden === true && c.hidden === true && a.writes === 0 && b.writes === 1 && c.writes === 1;
+    seen.observed = /new MutationObserver\(menuSections\)\.observe\(\$\('menu'\), \{ subtree: true, attributes: true, attributeFilter: \['hidden'\] \}\);/.test(page);
+    check('R634', 'the main menu is four sections with headings: Productivity (Work, Chat, Board, Calendar), Utility (Workflows, Files, Notes, Tools), AI (Agents, Unity) and Administration (Settings, Download, Admin, Exit to menu); Settings and Download are tiles there (Sign out alone stays below); a section whose tiles are all hidden hides itself and follows later changes; "Also here" shows the PGM products as rounded-rectangle buttons with the same links',
+      Object.values(seen).every((v) => v === true || typeof v === 'string') && seen.layout && seen.settingsTile && seen.footOnlySignOut && seen.alsoHere && seen.buttonLook && seen.logic && seen.observed && !seen.err,
+      JSON.stringify(seen));
+  }
   { // R613 (T-373): the hub page in Jcode PGM Desktop's VibeRoller window uses that app's own bridge (window.__PGM_DESKTOP__)
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
     const line = (re) => (page.match(re) || [''])[0];

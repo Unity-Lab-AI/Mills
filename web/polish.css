@@ -106,10 +106,17 @@ header b { font-weight: 750; letter-spacing: .01em; }
 #menu .choices button.tile:hover .ic { background: var(--grad-accent); color: var(--on-accent); }
 #menu .badge { background: var(--grad-accent); color: var(--on-accent); box-shadow: 0 2px 10px var(--accent-glow); top: .5rem; right: .5rem; }
 .menuFoot { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: center; }
-/* the Download row sits above Settings / Sign out: Vibe Roller Desktop + Vibe Roller AI Host (Windows + Linux) */
-.menuFoot.menuDl { margin-bottom: -.3rem; }
-.menuFoot.menuDl button { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--accent); background: var(--accent-soft); }
-.menuFoot.menuDl button:hover { background: var(--grad-accent); color: var(--on-accent); border-color: transparent; }
+/* T-377: the menu in four sections (Productivity, Utility, AI, Administration), each a heading over its own grid of tiles */
+#menu .menuSections { display: flex; flex-direction: column; gap: 1.1rem; width: min(900px, 94vw); }
+#menu .menuSec { display: flex; flex-direction: column; gap: .5rem; }
+#menu .menuSec[hidden] { display: none; }
+#menu .menuSec > h2 { margin: 0; padding: 0 .2rem; text-align: left; font-size: .78rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: .6rem; }
+#menu .menuSec > h2::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+#menu .menuSec .choices { width: 100%; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); } /* a full section (4) fits one row */
+/* "Also here": the PGM products as rounded-rectangle buttons (same links) */
+.menuProducts { align-items: center; }
+.menuProducts .prodBtn { display: inline-flex; align-items: center; padding: .45rem .9rem; border-radius: var(--r-m); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: .9rem; text-decoration: none; transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .12s ease; }
+.menuProducts .prodBtn:hover, .menuProducts .prodBtn:focus-visible { background: var(--grad-accent); color: var(--on-accent); border-color: transparent; transform: translateY(-1px); }
 #dlBody .setSection + .setSection { margin-top: .7rem; }
 #dlBody .row { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
 #appUser button.tiny { flex: none; }
