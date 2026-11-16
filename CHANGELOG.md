@@ -7,6 +7,34 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.65.0 — 2026-11-16
+
+MINOR: **`/transfer` in Work: a handoff and a fresh session that picks up where the last one left off** (T-375; Sponge,
+2026-11-16: the command Jcode PGM already has, "compacts the session + generates a fresh handoff, and will spawn a new
+session with the compacted information and handoff … account for selected projects, files, and everything else").
+
+- **What it does** (`POST /api/work/sessions/transfer {session, focus?, keepWorktree?}`; `/transfer [focus]` typed, or
+  from the Commands panel with a confirm and a focus box):
+  1. reads the session's worktree (branch, `git status`, the last commits) and the files its runs edited and read;
+  2. writes a **handoff** (goal, done, state, decisions, open problems, next steps, the important files) with a
+     throw-away model call through the session's own AI (Claude through `claude -p` and the relay, as the prompt enhancer
+     does; an OpenRouter / Jcode PGM session through its provider, key and budget); the exact git facts are appended;
+     if no such call is possible or it fails, a plain structured handoff is built without a model and says why;
+  3. makes a **new session** with the same project, provider, model, harness and mode, in the old session's folder,
+     titled "… (continued)", linked both ways (`transferredFrom` / `transferredTo`), working in **the same worktree** so
+     uncommitted work carries on (`keepWorktree: false` gives it a fresh one), with the old session's queued messages;
+  4. starts it with the handoff as its first message (`[transfer from session <title> · <date>]` and an instruction to
+     confirm where things stand and what it will do next, without redoing finished work; attachments still referenced
+     come along) and opens it; over the session limit, the handoff waits in its queue;
+  5. puts a handoff note on board tasks the old session's runs left claimed, naming the new session.
+- **The old session** stays in the list ("transferred → …"; a bar "Transferred to …" / "Continued from …" links the
+  two); its runs, Git-panel actions and merge-home are refused with the new session's name. Deleting it leaves the
+  worktree with the new session; deleting the new one returns it. Agent messages to a transferred session go to the one
+  it continued in. Add-only session fields `tree` / `treeGivenTo`. The handoff is kept in the new session, never written
+  into the worktree. Refused: a working session (409), one already transferred or being transferred (409), someone
+  else's (404), an empty one (400).
+- New module `transfer.rs`. web/index.html 1.50.0, web/sessions.js 1.2.1. Checks R614–R619.
+
 ## 5.64.2 — 2026-11-16
 
 PATCH: **the hub page knows Jcode PGM Desktop's VibeRoller window** (T-373; Jcode PGM Desktop 0.7.0 merges the
