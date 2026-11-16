@@ -965,7 +965,7 @@
      shrink to fit and scrolls inside itself instead. */
   #shell, #room, #admin, #app, #panes, #panes > section, .paneBody, #roomHost, #roomPaneBody, #roomFloatBody,
   #roomCore, .roomMain, #roomLog, #log, #chat, #edit, #files, #tree, #callFloatBody, #callCore { min-width: 0; min-height: 0; }
-  #shell, #room, #admin { overflow: hidden; }
+  #shell, #room, #admin, #aiAdmin { overflow: hidden; }
   #panes > section { min-width: min(120px, 22vw); }
   #login, #menu { max-height: 100%; overflow: auto; padding: 1rem 0; }
   header { max-height: 40vh; overflow-y: auto; }
@@ -1126,8 +1126,13 @@
   <svg class="brandMark small" aria-hidden="true"><use href="#i-mills"/></svg>
   <h1 id="menuUser"></h1>
   <div id="menuWho" class="menuWho" hidden></div>
-  <!-- the menu: four sections of tiles (T-377: Productivity, Utility, AI, Administration); a section whose tiles are all
-       hidden hides itself (menuSections()); each tile: icon, name, one line on what is inside (styles in web/polish.css) -->
+  <!-- T-379: Settings and Downloads, styled like My status / Team now (web/presence.js puts those right above them) -->
+  <div class="psBar menuQuick" id="menuQuick"><button type="button" id="goSettings" class="ghost psBtn" data-settings title="Your profile, look, Work, sounds and connections"><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button><button type="button" id="goDownloads" class="ghost psBtn" data-downloads title="VibeRoller Desktop, the AI host and Jcode PGM, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Downloads</button></div>
+  <!-- T-379: the site-wide message an admin set (Site admin → Site-wide settings), for everyone -->
+  <div id="menuMotd" class="menuMotd" role="note" hidden></div>
+  <!-- the menu: four sections of tiles (T-377: Productivity, Utility, AI, Administration; T-379: Productivity two to a
+       row, Administration = Site admin, AI Admin); a section whose tiles are all hidden hides itself (menuSections()); each
+       tile: icon, name, one line on what is inside (styles in web/polish.css) -->
   <div class="menuSections">
     <section class="menuSec" data-menusec="productivity" aria-label="Productivity">
       <h2>Productivity</h2>
@@ -1157,9 +1162,8 @@
     <section class="menuSec" data-menusec="admin" aria-label="Administration">
       <h2>Administration</h2>
       <div class="choices">
-        <button id="goSettings" class="tile" data-settings><svg class="ic lead"><use href="#i-gear"/></svg>Settings<small>Your profile, sounds, look, AI and connections</small></button>
-        <button id="goDownloads" class="tile" data-downloads title="Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Download<small>The desktop app and the AI host, for Windows and Linux</small></button>
-        <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
+        <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Site admin<small>Accounts, roles and permissions, site-wide settings, the hub</small></button>
+        <button id="goAiAdmin" class="tile"><svg class="ic lead"><use href="#i-bot"/></svg>AI Admin<small>The team's AI and your own: OpenRouter, the default AI, AI hosts</small></button>
         <button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"/></svg>Exit to menu<small>Back to Jcode PGM Desktop's menu (Jcode or VibeRoller)</small></button>
       </div>
     </section>
@@ -1261,14 +1265,15 @@
   <div class="box setBox">
     <!-- T-318: the title, a filter over every tab's settings (web/profile.js SETFIND) and Close (Escape too) -->
     <div class="bar"><span>Settings</span><input id="setFind" type="search" placeholder="Find a setting…" aria-label="Find a setting" spellcheck="false" autocomplete="off"><button class="ghost" id="closeSettings"><svg class="ic lead"><use href="#i-close"/></svg>Close</button></div>
-    <!-- five tabs (web/profile.js, T-378), all about your own account: Profile = what others see; App = how VibeRoller
-         looks and behaves for you; Sound & voice = sounds, read-aloud, calls; AI = whose AI answers you and your own AIs
-         and AI hosts; Connections = what connects to your account from outside (your API key and tools, signed-in
-         devices, your machines, Forgejo). App and Sound & voice are saved with one Save bar at the bottom (saved to your
-         account, so they follow you to every browser); the other tabs save as you go. Downloads is a window of its own
-         (#downloads). Each tab is made of groups (.setGroup: a heading, one line on what is inside, the controls); a tab
-         with three or more groups gets a sticky list of them on wide screens (web/profile.js). -->
-    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App</button><button type="button" class="ghost" data-settab="sound"><svg class="ic lead"><use href="#i-speaker"/></svg>Sound &amp; voice</button><button type="button" class="ghost" data-settab="ai"><svg class="ic lead"><use href="#i-bot"/></svg>AI</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button></div>
+    <!-- five tabs (web/profile.js; T-378, T-379), all about your own account: Profile = what others see; App = how VibeRoller
+         looks for you (theme, Desktop Unity, the version); Work = how Chat and Work behave, your projects, when the AI asks;
+         Sound & voice = sounds, read-aloud, calls; Connections = what connects to your account from outside (your API key
+         and tools, signed-in devices, your machines, Forgejo). Your AI settings are in AI Admin (#aiAdmin), Downloads is a
+         window of its own (#downloads). App, Work and Sound & voice are saved with one Save bar at the bottom (saved to your
+         account, so they follow you to every browser); the other tabs save as you go. Each tab is made of groups (.setGroup:
+         a heading, one line on what is inside, the controls); a tab with three or more groups gets a sticky list of them on
+         wide screens (web/profile.js). -->
+    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App</button><button type="button" class="ghost" data-settab="work"><svg class="ic lead"><use href="#i-code"/></svg>Work</button><button type="button" class="ghost" data-settab="sound"><svg class="ic lead"><use href="#i-speaker"/></svg>Sound &amp; voice</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button></div>
     <div class="setBody">
      <div id="setNone" class="setHint" hidden>No setting matches that. Try another word, or clear the box to see every tab.</div>
      <div data-setpane="profile">
@@ -1284,6 +1289,15 @@
       <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
        <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
       </section>
+      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. She is off until you turn her on here.Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
+       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <button type="button" id="duReset" title="Back to herself: her default look, a fresh one filmed; where she stands goes back to the middle">Reset</button> <span id="duState" class="status"></span></span></div>
+       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
+       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
+      </section>
+      <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
+      <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
+     </div>
+     <div data-setpane="work" data-saves hidden>
       <section class="setGroup" id="sgWork"><h3>Chat and Work</h3><p class="setHint">How conversations behave on your screen.</p>
        <label class="chk"><input type="checkbox" id="setToasts"><span>Floating pop-ups for new chat messages while in Work</span></label>
        <label class="chk"><input type="checkbox" id="setReopen"><span>Reopen what I had open after a reload<small>The previous Work conversation and the chat you were in. Off: a reload starts fresh on the menu; nothing is deleted.</small></span></label>
@@ -1301,13 +1315,6 @@
        <label class="chk"><input type="checkbox" id="setAskActivity"><span>Any activity on the page makes it wait for me again<small>While a question is open: a click, a key, coming back to the window.</small></span></label>
        <label class="chk"><input type="checkbox" id="setAskTts"><span>Say "User action required" and the question aloud<small>Needs the text to speech master switch under Read aloud; Do not disturb mutes it.</small></span></label>
       </section>
-      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. She is off until you turn her on here.Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
-       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <button type="button" id="duReset" title="Back to herself: her default look, a fresh one filmed; where she stands goes back to the middle">Reset</button> <span id="duState" class="status"></span></span></div>
-       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
-       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
-      </section>
-      <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
-      <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
      </div>
      <div data-setpane="sound" data-saves hidden>
       <section class="setGroup" id="sgSounds"><h3>Sounds</h3><p class="setHint">A short sound for each kind of news, each with its own volume; ▷ plays it in the style picked below.</p>
@@ -1339,16 +1346,6 @@
        <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
        <label class="chk"><input type="checkbox" id="clipAuto"><span>Auto-play incoming voice clips<small>Queued together with read-aloud.</small></span></label>
       </section>
-     </div>
-     <div data-setpane="ai" hidden>
-      <section class="setGroup"><h3>AI source</h3><p class="setHint">Whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).</p>
-        <div id="srcBox" class="apiBox"></div></section>
-      <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
-        <div id="provBox" class="provBox"></div></section>
-      <section class="setGroup" id="sgOpenRouter"><h3>OpenRouter budget</h3><p class="setHint">The team's OpenRouter models cost money, so each person has a monthly budget (US dollars, counted from what OpenRouter charges for each answer). At the cap OpenRouter answers stop until the 1st. You can also let a Work session fall back to an OpenRouter model when its Claude host is offline or at its cap.</p>
-        <div id="orBox" class="apiBox"></div></section>
-      <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
-        <div id="hostBox" class="apiBox"></div></section>
      </div>
      <div data-setpane="connections" hidden>
       <section class="setGroup"><h3>API access</h3><p class="setHint">Your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.</p>
@@ -1501,26 +1498,73 @@
 </div>
 <div id="assistNotice"></div>
 
+<!-- AI Admin (T-379): the team's AI on top (Global: shown to roles with the Manage AI or See AI hosts permission,
+     web/aiadmin.js), then, under a line, your own AI settings (moved here from Settings). Everyone may open it. -->
+<div id="aiAdmin" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>AI Admin</b>
+    <span class="folder">The team's AI and your own</span>
+  </header>
+  <div id="aiAdminBody" class="adminPage">
+    <div class="adminPart" id="aiGlobal" hidden>
+      <h2 class="adminPartHead">Global<small>For everyone on this hub. Any admin can change it (the Manage AI permission).</small></h2>
+      <section class="setGroup" id="agDefault" hidden><h3>Default AI for everyone</h3><p class="setHint">What answers Work and the API for everyone whose AI source is on Default: this hub's own Claude, or one person's AI host. A person who picks a source of their own keeps it.</p>
+        <div id="agDefaultBox" class="apiBox"></div></section>
+      <section class="setGroup" id="agOpenRouter" hidden><h3>Team OpenRouter</h3><p class="setHint">The team's OpenRouter key and the models (model + provider pairs) everyone may use with it, everyone's monthly budget on the team key, and whether people may use a personal key of their own.</p>
+        <div id="agOrBox" class="apiBox"></div></section>
+      <section class="setGroup" id="agHosts" hidden><h3>AI hosts on this hub</h3><p class="setHint">Every AI host connected to this hub: whose it is, whether it is online, its version and who is using it now. Only its owner controls it (AI Admin → My AI hosts on their account).</p>
+        <div id="agHostsBox" class="apiBox"></div></section>
+      <section class="setGroup" id="agUnity" hidden><h3>Unity's own-computer tools</h3><p class="setHint">Per person: whether Unity may read and change files in the folder they opened on their own PC, and run code in their browser.</p>
+        <div id="agUnityBox" class="apiBox"></div></section>
+    </div>
+    <hr class="adminSplit" id="aiSplit" hidden>
+    <div class="adminPart" id="aiPersonal">
+      <h2 class="adminPartHead">Yours<small>Only you see these. Your AI host's controls show up once you have one.</small></h2>
+      <div id="aiMsg" class="status" role="status"></div>
+      <section class="setGroup"><h3>AI source</h3><p class="setHint">Whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Global → Default AI for everyone).</p>
+        <div id="srcBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
+        <div id="provBox" class="provBox"></div></section>
+      <section class="setGroup" id="sgOpenRouter"><h3>My OpenRouter</h3><p class="setHint">Which key pays for your OpenRouter models, and your month. The team's OpenRouter models cost money, so each person has a monthly budget (US dollars, counted from what OpenRouter charges for each answer). At the cap OpenRouter answers stop until the 1st. You can also let a Work session fall back to an OpenRouter model when its Claude host is offline or at its cap.</p>
+        <div id="orBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
+        <div id="hostBox" class="apiBox"></div></section>
+    </div>
+  </div>
+</div>
+
+<!-- Site admin (T-379; was Admin): accounts with their site role, the roles and what each may do (the chat roles' ladder),
+     site-wide settings, the hub. Each group shows to the roles whose permission it needs (web/siteadmin.js); the hub checks
+     the permission on every call. -->
 <div id="admin" class="screen" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
-    <b>Admin</b>
-    <span class="folder">Accounts and hub controls</span>
+    <b>Site admin</b>
+    <span class="folder">Accounts, roles, site-wide settings and the hub</span>
   </header>
-  <div id="adminBody">
-    <table><thead><tr><th>User</th><th>Status</th><th>Model</th><th>Actions</th></tr></thead><tbody id="adminRows"></tbody></table>
-    <div class="row">
-      <input id="newUser" placeholder="new username (a-z, 0-9, -)" autocapitalize="none" spellcheck="false">
-      <input id="newDisplay" placeholder="display name">
-      <label style="font-size:.85rem"><input type="checkbox" id="newAdmin" style="width:auto"> admin</label>
-      <button id="createUser">Create account</button>
-    </div>
-    <div class="row">
-      <button class="ghost" id="adminRestart">Restart hub</button>
-      <button class="ghost" id="adminClearChat">Clear chat history</button>
-      <button class="ghost" id="adminRefresh">Refresh</button>
-    </div>
-    <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
+  <div id="adminBody" class="adminPage">
+    <section class="setGroup" id="saAccounts"><h3>Accounts</h3><p class="setHint">Everyone with an account here, their role, devices and what they run. Generated passwords show once below: copy them before leaving this page.</p>
+      <table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Model</th><th>Actions</th></tr></thead><tbody id="adminRows"></tbody></table>
+      <div class="row">
+        <input id="newUser" placeholder="new username (a-z, 0-9, -)" autocapitalize="none" spellcheck="false">
+        <input id="newDisplay" placeholder="display name">
+        <select id="newRole" aria-label="Their role" hidden></select><label style="font-size:.85rem"><input type="checkbox" id="newAdmin" style="width:auto"> admin</label>
+        <button id="createUser">Create account</button>
+      </div>
+      <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
+    </section>
+    <section class="setGroup" id="saRoles" hidden><h3>Roles and permissions</h3><p class="setHint">The same ladder as the chat servers: Member, Moderator, Super Moderator, Admin, Super Admin, Co-owner, and roles of your own in between. A role is a set of permissions; you give and change only roles below your own.</p>
+      <div id="saRolesBox" class="apiBox"></div></section>
+    <section class="setGroup" id="saSite" hidden><h3>Site-wide settings</h3><p class="setHint">Settings that apply to everyone on this hub.</p>
+      <div id="saSiteBox" class="apiBox"></div></section>
+    <section class="setGroup" id="saHub"><h3>The hub</h3><p class="setHint">Restart it (as soon as nobody has Claude working; the pages reconnect by themselves) or clear the chat history for everyone.</p>
+      <div class="row">
+        <button class="ghost" id="adminRestart">Restart hub</button>
+        <button class="ghost" id="adminClearChat">Clear chat history</button>
+        <button class="ghost" id="adminRefresh">Refresh</button>
+      </div>
+    </section>
     <!-- PGM Gateway (5.1.1): the products this hub is the gateway for (native/crates/vr-hub gateway.rs); hidden when the
          Rust hub is not in front (the gateway is its own) -->
     <!-- Health (T-331 § 4): the hub's metrics, its write buffer, and one run's trace (the Rust hub's; hidden on a hub without them) -->
@@ -1769,7 +1813,7 @@ if (PRODUCT) { // a product's page: its name, only its screens on the menu, no D
   document.title = PRODUCT.name; $('title').textContent = PRODUCT.name;
   $('loginHint').textContent = 'Sign in with your VibeRoller username and password. The first time, your ' + PRODUCT.name + ' account is made from it; after that it is its own.';
   for (const [s, id] of Object.entries({ shell: 'goWork', room: 'goChat', board: 'goBoard', cal: 'goCal', notes: 'goNotes', library: 'goFiles', assist: 'goAssist', workflows: 'goWorkflows' })) if (!PRODUCT.screens.includes(s)) $(id).hidden = true;
-  $('goDownloads').hidden = true;
+  $('goDownloads').hidden = true; $('goAiAdmin').hidden = true; // the AI is the hub's (T-379)
   for (const t of ['ai', 'connections']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
 } else if ('__MILLS_SERVED__' === 'hub') $('menuProducts').hidden = false; // the hub's own page (the hub fills this in; SERVED_BY_HUB is defined further down): the products it serves
 // T-377: a menu section whose tiles are all hidden (Agents off, no Admin, a product's page …) hides with them; it follows
@@ -2330,7 +2374,9 @@ async function enter() {
   document.title = `${APP_NAME} · ${me.display}`;
   $('brand').textContent = `${APP_NAME} · ${me.display}`;
   $('menuUser').textContent = me.username;
-  $('goAdmin').hidden = !me.admin;
+  $('goAdmin').hidden = !siteAdminAny(); // T-379: any permission Site admin shows (an older hub: the admin flag)
+  const site = me.site || {}; $('menuMotd').hidden = !site.motd; $('menuMotd').textContent = site.motd || ''; // T-379: the site-wide message
+  if (site.defaultTheme && !(me.prefs && me.prefs.theme) && !store.get('mills.theme') && THEMES[site.defaultTheme]) { const m = me; me = null; applyTheme(site.defaultTheme); store.set('mills.theme', ''); me = m; } // the hub's default theme for someone who never picked one (not saved as their pick)
   $('login').hidden = true;
   showModels(me);
   renderProjects();
@@ -2354,7 +2400,7 @@ async function enter() {
 let workStarted = false;
 function showScreen(name) {
   if (PRODUCT && !['menu', 'admin', ...PRODUCT.screens].includes(name)) name = 'menu'; // a product has only its own screens
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   if (name === 'notes') NOTES.show(); // web/notes.js
@@ -2366,6 +2412,7 @@ function showScreen(name) {
   applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
   if (name === 'room') openRoom();
   if (name === 'admin') loadAdmin();
+  if (name === 'aiAdmin') AIADMIN.open(); // web/aiadmin.js (T-379)
   if (name === 'assist') openAssist();
 }
 $('goWork').onclick = () => showScreen('shell');
@@ -2379,13 +2426,14 @@ $('goWorkflows').onclick = () => showScreen('workflows');
 if (PGMD) { $('goPgmMenu').hidden = false; $('goPgmMenu').onclick = () => { try { PGMD.exitToMenu(); } catch {} }; document.body.classList.add('pgmDesktop'); }
 if (NATIVE) { $('goTools').hidden = false; $('goTools').onclick = () => NATIVE.call('open_tools').catch((e) => sys(String(e), true)); document.body.classList.add('native'); }
 $('goAdmin').onclick = () => showScreen('admin');
+$('goAiAdmin').onclick = () => showScreen('aiAdmin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
   if (NATIVE && token) NATIVE.call('set_session', { token: '' }).catch(() => {});
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); appForget(); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'board', 'cal', 'settings', 'downloads', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
   BOARD.stop(); NOTES.stop(); agentsPanel.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
@@ -5378,7 +5426,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderDevices(); if (typeof MACHINES !== 'undefined') MACHINES.render(); renderApiAccess(); renderProviders(); renderOrBudget(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
+  renderDevices(); if (typeof MACHINES !== 'undefined') MACHINES.render(); renderApiAccess(); renderAppCard(); renderForgejo(); renderMyProjects(); // the AI groups: AI Admin (web/aiadmin.js, T-379)
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -5646,23 +5694,49 @@ function pairsEditor(initial) {
   wrap.append(list, add);
   return { el: wrap, get: () => rows.map((x) => x.get()) };
 }
-// ── Settings → OpenRouter budget (T-370): this person's month, the fallback setting, and for admins everyone's month and caps ──
+// ── AI Admin → My OpenRouter (T-379; was Settings → OpenRouter budget): which key pays for your OpenRouter models (the
+// team's, counted against your monthly budget, or your own), your month, the fallback and your own key. The team's side
+// (its key and models, everyone's month, the personal-keys switch) is Global → Team OpenRouter (web/aiadmin.js). ──
 async function renderOrBudget() {
   const box = $('orBox'); if (!box) return;
   let m; try { m = await json('/api/openrouter/budget'); } catch { const g = $('sgOpenRouter'); if (g) g.hidden = true; return; } // an older hub has none
   let provs = []; try { provs = ((await json('/api/providers')).providers || []).filter((p) => p.kind === 'openrouter'); } catch {}
-  const g = $('sgOpenRouter'); if (g) g.hidden = !provs.length && !me.admin && m.personalKeys === false;
+  let mykey = null; try { mykey = await json('/api/openrouter/mykey'); } catch {}
+  const team = provs.filter((p) => !p.personal), mine = provs.find((p) => p.personal);
+  const g = $('sgOpenRouter'); if (g) g.hidden = !team.length && !(mykey && (mykey.personalKeys || mykey.hasKey));
   box.textContent = '';
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   const usd = (n) => '$' + Number(n || 0).toFixed(2);
   box.append(mk('div', '', 'This month (' + m.month + '): team key ' + usd(m.spentUsd) + ' of ' + usd(m.capUsd) + (m.ownCap ? ' (your own cap)' : '') + ' · ' + m.calls + ' answer' + (m.calls === 1 ? '' : 's') + ' · resets ' + new Date(m.resetsAt).toLocaleDateString() + (m.over ? ' · used up' : '')));
   if (m.hasOwnKey || m.mineCalls) box.append(mk('div', '', 'Your own key: ' + usd(m.mineUsd) + ' · ' + m.mineCalls + ' answer' + (m.mineCalls === 1 ? '' : 's') + ' (you pay OpenRouter; no hub budget applies)'));
   const meter = mk('div', 'orMeter'); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', usd(m.spentUsd) + ' of ' + usd(m.capUsd) + ' used'); const fill = mk('span'); fill.style.width = (m.capUsd > 0 ? Math.min(100, Math.round(m.spentUsd / m.capUsd * 100)) : 100) + '%'; meter.append(fill); box.append(meter);
+  // which key pays: the team's or your own (T-379). It is the OpenRouter your AI source and your fallback use.
+  if (team.length || mine || (mykey && mykey.personalKeys)) {
+    const fb = m.fallback || {}, srcOr = provs.find((p) => p.id === me.provider), fbOr = fb.on ? provs.find((p) => p.id === fb.provider) : null, cur = srcOr || fbOr;
+    const which = mk('div', 'orWhich'); which.setAttribute('role', 'radiogroup'); which.setAttribute('aria-label', 'Which OpenRouter key pays for your models');
+    which.append(mk('h4', '', 'Which key pays'));
+    const opt = (label, hint, ok) => { const l = mk('label', 'chk'), r = mk('input'), sp = mk('span', '', label); r.type = 'radio'; r.name = 'orWhich'; r.disabled = !ok; sp.append(mk('small', '', hint)); l.append(r, sp); which.append(l); return r; };
+    const rt = opt('The team\'s key', team.length ? 'Counted against your monthly budget above.' : 'The team has no OpenRouter key yet.', team.length > 0);
+    const rm = opt('My own key', mine ? 'You pay OpenRouter directly; no hub budget applies.' : mykey && mykey.personalKeys ? 'Save your key below first.' : 'Personal keys are switched off on this hub.', !!mine);
+    (cur && cur.personal ? rm : rt).checked = true;
+    const note = mk('div', 'status'); which.append(note);
+    const pick = async (to) => {
+      if (!to) return;
+      try {
+        if (srcOr) { await json('/api/model', { method: 'POST', body: JSON.stringify({ provider: to.id, model: '' }) }); await refreshProviders(); }
+        if (fbOr) await json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: true, provider: to.id, pair: ((to.pairs || [])[0] || {}).id || '' }) });
+        note.textContent = (to.personal ? 'Your OpenRouter models now run on your own key.' : 'Your OpenRouter models now run on the team\'s key.') + (srcOr || fbOr ? '' : ' It applies once an OpenRouter model is your AI source or your fallback.');
+        if (srcOr || fbOr) { renderOrBudget(); renderSource(); }
+      } catch (e) { note.textContent = e.message; }
+    };
+    rt.onchange = () => pick(team[0]); rm.onchange = () => pick(mine);
+    box.append(which);
+  }
   if (provs.length) {
     const fb = m.fallback || {};
     const row = mk('div', 'row'); const lab = mk('label', 'chk'); const on = mk('input'); on.type = 'checkbox'; on.checked = fb.on === true; lab.append(on, ' Use OpenRouter when Claude is unavailable');
     const sel = mk('select'); sel.setAttribute('aria-label', 'OpenRouter model for the fallback');
-    for (const p of provs) for (const pr of p.pairs || []) { const o = mk('option', '', pr.label || pr.id); o.value = p.id + '|' + pr.id; sel.append(o); }
+    for (const p of provs) for (const pr of p.pairs || []) { const o = mk('option', '', (p.personal ? 'my key · ' : '') + (pr.label || pr.id)); o.value = p.id + '|' + pr.id; sel.append(o); }
     sel.value = (fb.provider || '') + '|' + (fb.pair || ''); if (sel.selectedIndex < 0) sel.selectedIndex = 0;
     const note = mk('span', 'status');
     const save = () => { const [provider, pair] = sel.value.split('|'); json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: on.checked, provider, pair }) }).then(() => { note.textContent = on.checked ? 'On: a Work session whose Claude host is offline or at its cap runs this model through Jcode PGM, and says so.' : 'Off.'; }).catch((e) => { note.textContent = e.message; on.checked = false; }); };
@@ -5670,11 +5744,10 @@ async function renderOrBudget() {
     row.append(lab, sel, note); box.append(row);
   }
   // my own OpenRouter key (T-372): kept on the hub, never shown back (only its last four characters); it appears as "my OpenRouter"
-  let mykey = null; try { mykey = await json('/api/openrouter/mykey'); } catch {}
   if (mykey) {
     const kb = mk('div', 'orMine'); kb.append(mk('h4', '', 'My OpenRouter key'));
     const kn = mk('span', 'status'); const say = (t) => { kn.textContent = t; };
-    if (!mykey.personalKeys && !mykey.hasKey) kb.append(mk('p', 'setHint', 'Personal OpenRouter keys are switched off on this hub: an admin can allow them.'));
+    if (!mykey.personalKeys && !mykey.hasKey) kb.append(mk('p', 'setHint', 'Personal OpenRouter keys are switched off on this hub: an admin can allow them (AI Admin → Global → Team OpenRouter).'));
     else {
       if (!mykey.personalKeys) kb.append(mk('p', 'setHint', 'An admin switched personal keys off: your stored key stays but is not used.'));
       kb.append(mk('p', 'setHint', 'Paste your own OpenRouter key to use "my OpenRouter" in the AI picker, the API (model my/<id>) and Work. You pay OpenRouter directly: no hub budget applies, and the hub never shows the key again.'));
@@ -5701,60 +5774,44 @@ async function renderOrBudget() {
       }
     }
     kb.append(kn);
-    if (me.admin) { // the admin's switch
-      const row = mk('div', 'row'); const lab = mk('label', 'chk'); const sw = mk('input'); sw.type = 'checkbox'; sw.checked = mykey.personalKeys; lab.append(sw, ' Allow personal OpenRouter keys on this hub (admin)');
-      sw.onchange = () => json('/api/openrouter/personal', { method: 'POST', body: JSON.stringify({ on: sw.checked }) }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => { say(e.message); sw.checked = !sw.checked; });
-      row.append(lab); kb.append(row);
-    }
     box.append(kb);
   }
-  if (me.admin) {
-    let all; try { all = await json('/api/openrouter/budget/all'); } catch { return; }
-    const det = mk('details'); det.append(mk('summary', '', 'Everyone\'s month (admin) · default cap ' + usd(all.defaultCapUsd)));
-    const t = mk('table'), hr = mk('tr'); for (const h of ['Person', 'Spent', 'Cap', '']) hr.append(mk('th', '', h)); t.append(hr);
-    for (const p of all.people || []) {
-      const tr = mk('tr'); const cap = mk('input'); cap.type = 'number'; cap.min = '0'; cap.step = '1'; cap.value = String(p.capUsd); cap.style.width = '6rem'; cap.setAttribute('aria-label', 'Monthly cap of ' + p.username);
-      const set = mk('button', 'ghost', 'Set'); set.type = 'button'; const def = mk('button', 'ghost', 'Default'); def.type = 'button'; def.hidden = !p.ownCap;
-      const send = (v) => json('/api/openrouter/budget/cap', { method: 'POST', body: JSON.stringify({ username: p.username, capUsd: v }) }).then(() => renderOrBudget()).catch((e) => { sysSettings(e.message); });
-      set.onclick = () => send(Number(cap.value)); def.onclick = () => send(null);
-      const c3 = mk('td'); c3.append(cap, set, def);
-      tr.append(mk('td', '', p.name || p.username), mk('td', '', usd(p.spentUsd) + (p.over ? ' · used up' : '')), c3, mk('td', '', p.calls + ' answers')); t.append(tr);
-    }
-    det.append(t); box.append(det);
-  }
 }
-// ── Settings → My AIs: providers this person hooked up (private or shared with the team) ──
+// an OpenRouter provider's editor (its allow-list of pairs, and its key replaced, never shown): the team's in AI Admin
+function orProviderEditor(p, done) {
+  const wrap = document.createElement('span');
+  const ed = document.createElement('button'); ed.type = 'button'; ed.className = 'ghost'; ed.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg> Edit pairs';
+  const panel = document.createElement('div'); panel.hidden = true; panel.style.flexBasis = '100%';
+  const pe2 = pairsEditor(p.pairs || []); const nk = document.createElement('input'); nk.type = 'password'; nk.autocomplete = 'off'; nk.placeholder = 'new OpenRouter key (leave empty to keep the current one)';
+  const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save'; const m2 = document.createElement('span'); m2.className = 'status';
+  save.onclick = () => { const body = { id: p.id, pairs: pe2.get() }; if (nk.value.trim()) body.apiKey = nk.value; json('/api/providers/update', { method: 'POST', body: JSON.stringify(body) }).then(() => { done(); renderApiAccess(); refreshProviders(); }).catch((e) => { m2.textContent = e.message; }); };
+  panel.append(pe2.el, nk, save, m2); ed.onclick = () => { panel.hidden = !panel.hidden; };
+  wrap.append(ed, panel); return wrap;
+}
+// ── AI Admin → My AIs: providers this person hooked up (private or shared with the team); OpenRouter ones are elsewhere:
+// the team's in Global → Team OpenRouter, your own key in My OpenRouter (T-379) ──
 async function renderProviders() {
   const box = $('provBox'); if (!box) return;
   try { providerList = (await json('/api/providers')).providers; } catch (e) { box.textContent = e.message; return; }
   box.textContent = '';
-  for (const p of providerList) {
+  for (const p of providerList.filter((x) => x.kind !== 'openrouter')) {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = p.label; it.append(b);
     const s = document.createElement('small'); s.textContent = KIND_NAMES[p.kind] + (p.id === 'host' ? ' · everyone' : ' · ' + (p.owner === me.username ? 'yours' : nickOf(p.owner) + "'s") + (p.shared ? ' · shared with the team' : ' · private')) + (p.models && p.models.length ? ' · ' + p.models.join(', ') : ''); it.append(s);
-    if (p.personal) s.textContent = 'Your own OpenRouter key · only you see it · no hub budget (set it in Settings → OpenRouter budget) · ' + (p.models || []).join(', ');
+    if (p.personal) s.textContent = 'Your own OpenRouter key · only you see it · no hub budget (set it in AI Admin → My OpenRouter) · ' + (p.models || []).join(', ');
     if (p.id !== 'host' && p.owner === me.username && !p.personal) {
       const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'ghost'; sh.textContent = p.shared ? 'Make private' : 'Share with team';
       sh.onclick = () => json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: p.id, shared: !p.shared }) }).then(() => { renderProviders(); showModels(me); }).catch((e) => sysSettings(e.message));
       const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
       rm.onclick = () => { if (rm.dataset.armed !== '1') { rm.dataset.armed = '1'; rm.textContent = 'Click again to remove'; return; } json('/api/providers/remove', { method: 'POST', body: JSON.stringify({ id: p.id }) }).then(() => { renderProviders(); renderApiAccess(); refreshProviders(); }).catch((e) => sysSettings(e.message)); };
       it.append(sh, rm);
-      if (p.kind === 'openrouter') { // the allow-list can be edited, and the key replaced (never shown)
-        const ed = document.createElement('button'); ed.type = 'button'; ed.className = 'ghost'; ed.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg> Edit pairs';
-        const panel = document.createElement('div'); panel.hidden = true; panel.style.flexBasis = '100%';
-        const pe2 = pairsEditor(p.pairs || []); const nk = document.createElement('input'); nk.type = 'password'; nk.autocomplete = 'off'; nk.placeholder = 'new OpenRouter key (leave empty to keep the current one)';
-        const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save'; const m2 = document.createElement('span'); m2.className = 'status';
-        save.onclick = () => { const body = { id: p.id, pairs: pe2.get() }; if (nk.value.trim()) body.apiKey = nk.value; json('/api/providers/update', { method: 'POST', body: JSON.stringify(body) }).then(() => { renderProviders(); renderApiAccess(); refreshProviders(); }).catch((e) => { m2.textContent = e.message; }); };
-        panel.append(pe2.el, nk, save, m2); ed.onclick = () => { panel.hidden = !panel.hidden; };
-        it.append(ed, panel);
-      }
     }
     box.append(it);
   }
   // add one
   const form = document.createElement('div'); form.className = 'row';
   const kind = document.createElement('select');
-  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)'], ['jcode', 'Jcode PGM on the host (jcodepgm binary; runs Work)'], ...(me.admin ? [['openrouter', 'OpenRouter (the team key + model / provider pairs; Work runs Jcode PGM on the server)']] : [])]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
+  for (const [v, l] of [['anthropic', 'Anthropic API key (sk-ant-…)'], ['claude-cli', 'Claude Code login on the host (CLAUDE_CONFIG_DIR folder)'], ['openai', 'OpenAI-compatible endpoint (base URL + key)'], ['jcode', 'Jcode PGM on the host (jcodepgm binary; runs Work)']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; kind.append(o); }
   const label = document.createElement('input'); label.placeholder = 'label, e.g. "Sponge\'s Claude"'; label.maxLength = 60;
   const secret = document.createElement('input'); secret.type = 'password'; secret.placeholder = 'API key'; secret.autocomplete = 'off';
   const where = document.createElement('input'); where.placeholder = 'base URL, e.g. https://api.example.com/v1';
@@ -5782,8 +5839,8 @@ async function renderProviders() {
   };
   form.append(kind, label, secret, where, jprov, models, pe.el, shared, add, msg); box.append(form);
 }
-function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
-// ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
+function sysSettings(t) { const el = $('aiAdmin').hidden ? $('setMsg') : $('aiMsg'); el.textContent = t; el.className = 'status'; } // AI Admin's own groups say it on their own line (T-379)
+// ── AI Admin → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
 const SRC_KINDS = { openrouter: 'OpenRouter (Jcode PGM on the server)', host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host, Jcode PGM' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
@@ -5809,7 +5866,7 @@ async function renderSource() {
   box.append(note);
   LOCALAI.line(box, d.providers, localAiOpts());
 }
-// ── Settings → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
+// ── AI Admin → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
 const hostAgo = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' days'; };
 function hostLiveText(h, now) {
   const st = h.status || {}, bits = [];
@@ -5887,7 +5944,7 @@ async function refreshHostLive() {
   }
 }
 setInterval(() => { const b = $('hostBox'); if (b && b.offsetParent !== null) refreshHostLive(); }, 10000);
-// ── Settings → My AI hosts: this person's own hosts (UUID + nickname), their providers and who may use them ──
+// ── AI Admin → My AI hosts: this person's own hosts (UUID + nickname), their providers and who may use them ──
 async function renderHosts() {
   const box = $('hostBox'); if (!box) return;
   let d; try { d = await json('/api/hosts'); } catch (e) { box.textContent = e.message; return; }
@@ -6038,7 +6095,7 @@ async function renderDownloads() {
   if (!d.items.length) note.textContent = 'Nothing is built on this hub yet (the admin runs sh native/build.sh).';
   const GROUPS = {
     native: ['VibeRoller: the native app', 'VibeRoller in its own window, plus what only an app on your computer can do: the Tools window (your projects folder, a real terminal, build & run, git with your Forgejo token, a local API proxy for tools on your computer) and the switch to share this computer\'s AI. Pre-built for Windows and Linux; runs from its folder or installs itself, and updates itself (signed releases).'],
-    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too) and puts vr-host on your PATH; run `vr-host` and everything is in there (setup, providers, settings, doctor, updates, start at boot). Updates itself from this hub. For your own host with its config inside: Settings → My AI hosts.'],
+    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too) and puts vr-host on your PATH; run `vr-host` and everything is in there (setup, providers, settings, doctor, updates, start at boot). Updates itself from this hub. For your own host with its config inside: AI Admin → My AI hosts.'],
   };
   for (const group of Object.keys(GROUPS)) {
     if (!d.items.some((i) => i.group === group)) continue;
@@ -6301,7 +6358,12 @@ function watchContext() {
   return `[Automatic context, not written by ${USER_NAME}: summaries of teammates' shared VibeRoller Work sessions ${USER_NAME} is watching. They work in their own worktrees; use this only to stay in sync, do not act on their behalf.]\n\n` + parts.join('\n\n');
 }
 
-// ── Admin: accounts + hub controls; the hub checks the admin flag on every call ──
+// ── Site admin (T-379; was Admin): accounts + roles + site-wide settings + hub controls; the hub checks the permission on
+// every call. siteCan(): what /api/check's site.perms say this person may do (ADMINISTRATOR is all); an older hub sends no
+// site: its admin flag stands for every permission. ──
+const SITE_ADMIN_PERMS = ['VIEW_ACCOUNTS', 'MANAGE_ACCOUNTS', 'MANAGE_ROLES', 'MANAGE_HUB', 'VIEW_HEALTH', 'VIEW_SECURITY_LOG'];
+function siteCan(perm) { const s = me && me.site; if (!s || !Array.isArray(s.perms)) return !!(me && me.admin); return s.perms.includes('ADMINISTRATOR') || s.perms.includes(perm); }
+function siteAdminAny() { return SITE_ADMIN_PERMS.some(siteCan); }
 const adminOut = (t) => { $('adminOut').textContent = t; };
 async function adminCall(path, body, done) {
   try { const d = await json('/api/admin/' + path, { method: 'POST', body: JSON.stringify(body || {}) }); if (done) done(d); loadAdmin(); }
@@ -6362,39 +6424,35 @@ async function loadAudit() {
 $('auditRefresh').onclick = loadAudit;
 $('auditAction').onkeydown = (e) => { if (e.key === 'Enter') loadAudit(); };
 async function loadAdmin() {
-  loadHealth();
-  loadAudit();
-  try {
+  const roles = await SITEADMIN.load(); // web/siteadmin.js (T-379): the roles, and which groups this person may see
+  if (siteCan('VIEW_HEALTH')) loadHealth(); else $('healthBox').hidden = true;
+  if (siteCan('VIEW_SECURITY_LOG')) loadAudit(); else $('auditBox').hidden = true;
+  if (!$('saAccounts').hidden) try {
     const { accounts } = await json('/api/admin/accounts');
     const rows = $('adminRows'); rows.innerHTML = '';
+    const manage = siteCan('MANAGE_ACCOUNTS');
     for (const a of accounts) {
       const tr = document.createElement('tr');
       const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
-      td(a.display + ' (' + a.username + ')' + (a.admin ? ' · admin' : ''));
+      td(a.display + ' (' + a.username + ')');
+      tr.append(SITEADMIN.roleCell(a, adminOut));
       td([a.locked ? (a.devices > 1 ? a.devices + ' devices' : 'device locked') + (a.allowNext ? ' (+1 allowed)' : '') : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key set' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
       td(modelName(a.model));
       const actions = td('');
-      actions.append(
+      if (manage) actions.append(
         confirmButton('New password', () => adminCall('password', { username: a.username }, (d) => adminOut(`New password for ${d.username}:\n${d.password}\n\nTheir other devices are signed out. Chat history stays readable in browsers that already hold the key.`))),
         ...(a.locked ? [confirmButton('Allow one more device', () => adminCall('allow-device', { username: a.username }, () => { adminOut(`${a.username}: their next sign-in from a new device (the app, another computer) joins their devices; the ones they have keep working.`); }))] : []),
         confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared (all their devices). Their next sign-in claims the account.`))),
         confirmButton('Sign out', () => adminCall('signout', { username: a.username }, () => adminOut(`${a.username}: signed out everywhere.`))),
-        ...(!a.admin ? [confirmButton('Make admin', () => adminCall('set-admin', { username: a.username, admin: true }, () => adminOut(`${a.username} is an admin now (Admin, accounts, products, restarts).`)))]
-          : a.username !== me.username ? [confirmButton('Remove admin', () => adminCall('set-admin', { username: a.username, admin: false }, () => adminOut(`${a.username} is no longer an admin.`)))] : []),
       );
-      for (const [key, label] of [['pc', 'PC files'], ['code', 'Run code']]) { // Unity's own-computer tools for this account
-        const lab = document.createElement('label'); lab.style.cssText = 'font-size:.75rem;margin:0 .3rem;white-space:nowrap';
-        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.style.width = 'auto'; cb.checked = key === 'pc' ? a.unityPc : a.unityCode;
-        cb.title = 'Unity may ' + (key === 'pc' ? 'read and change files in the folder this person opened on their own PC' : 'run code in the browser of this person');
-        cb.onchange = () => adminCall('unity-tools', { username: a.username, [key]: cb.checked }, (d) => adminOut(`${d.username}: Unity PC files ${d.pc ? 'on' : 'off'}, run code ${d.code ? 'on' : 'off'}.`));
-        lab.append(cb, ' Unity: ' + label); actions.append(lab);
-      }
-      if (a.busy) actions.append(confirmButton('Stop Claude', () => adminCall('stop', { username: a.username }, () => adminOut(`${a.username}: Claude stopped.`))));
-      if (a.username !== me.username) actions.append(confirmButton('Delete', () => adminCall('delete', { username: a.username }, () => adminOut(`${a.username}: deleted (files kept in bridge/profiles-deleted/).`))));
+      if (!roles) actions.append(...(!a.admin ? [confirmButton('Make admin', () => adminCall('set-admin', { username: a.username, admin: true }, () => adminOut(`${a.username} is an admin now (Admin, accounts, products, restarts).`)))] // an older hub: no roles, the admin flag
+        : a.username !== me.username ? [confirmButton('Remove admin', () => adminCall('set-admin', { username: a.username, admin: false }, () => adminOut(`${a.username} is no longer an admin.`)))] : []));
+      if (manage && a.busy) actions.append(confirmButton('Stop Claude', () => adminCall('stop', { username: a.username }, () => adminOut(`${a.username}: Claude stopped.`))));
+      if (manage && a.username !== me.username) actions.append(confirmButton('Delete', () => adminCall('delete', { username: a.username }, () => adminOut(`${a.username}: deleted (files kept in bridge/profiles-deleted/).`))));
       rows.append(tr);
     }
   } catch (err) { adminOut('Error: ' + err.message); }
-  loadGateway();
+  if (siteCan('MANAGE_HUB')) loadGateway(); else $('gwBox').hidden = true;
 }
 // PGM Gateway products (the Rust hub's; without it the box stays hidden)
 async function loadGateway() {
@@ -6418,8 +6476,9 @@ $('gwAdd').onclick = () => adminCall('gateway/products', { id: $('gwId').value.t
   adminOut(`${d.product.id}: added. Its secret is in ${d.product.secretFile} on this server (owner only); point the product's config there.${d.product.path ? ` It is served at ${d.product.path}.` : ''}`);
   $('gwId').value = ''; $('gwName').value = ''; $('gwPort').value = ''; $('gwAi').checked = false;
 });
-$('createUser').onclick = () => adminCall('create', { username: $('newUser').value.trim().toLowerCase(), display: $('newDisplay').value.trim(), admin: $('newAdmin').checked }, (d) => {
+$('createUser').onclick = () => adminCall('create', { username: $('newUser').value.trim().toLowerCase(), display: $('newDisplay').value.trim(), admin: !SITEADMIN.has() && $('newAdmin').checked }, async (d) => {
   adminOut(`Account created.\nUsername: ${d.username}\nPassword: ${d.password}\nAddress: ${location.origin}${location.pathname}`);
+  await SITEADMIN.afterCreate(d.username, adminOut);
   $('newUser').value = ''; $('newDisplay').value = ''; $('newAdmin').checked = false;
 });
 $('adminRefresh').onclick = loadAdmin;
@@ -6431,7 +6490,7 @@ $('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminC
 // (api() signs out then); any other failure keeps it and shows the sign-in page with what went wrong.
 // Never a black page: when no screen at all is showing and something failed (or opening takes over 20 s), the sign-in
 // form comes back and says what went wrong (the session is kept; it is also in the browser console).
-const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows'];
+const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'aiAdmin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows'];
 function nothingShown() { return SCREENS.every((id) => !$(id) || $(id).hidden); }
 function bootTrouble(msg) {
   if (!nothingShown()) return;
@@ -6463,6 +6522,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 <script src="guild-settings.js"></script>
 <!-- profiles: Settings tabs (Profile / App settings / Connections), the profile editor and profile cards: web/profile.js -->
 <script src="profile.js"></script>
+<!-- Site admin's roles and site-wide settings, and AI Admin (T-379) -->
+<script src="siteadmin.js"></script>
+<script src="aiadmin.js"></script>
 <script src="notes.js"></script>
 <script src="library.js"></script>
 <!-- the visual editor foundation (T-205): the core logic, the SVG view, the Hyper Workflows plugin, a stub page-elements plugin, and the Workflows screen -->

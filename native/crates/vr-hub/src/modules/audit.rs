@@ -50,6 +50,12 @@ fn what(r: &Req) -> Option<(&'static str, String, Value)> {
         "/api/admin/unlock" if post => ("device.reset", user(), json!({})),
         "/api/admin/allow-device" if post => ("device.allow", user(), json!({})),
         "/api/admin/restart" if post => ("hub.restart", String::new(), json!({})),
+        // T-379: site roles, the site-wide settings, the default AI
+        "/api/admin/roles/assign" if post => ("roles.assign", user(), json!({ "role": sv(&b, "role") })),
+        "/api/admin/roles/save" if post => ("roles.save", { let i = sv(&b, "id"); if i.is_empty() { sv(&b, "name") } else { i } }, json!({ "name": sv(&b, "name"), "position": b["position"], "perms": b["perms"] })),
+        "/api/admin/roles/delete" if post => ("roles.delete", sv(&b, "id"), json!({})),
+        "/api/admin/site-settings" if post => ("site.settings", String::new(), json!({ "motd": b["motd"], "defaultTheme": b["defaultTheme"], "newAccountRole": b["newAccountRole"] })),
+        "/api/admin/ai/default" if post => ("ai.default", sv(&b, "defaultProvider"), json!({})),
         "/api/admin/unity-tools" if post => ("delegation.unityTools", user(), json!({ "pc": b["pc"], "code": b["code"] })),
         "/api/admin/gateway/products" if post => ("gateway.product", sv(&b, "id"), json!({ "name": sv(&b, "name"), "ai": b["ai"] == json!(true) })),
         "/api/admin/gateway/products/remove" if post => ("gateway.productRemove", sv(&b, "id"), json!({})),
@@ -94,10 +100,10 @@ pub fn note(hub: &Hub, r: &Req, actor: &str, status: u16) {
     }
 }
 
-/// GET /api/admin/audit?since=<seq>&limit=<n>&action=<family>: admins only.
+/// GET /api/admin/audit?since=<seq>&limit=<n>&action=<family>: the View security log permission (T-379).
 pub fn route(hub: &Hub, r: &Req, user: Option<&str>) -> Routed {
     let Some(u) = user else { return answer(401, json!({ "error": "Not signed in." })) };
-    if !hub.mods.auth.account(u).map(|a| a.admin).unwrap_or(false) { return answer(403, json!({ "error": "Admins only." })); }
+    if !hub.mods.auth.may(u, pgm_identity_internal::siteroles::VIEW_SECURITY_LOG) { return answer(403, json!({ "error": pgm_identity_internal::siteroles::needs(pgm_identity_internal::siteroles::VIEW_SECURITY_LOG) })); }
     let Some(l) = audit::global() else { return answer(503, json!({ "error": "The security log is not open." })) };
     let since = r.param("since").and_then(|x| x.parse().ok()).unwrap_or(0u64);
     let limit = r.param("limit").and_then(|x| x.parse().ok()).unwrap_or(200usize).clamp(1, 1000);

@@ -159,7 +159,7 @@ impl HubLink {
     /// Says hello; on success the session key is set and checked against the hub's key id.
     pub async fn hello(&mut self, hello: &Hello) -> Result<HelloAnswer> {
         let r = self.post("/node/hello").json(hello).timeout(Duration::from_secs(20)).send().await?;
-        if r.status().as_u16() == 401 { return Err(Error::status(401, "the hub does not know this host (id / token): check ai-node.json, or make the host again in Settings → My AI hosts")); }
+        if r.status().as_u16() == 401 { return Err(Error::status(401, "the hub does not know this host (id / token): check ai-node.json, or make the host again in AI Admin → My AI hosts")); }
         if !r.status().is_success() { return Err(Error::msg(format!("hello answered {}", r.status().as_u16()))); }
         let a: HelloAnswer = r.json().await?;
         let key = HostKey::derive(&self.token, &hello.nonce, &a.server_nonce)?;

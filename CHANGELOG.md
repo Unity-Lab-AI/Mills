@@ -7,6 +7,40 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.70.0 — 2026-11-16
+
+MINOR: **Site admin with site roles, AI Admin, and a calmer menu** (T-379).
+
+- **Site roles** use the chat servers' ladder and model:
+  - The ladder: Member 10, Moderator 20, Super Moderator 30, Admin 40, Super Admin 50 and Co-owner 60, plus custom roles in between. Each role is a set of site permissions:
+    - **Accounts:** View accounts, Manage accounts, Manage roles.
+    - **Hub:** Manage hub, View health, View security log.
+    - **AI:** Manage AI, View AI hosts.
+    - **Advanced:** Administrator, which grants everything.
+  - The model lives in the library pgm-identity-internal (`siteroles.rs`); the routes are in vr-hub (`siteadmin.rs`).
+  - **Existing admins keep full permissions**: they are Super Admin. The hub's own account is Co-owner and ranks above every role.
+  - **Rank rules:** you change only people and roles strictly below your own, give only permissions you hold, and never change your own role.
+  - **The admin flag follows the role** (Super Admin, Co-owner, or Admin and up), so the JavaScript hub and older code keep working.
+  - **Every admin route checks its permission.** A refusal says which permission is missing.
+  - **Storage:** an account's role is stored add-only as `siteRole` in its config; custom roles are in `site-roles.json`. Both travel over the dev↔live data bridge.
+- **Site admin** (was Admin) has five groups:
+  - Accounts, each with a role picker.
+  - Roles and permissions: the ladder, each role's permissions, and making, changing and deleting custom roles.
+  - Site-wide settings: a message on everyone's menu, the default theme for people who never picked one, and the role new accounts get.
+  - The hub: restart and clear chat.
+  - Health, the security log and PGM Gateway, each shown to the roles allowed it.
+- **AI Admin** is open to everyone:
+  - **Global** (top, for Manage AI): Default AI for everyone, which is now changeable without a restart; Team OpenRouter (the team key and models, the personal-keys switch, everyone's month and caps); and Unity's own-computer tools per person.
+  - **AI hosts on this hub** is also in Global, for Manage AI or View AI hosts.
+  - **Yours** (under a line, moved out of Settings): AI source, My AIs, My OpenRouter, My AI hosts. My OpenRouter now chooses **which key pays**, the team's or your own.
+- **The menu:** Settings and Downloads (renamed from Download) are small buttons under My status / Team now, with no description lines. Productivity shows two tiles to a row. Administration holds Site admin and AI Admin.
+- **Settings** keeps five tabs: Profile, App (look, Desktop Unity), Work (Chat and Work, My projects, When the AI asks), Sound & voice, and Connections.
+- **Texts in the hub, the AI host and the desktop app** now point to AI Admin.
+- **Versions:** web/index.html 1.54.0, web/polish.css 1.1.0, web/localai.js 1.0.1, new web/siteadmin.js and web/aiadmin.js 1.0.0, the native programs with the project.
+- **Checks:**
+  - New R637 (site roles), R638 (custom roles), R639 (site settings; a theme id with an underscore was refused before this fix), R640 (AI admin) and R641 (the page: menu, who sees what).
+  - R142, R546, R634 and R635 follow the new layout.
+
 ## 5.69.0 — 2026-11-16
 
 MINOR: **Settings in five tabs, Downloads in its own window, Desktop Unity off by default** (T-378).

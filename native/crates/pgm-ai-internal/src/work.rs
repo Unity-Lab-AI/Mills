@@ -140,6 +140,8 @@ pub struct Work {
     pub busy_changed: Notify,
     /// agent to agent (T-296): threads, waits, the delivery pump (crate::agents)
     pub agents: crate::agents::Agents,
+    /// the default AI for everyone (config defaultProvider: "" or "host:<owner>"), changed by AI Admin without a restart (T-379)
+    default_pick: Mutex<String>,
 }
 use pgm_core_internal::json::{read_json, s, write_json};
 /// The freshness note's key: the person's worktree of a project, or one of their sessions'.
@@ -151,7 +153,7 @@ fn iso() -> String { pgm_core_internal::time::iso_now() }
 
 impl Work {
     pub fn new(root: &Path, cfg: &Config) -> Work {
-        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: cfg.get("workSecret").and_then(Value::as_str).filter(|s| s.len() >= 24).map(String::from).unwrap_or_else(|| pgm_core_internal::crypto::random_hex(24)), legacy_noted: Mutex::default(), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new(), agents: crate::agents::Agents::default() }
+        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: cfg.get("workSecret").and_then(Value::as_str).filter(|s| s.len() >= 24).map(String::from).unwrap_or_else(|| pgm_core_internal::crypto::random_hex(24)), legacy_noted: Mutex::default(), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new(), agents: crate::agents::Agents::default(), default_pick: Mutex::new(cfg.get("defaultProvider").and_then(Value::as_str).unwrap_or("").to_string()) }
     }
     // ---------- each person's Work state ----------
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
@@ -326,11 +328,12 @@ impl Work {
     fn hub_claude(&self) -> bool { self.cfg.get("hubClaude") != Some(&json!(false)) }
     fn host_entry(&self) -> Value { json!({ "id": "host", "kind": "host", "label": "Host Claude (default)", "owner": "", "shared": true, "models": self.model_ids() }) }
     /// bridge/providers.json; a custom endpoint (openai) or a Claude config folder on this machine (claude-cli) counts
-    /// only while its owner is an admin (only admins with an AI host of their own may make one: openai.rs)
+    /// only while its owner is an admin (only admins with an AI host of their own may make one: openai.rs); an OpenRouter
+    /// one while its owner holds the Manage AI permission (T-379)
     fn own_providers(&self) -> Vec<Value> {
         let def = self.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
         read_json(&self.root.join("providers.json")).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default().into_iter()
-            .filter(|p| !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, p["owner"].as_str().unwrap_or(""))).collect()
+            .filter(|p| { let o = p["owner"].as_str().unwrap_or(""); if p["kind"] == json!(crate::openrouter::KIND) { pgm_identity_internal::siteroles::has_perm(&self.root, &def, o, pgm_identity_internal::siteroles::MANAGE_AI) } else { !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, o) } }).collect()
     }
     /// The team's OpenRouter provider (the first shared one with pairs): the pairs a person's own key uses unless they list their own (T-372).
     pub fn team_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !crate::openrouter::pairs_of(p).is_empty()) }
@@ -351,12 +354,16 @@ impl Work {
     pub fn default_for(&self, ai: &crate::ai_hosts::AiHosts, user: &str) -> Option<Value> {
         let claudes: Vec<Value> = ai.providers_for(user).into_iter().filter(|p| p["kind"] == json!("host-claude")).collect();
         let usable = |p: &&Value| p["online"] == json!(true) && p["capped"].as_str().unwrap_or("").is_empty();
-        if let Some(w) = self.cfg.get("defaultProvider").and_then(Value::as_str).and_then(|d| d.strip_prefix("host:")) {
+        if let Some(w) = self.default_setting().strip_prefix("host:") {
             if let Some(p) = claudes.iter().filter(|x| x["owner"] == json!(w)).find(usable).or_else(|| claudes.iter().find(|x| x["owner"] == json!(w))) { return Some(p.clone()); }
         }
         if self.hub_claude() { return Some(self.host_entry()); }
         claudes.iter().find(usable).or(claudes.first()).cloned()
     }
+    /// The default AI as set ("" = the built-in order, "host:<owner>").
+    pub fn default_setting(&self) -> String { self.default_pick.lock().unwrap_or_else(|e| e.into_inner()).clone() }
+    /// AI Admin changed it (already saved in config.local.json): it counts from the next call on, no restart.
+    pub fn set_default_setting(&self, v: &str) { *self.default_pick.lock().unwrap_or_else(|e| e.into_inner()) = v.to_string(); }
     pub fn effective(&self, ai: &crate::ai_hosts::AiHosts, user: &str, chosen: &str) -> Option<Value> { (if chosen.is_empty() { None } else { self.provider_get(ai, chosen, user) }).or_else(|| self.default_for(ai, user)) }
     /// What a run's `claude` gets for that provider (None: not Claude Code).
     pub(crate) fn claude_env(p: &Value) -> Option<Vec<(String, String)>> {

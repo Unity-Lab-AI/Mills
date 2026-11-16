@@ -176,7 +176,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, rest: &str) -> Routed {
 pub fn admin(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
     let p = r.path.as_str();
     if p != "/api/admin/gateway/products" && p != "/api/admin/gateway/products/remove" { return None; }
-    if !a.admin { return Some(answer(403, json!({ "error": "Admins only." }))); }
+    if let Some(x) = super::siteadmin::need(hub, &a.username, pgm_identity_internal::siteroles::MANAGE_HUB) { return Some(x); } // T-379
     // the dev hub (T-327): products are registered on the live hub, which they talk to; dev only lists them
     if r.method == hyper::Method::POST && !hub.allows("gateway") { return Some(answer(409, json!({ "error": "This is the dev hub: register products on the live hub (they talk to live). Config devAllow \"gateway\" turns it on here.", "instance": "dev" }))); }
     let g = &hub.mods.gateway;
