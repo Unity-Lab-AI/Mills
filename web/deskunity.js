@@ -9,7 +9,7 @@
   const SPEED = 140, ONCE_MS = 4200, WANDER_MS = 45000;
   let layer = null, her = null, x = 0, y = 0, facing = -1, clip = '', moving = null, until = 0, lastOrder = Date.now(), sitting = false, last = 0, running = false;
   const W = () => (layer ? layer.clientWidth : innerWidth), H = () => (layer ? layer.clientHeight : innerHeight);
-  const isOn = () => localStorage.getItem(KEY) !== 'false';
+  const isOn = () => localStorage.getItem(KEY) === 'true'; // T-378: off until it is turned on in Settings → App → Desktop Unity
   const PLACE = 'vrDeskUnityPlace';
   const keep = () => { try { localStorage.setItem(PLACE, JSON.stringify({ fx: x / Math.max(1, W()), fy: y / Math.max(1, H()), facing })); } catch {} };
   const BUILTIN = { ...CLIPS };
@@ -105,7 +105,7 @@
   // an order: {action, amount?, look?} (the same orders the desktop app takes)
   function order(o) {
     let a = String((o && o.action) || '').toLowerCase(); const n = Number(o && o.amount) || 0;
-    if (a === 'show') { setOn(true); return true; }
+    if (a === 'show') { if (!isOn()) return false; setOn(true); return true; } // an order never turns her on: only Settings does
     if (a === 'hide') { setOn(false); return true; }
     if (a === 'do') { a = quickMove(o.look) || ''; if (!a) return false; if (a === 'hide') { setOn(false); return true; } }
     // a look from the chat: when this person's desktop app is open, it films it on that PC, so the website does not

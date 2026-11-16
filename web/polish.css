@@ -143,8 +143,7 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .setSave { background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top-color: var(--hairline); }
 #setFind { background-color: var(--surface-sunk); }
 /* the cards the page builds itself (Downloads) look like the groups around them */
-#settings .setSection { padding: .85rem .95rem .95rem; }
-#dlBody { display: flex; flex-direction: column; gap: .9rem; } #dlBody .setSection + .setSection { margin-top: 0; }
+#settings .setSection, #downloads .setSection { padding: .85rem .95rem .95rem; }#dlBody { display: flex; flex-direction: column; gap: .9rem; } #dlBody .setSection + .setSection { margin-top: 0; }
 #dlBody .setSection > b:first-child { font-size: .95rem; padding-bottom: .5rem; border-bottom: 1px solid var(--hairline); }
 .swatches button { border-radius: 50%; box-shadow: var(--sh-1); }
 .swatches button.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }

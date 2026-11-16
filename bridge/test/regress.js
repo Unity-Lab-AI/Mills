@@ -3336,15 +3336,15 @@ async function run() {
     const pubSigned = (await fetch(H + '/api/pub/versions', { headers: { Authorization: 'Bearer ' + U } })).status;
     const page = await (await fetch(H + '/')).text();
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
-    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download tile sits next to Settings in the menu\'s Administration section and above Settings in the app\'s user panel',
+    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download tile sits next to Settings in the menu\'s Administration section and above Settings in the app\'s user panel, and every Download button opens the Downloads window (no longer a Settings tab)',
       anon.status === 401 && anonNative.status === 401 && pubGone.every((s) => s === 410) && pubSigned === 410
       && (RUST_HUB ? dl.status === 200 && Array.isArray(items) && items.every((it) => it.native === true && /^(app|host)-/.test(it.id)) && unknown.status === 404 : dl.status === 503 && unknown.status === 503)
       && !fs.existsSync(path.join(BRIDGE, 'downloads.js')) && !fs.existsSync(path.join(BRIDGE, 'desktop'))
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
       && /<section class="menuSec" data-menusec="admin"[\s\S]*?id="goSettings" class="tile" data-settings[\s\S]*?id="goDownloads" class="tile" data-downloads[\s\S]*?<\/section>/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
-      // Work's bar: Download right above Settings; Settings has its own Downloads tab, which every Download button opens
+      // Work's bar: Download right above Settings; Downloads is a window of its own (T-378), which every Download button opens
       && (() => { const rail = (html.match(/<nav id="rail">[\s\S]*?<\/nav>/) || [''])[0]; return rail.indexOf('data-downloads') > -1 && rail.indexOf('data-downloads') < rail.indexOf('data-settings'); })()
-      && /data-settab="downloads"/.test(html) && /<div data-setpane="downloads" hidden>[\s\S]*id="dlBody"[\s\S]*id="appBox"/.test(html) && /PROFILE\.tab\('downloads'\)/.test(html) && !/id="downloads" class="modal"/.test(html),
+      && !/data-settab="downloads"|data-setpane="downloads"|PROFILE\.tab\('downloads'\)/.test(html) && /<div id="downloads" class="modal" hidden>[\s\S]*?id="dlBody"[\s\S]*?id="appBox"/.test(html) && /function openDownloads\(\) \{\s*\$\('downloads'\)\.hidden = false;/.test(html),
       `anon ${anon.status} native ${anonNative.status} pub ${pubGone.join(',')} signed ${pubSigned}; list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')}; old package ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
   }
 
@@ -4816,6 +4816,56 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R635 (T-378): Settings in five tabs about your own account; Downloads a window of its own with Jcode PGM; Desktop Unity off by default
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), pjs = fs.readFileSync(path.join(MILLS, 'web', 'profile.js'), 'utf8');
+    const duJs = fs.readFileSync(path.join(MILLS, 'web', 'deskunity.js'), 'utf8'), seen = {};
+    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="downloads" class="modal" hidden>/) || [])[1] || '';
+    seen.tabs = [...box.matchAll(/data-settab="(\w+)"><svg class="ic lead"><use href="#i-[\w-]+"\/><\/svg>([^<]+)</g)].map((m) => m[1] + '=' + m[2]).join(' | ');
+    seen.panes = [...box.matchAll(/<div data-setpane="(\w+)"( data-saves)?/g)].map((m) => m[1] + (m[2] ? '+save' : '')).join(',');
+    // the Save bar is the box's own footer (outside every pane), shown only while App or Sound & voice is on screen
+    seen.saveOutside = /<\/div>\n    <!-- one Save for App and Sound & voice[^\n]*-->\n    <div class="setSave"><button type="button" id="saveSettings">/.test(box);
+    const sb = (pjs.match(/\n  (function saveBar\(\) \{[\s\S]*?\n  \})/) || [])[1] || '';
+    const bar = (panes) => { const b = { hidden: null }; try { require('vm').runInNewContext(sb + '\nsaveBar();', { document: { querySelector: () => b, querySelectorAll: () => panes } }); } catch (e) { seen.err = e.message; } return b.hidden; };
+    seen.saveShown = [bar([{ hidden: false }, { hidden: true }]), bar([{ hidden: true }, { hidden: true }]), bar([{ hidden: true }, { hidden: false }])].join(',');
+    seen.saveCalled = (pjs.match(/saveBar\(\)/g) || []).length >= 4;
+    // Downloads: its own window; Jcode PGM gets its own section, newest first with this platform's files up front
+    const dl = (page.match(/<div id="downloads" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
+    seen.dlWindow = /id="closeDownloads"/.test(dl) && /id="dlBody"/.test(dl) && /id="appBox"/.test(dl) && /id="dlVersion"/.test(dl) && !/data-settab="downloads"/.test(page);
+    const planSrc = (page.match(/\nconst JCODE_ABOUT = \{[\s\S]*?\n\};\nfunction dlReleasePlan\([\s\S]*?\n\}\n/) || [''])[0];
+    let plan = null;
+    const cat = { products: [
+      { product: 'pgm-shadowchat', label: 'ShaDow Chat', releases: [{ version: 'v1.0.0', assets: [] }] },
+      { product: 'jcode-pgm', label: 'Jcode PGM', releases: [
+        { version: 'v0.99.10-pgm.1', assets: [{ name: 'jcodepgm-linux-x86_64.tar.gz', platform: 'Linux' }, { name: 'jcodepgm-windows-x86_64.zip', platform: 'Windows' }] },
+        { version: 'v0.99.9-pgm.1', assets: [{ name: 'jcodepgm-linux-x86_64.tar.gz', platform: 'Linux' }] }] },
+      { product: 'jcode-pgm-desktop', label: 'Jcode PGM Desktop', releases: [], error: 'Forgejo did not answer.' }] };
+    try { const ctx = {}; require('vm').runInNewContext(planSrc + '\nthis.P = dlReleasePlan;', ctx); plan = ctx.P(cat, 'Windows'); } catch (e) { seen.planErr = e.message; }
+    if (plan) {
+      const j = plan.jcode[0] || {}, d = plan.jcode[1] || {};
+      seen.jcode = plan.jcode.map((x) => x.label).join(',') + ' | others ' + plan.others.map((x) => x.label).join(',');
+      seen.newest = (j.latest || {}).version + ' mine ' + (j.mine || []).map((a) => a.name).join(',') + ' other ' + (j.others || []).map((a) => a.name).join(',') + ' older ' + (j.older || []).map((v) => v.version).join(',') + ' about ' + !!j.about;
+      seen.unavailable = d.latest === null && d.error === 'Forgejo did not answer.';
+    }
+    // Desktop Unity on the website: off until Settings turns her on; an order ("show", a walk) never turns her on
+    const store = {}, ls = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+    const win = {};
+    try { require('vm').runInNewContext(duJs, { window: win, localStorage: ls, addEventListener: () => {}, innerWidth: 1000, innerHeight: 800, document: {}, Date, Math, JSON, Number, String, RegExp, URL, setInterval, clearInterval, setTimeout }); } catch (e) { seen.duErr = e.message; }
+    const U = win.webUnity;
+    if (U) {
+      seen.offByDefault = U.isOn() === false;
+      seen.orderShow = U.order({ action: 'show' }) === false && U.order({ action: 'walk_left' }) === false && U.isOn() === false && !('vrDeskUnityOn' in store);
+      store.vrDeskUnityOn = 'true'; seen.onWhenTurnedOn = U.isOn() === true;
+      U.setOn(false); seen.offAgain = U.isOn() === false && store.vrDeskUnityOn === 'false';
+    }
+    seen.hint = /<h3>Desktop Unity<\/h3><p class="setHint">[^<]*She is off until you turn her on here\./.test(page);
+    check('R635', 'Settings is five tabs about your own account: Profile, App (look, Chat and Work, projects, when the AI asks, Desktop Unity), Sound & voice (sounds, read aloud, calls), AI (AI source, my AIs, OpenRouter budget, my AI hosts) and Connections (API access, signed-in devices, my machines, Forgejo); one Save bar under the box shows only while App or Sound & voice is on screen; Downloads is a window of its own where Jcode PGM and Jcode PGM Desktop have their own section (the newest version with this platform\'s files first, other platforms and older versions below; one that cannot be listed says so) and the other products stay in a list; Desktop Unity is off until Settings turns her on, and no order (show, a walk) turns her on',
+      seen.tabs === 'profile=Profile | app=App | sound=Sound &amp; voice | ai=AI | connections=Connections' && seen.panes === 'profile,app+save,sound+save,ai,connections'
+      && seen.saveOutside && seen.saveShown === 'false,true,false' && seen.saveCalled && !seen.err && seen.dlWindow
+      && seen.jcode === 'Jcode PGM,Jcode PGM Desktop | others ShaDow Chat'
+      && seen.newest === 'v0.99.10-pgm.1 mine jcodepgm-windows-x86_64.zip other jcodepgm-linux-x86_64.tar.gz older v0.99.9-pgm.1 about true' && seen.unavailable
+      && seen.offByDefault && seen.orderShow && seen.onWhenTurnedOn && seen.offAgain && seen.hint && !seen.duErr && !seen.planErr,
+      JSON.stringify(seen));
+  }
   { // R634 (T-377): the main menu in four sections; Settings and Download inside one; "Also here" as buttons
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8'), seen = {};
     const menu = (page.match(/<div id="menu" hidden>[\s\S]*?\n<\/div>\n/) || [''])[0];
@@ -7309,6 +7359,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /capture::enable_in_webview\(&main_win\)/.test(mainSrc) && /set_enable_media_stream\(true\)/.test(capSrc) && /capture::capability\(\)/.test(mainSrc)
         && /screenShare/.test(capSrc) && /is_hub_origin\(page, hub\)/.test(capSrc) && ut.status === 0 && /3 passed; 0 failed|test result: ok\. 3 passed/.test(ut.stdout || ''),
         `cargo test ${ut.status} "${String(ut.stdout || ut.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
+      // R636 (T-378): Desktop Unity in the desktop app is off until Settings turns her on (its unit test, built like R290's)
+      const L636 = 'Desktop Unity in the desktop app is off until she is turned on: no saved choice, or anything but "true", is off';
+      const ut636 = sm.status === 77 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${home290}/.rustup" CARGO_HOME="${home290}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home290}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; cargo test --release -q -p vr-desktop companion_default 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+      if (sm.status === 77) skip('R636', L636, sm.stdout.trim());
+      else check('R636', L636, ut636.status === 0 && /test result: ok\. 1 passed/.test(ut636.stdout || ''),
+        `cargo test ${ut636.status} "${String(ut636.stdout || ut636.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
     }
   }
   // R321, R322, R340 (T-307, linked machines 1/8): the library core pgm-net-internal::machine (scope model + evaluator,
@@ -8978,19 +9034,21 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   async function r546Check() {
     const seen = {};
     const page = await (await fetch(H + '/')).text(), pjs = await fetch(H + '/profile.js'), src = pjs.status === 200 ? await pjs.text() : '';
-    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
+    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="downloads" class="modal" hidden>/) || [])[1] || '';
+    const dlBox = (page.match(/<div id="downloads" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
     const ids = ['setNick', 'setColors', 'setSound', 'volMessage', 'volMention', 'volReply', 'volCall', 'volBoard', 'volAsk', 'soundSet', 'setAskAuto', 'setAskMin', 'setAskActivity', 'setAskTts',
       'setToasts', 'setReopen', 'setEnhance', 'setAutoScroll', 'setTtsAll', 'setTtsUnity', 'setTts', 'ttsVolume', 'ttsTest', 'ttsRate', 'ttsRateVal', 'ttsVoice', 'ttsScope', 'audNoise', 'audEcho', 'audAgc',
       'callVolume', 'callQuality', 'clipVolume', 'clipAuto', 'ttsStop', 'setAutosave', 'setTheme', 'saveSettings', 'setMsg', 'aboutVibeRoller', 'aboutModules', 'apiBox', 'devBox', 'machBox', 'srcBox',
-      'hostBox', 'provBox', 'fjBox', 'projBox', 'dlVersion', 'dlBody', 'appBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
-    seen.missing = ids.filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !box.includes('id="' + id + '"'));
+      'hostBox', 'provBox', 'fjBox', 'projBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
+    seen.missing = ids.filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !box.includes('id="' + id + '"'))
+      .concat(['dlVersion', 'dlBody', 'appBox', 'closeDownloads'].filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !dlBox.includes('id="' + id + '"')));
     const groups = [...box.matchAll(/<section class="setGroup"[^>]*>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
     seen.groups = groups.length; seen.headless = groups.filter((g) => !/^\s*<h3>[^<]+<\/h3><p class="setHint">[\s\S]+?<\/p>/.test(g)).length;
     const pane = (n) => (box.match(new RegExp('<div data-setpane="' + n + '"[^>]*>([\\s\\S]*?)\\n     </div>')) || [])[1] || '';
     const strip = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
     const served = (n) => [...pane(n).matchAll(/<section class="setGroup"[^>]*>\s*<h3>([^<]+)<\/h3><p class="setHint">([\s\S]*?)<\/p>([\s\S]*?)<\/section>/g)].map((m) => ({ title: m[1], text: m[1] + ' ' + strip(m[2]), rows: [strip(m[3])] }));
-    const app = served('app'), conn = served('connections');
-    seen.appGroups = app.map((g) => g.title).join(','); seen.connGroups = conn.length;
+    const app = served('app'), sound = served('sound'), ai = served('ai'), conn = served('connections');
+    seen.appGroups = app.map((g) => g.title).join(','); seen.soundGroups = sound.map((g) => g.title).join(','); seen.aiGroups = ai.map((g) => g.title).join(','); seen.connGroups = conn.map((g) => g.title).join(',');
     // the page's own Save app settings body, on a stand-in form
     const bodySrc = (page.match(/\$\('saveSettings'\)\.onclick = async \(\) => \{\s*try \{\s*const d = await json\('\/api\/prefs', \{ method: 'POST', body: JSON\.stringify\((\{[\s\S]*?\n    \})\) \}\);/) || [])[1] || '';
     seen.saveIds = [...bodySrc.matchAll(/\$\('(\w+)'\)/g)].map((m) => m[1]).filter((id) => !box.includes('id="' + id + '"'));
@@ -9017,7 +9075,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const shape = (r) => r.groups.map((g) => (g.show ? g.rows.map((x) => (x ? 1 : 0)).join('') : '-')).join(' ') + (r.any ? '' : ' none');
       seen.empty = shape(M('', G)); seen.echo = shape(M('  ECHO ', G)); seen.voice = shape(M('voice', G)); seen.style = shape(M('style sound', G)); seen.nothing = shape(M('zzz', G));
       const titles = (q, gs) => { const r = M(q, gs); return gs.filter((g, i) => r.groups[i].show).map((g) => g.title).join(','); };
-      seen.realEcho = titles('echo', app); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn);
+      seen.realEcho = titles('echo', sound); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn); seen.realBudget = titles('openrouter budget', ai);
     }
     seen.wired = /id="setFind" type="search"/.test(box) && /id="setNone"/.test(box) && /findBox\.addEventListener\('input', \(\) => find\(findBox\.value\)\)/.test(src) && /settingsMatch\(q, groups\.map/.test(src);
     // every screen: a title and ← Menu, which goes to the menu; Settings: Close, beside it and Escape are one way out
@@ -9025,10 +9083,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
     seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
-    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance,Desktop Unity' && seen.connGroups === 9
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Appearance,Chat and Work,My projects,When the AI asks,Desktop Unity' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
+      && seen.aiGroups === 'AI source,My AIs,OpenRouter budget,My AI hosts' && seen.connGroups === 'API access,Signed-in devices,My machines,My Forgejo'
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
       && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
-      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.wired
+      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.realBudget === 'OpenRouter budget' && seen.wired
       && seen.screens >= 9 &&!seen.noWayBack.length && seen.back && seen.close;
     check('R546', 'Settings keeps every setting it had (each control once, with its id, inside a group that has a heading and a one-line explanation) and the page\'s own Save app settings still saves through /api/prefs, where the hub keeps what it sent; Find a setting shows only the groups and rows that have every word typed (any case; a heading match shows the whole group; nothing matching says so); every screen has a title and a way back to the menu, and Settings closes the same way from Close, a click beside it and Escape',
       ok, JSON.stringify(seen));
