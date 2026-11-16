@@ -4920,6 +4920,33 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R642 (T-380): Settings is a page from the main menu and the modal from everywhere else, one Settings moved between the two
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8'), seen = {};
+    // settingsAs, run on stand-ins: it moves the one #settings into the page's body or back beside the modals, and marks it
+    const src = (page.match(/\nfunction settingsAs\(page\) \{[\s\S]*?\n\}\n/) || [''])[0];
+    const node = (id) => ({ id, parent: null, kids: [], cls: new Set(), classList: null });
+    const els = { settings: node('settings'), settingsPageBody: node('settingsPageBody'), downloads: node('downloads'), body: node('body') };
+    const S = els.settings; S.classList = { contains: (c) => S.cls.has(c), toggle: (c, on) => (on ? S.cls.add(c) : S.cls.delete(c)) };
+    const move = (n, to) => { if (n.parent) n.parent.kids = n.parent.kids.filter((k) => k !== n); n.parent = to; to.kids.push(n); };
+    els.settingsPageBody.append = (n) => move(n, els.settingsPageBody);
+    els.downloads.parent = els.body; els.body.kids.push(els.downloads); els.downloads.before = (n) => move(n, els.body);
+    move(S, els.body);
+    const where = () => (S.parent === els.settingsPageBody ? 'page' : 'modal') + (S.cls.has('asPage') ? '+asPage' : '');
+    try {
+      const ctx = { $: (id) => els[id] }; require('vm').runInNewContext(src + '\nthis.go = settingsAs;', ctx);
+      const steps = []; for (const p of [true, true, false, false, true]) { ctx.go(p); steps.push(where()); }
+      seen.moves = steps.join(' ');
+    } catch (e) { seen.err = e.message; }
+    // who opens which: the main menu's Settings the page, every other Settings button (Work's bar, the chat app, a profile card) the modal
+    seen.menuPage = /\$\('goSettings'\)\.onclick = \(\) => \{ openSettings\(true\); showScreen\('settingsPage'\); \};/.test(page) && /function openSettings\(asPage\) \{\n  settingsAs\(asPage === true\);/.test(page)
+      && /document\.querySelectorAll\('\[data-settings\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => \{ settingsFrom = b; openSettings\(\);/.test(page);
+    seen.screen = /<div id="settingsPage" class="screen" hidden>\s*<header>\s*<button class="ghost back" data-back>[\s\S]*?<b>Settings<\/b>[\s\S]*?<div id="settingsPageBody"><\/div>/.test(page) && /'settingsPage'/.test((page.match(/const SCREENS = \[[^\]]*\]/) || [''])[0]);
+    // the page: no Close, Escape and a click beside it do nothing; it scrolls as a whole, tabs on top, Save at the bottom
+    seen.pageWaysOut = /if \(\$\('settings'\)\.classList\.contains\('asPage'\)\) return;/.test(page) && /\$\('settings'\)\.classList\.contains\('asPage'\) \|\| !\$\('profileCard'\)\.hidden/.test(page) && /#settings\.asPage \.setBox > \.bar > span, #settings\.asPage #closeSettings \{ display: none; \}/.test(css);
+    seen.pageScroll = /#settings\.asPage \{[^}]*overflow-y: auto;[^}]*padding: 0 max\(1rem, calc\(\(100% - 900px\) \/ 2\)\); \}/.test(css) && /#settings\.asPage \.setTabs \{ position: sticky; top: 0;/.test(css) && /#settings\.asPage \.setSave \{ position: sticky; bottom: 0;/.test(css);
+    check('R642', 'Settings opens as its own page (← Menu, the whole page scrolls, the tabs stay on top and Save at the bottom, no Close) only from the main menu; Settings in Work, the chat app, a profile card or /settings is the modal; both are the same Settings (the one element moves between the page and the modal, so the options are always the same)',
+      seen.moves === 'page+asPage page+asPage modal modal page+asPage' && seen.menuPage && seen.screen && seen.pageWaysOut && seen.pageScroll && !seen.err, JSON.stringify(seen));
+  }
   { // R641 (T-379): the menu's Settings / Downloads beside My status; Site admin and AI Admin on the page; who sees what
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8');
     const sa = fs.readFileSync(path.join(MILLS, 'web', 'siteadmin.js'), 'utf8'), aa = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'), seen = {};
