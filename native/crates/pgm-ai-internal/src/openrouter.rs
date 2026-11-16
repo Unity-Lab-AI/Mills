@@ -65,7 +65,7 @@ const RELAY: &str = "/or-relay/";
 /// What a person gets when OpenRouter refused their own key (revoked, wrong, out of credit): never the team's key instead.
 pub const REFUSED: &str = "Your own OpenRouter key was refused by OpenRouter (revoked, or out of credit?). Nothing was sent with the team's key instead: replace your key in AI Admin → My OpenRouter, or remove it to use the team's models.";
 /// What creating a personal key says when an admin switched them off.
-pub const PERSONAL_OFF: &str = "Personal OpenRouter keys are switched off on this hub: an admin can allow them in AI Admin → My OpenRouter.";
+pub const PERSONAL_OFF: &str = "Personal OpenRouter keys are switched off on this hub: an admin can allow them in AI Admin → Team OpenRouter.";
 const PERSONAL: &str = "or-me:";
 const MAX_PAIRS: usize = 30;
 
@@ -242,7 +242,7 @@ pub fn spent_of(hub: &dyn AiHub, u: &str) -> (f64, u64) { let r = rec(hub, u); l
 /// The plain refusal when the person is at or over this month's cap (None = they may go on).
 pub fn refusal(hub: &dyn AiHub, u: &str) -> Option<String> {
     let (spent, _) = spent_of(hub, u); let (cap, _) = cap_of(hub, u);
-    (spent >= cap).then(|| format!("Your OpenRouter budget for {} is used up: {:.2} of {:.2} USD. It resets on {} (00:00 UTC); an admin can raise your cap in AI Admin → My OpenRouter.", month_name(&month()), spent, cap, resets_on()))
+    (spent >= cap).then(|| format!("Your OpenRouter budget for {} is used up: {:.2} of {:.2} USD. It resets on {} (00:00 UTC); an admin can raise your cap in AI Admin → Team OpenRouter.", month_name(&month()), spent, cap, resets_on()))
 }
 /// Adds one answer's cost (`usage.cost`, OpenRouter's own number in USD) to the person's month.
 pub fn note_cost(hub: &dyn AiHub, u: &str, usage: &Value) {
@@ -324,7 +324,7 @@ pub struct WorkPlan { pub prov: Value, pub model: String, pub routed: String, pu
 pub fn work_plan(hub: &dyn AiHub, u: &str, p: &Value, state_model: &str) -> Result<WorkPlan, String> {
     let (cmd, args) = jcode_cmd(hub)?;
     if let Some(m) = guard(hub, u, p) { return Err(m); }
-    if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in AI Admin → My AIs.".into()); }
+    if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in AI Admin → Team OpenRouter.".into()); }
     let ps = pairs_of(p);
     let Some(pr) = ps.iter().find(|x| s(x, "id") == state_model).or(ps.first()).cloned() else { return Err("This OpenRouter provider offers no models.".into()) };
     let (routed, model, label, order, fallbacks) = (s(&pr, "id"), s(&pr, "model"), format!("{} · {}", if is_personal(p) { "my OpenRouter" } else { "OpenRouter" }, s(&pr, "label")), list_of(&pr["providers"]), pr["allowFallbacks"] == json!(true));
@@ -396,7 +396,7 @@ fn usable(hub: &dyn AiHub, u: &str) -> Vec<Value> {
 /// it (`my/<id>` for their own key's), and its label; Err = the plain reason it cannot run (over the budget, no key, no pairs).
 pub fn pgm_work_pair(hub: &dyn AiHub, u: &str, p: &Value, state_model: &str) -> Result<(String, String), String> {
     if let Some(m) = guard(hub, u, p) { return Err(m); }
-    if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in AI Admin → My AIs.".into()); }
+    if s(p, "apiKey").is_empty() { return Err("This OpenRouter provider has no key set; an admin adds it in AI Admin → Team OpenRouter.".into()); }
     let ps = pairs_of(p);
     let Some(pr) = ps.iter().find(|x| s(x, "id") == state_model).or(ps.first()).cloned() else { return Err("This OpenRouter provider offers no models.".into()) };
     Ok((pgm_id(p, &pr), format!("{} · {}", if is_personal(p) { "my OpenRouter" } else { "OpenRouter" }, s(&pr, "label"))))
@@ -428,7 +428,7 @@ pub fn pgm_resolve(hub: &dyn AiHub, u: &str, asked: &str) -> Option<(Value, Valu
 pub fn pgm_route(hub: &dyn AiHub, u: &str, asked: &str) -> Result<Value, (u16, String)> {
     let Some((p, pr)) = pgm_resolve(hub, u, asked) else { return Err((403, format!("\"{}\" is not one of the OpenRouter models you may use (see the models list).", asked.chars().take(80).collect::<String>()))) };
     if let Some(m) = guard(hub, u, &p) { return Err((403, m)); }
-    if s(&p, "apiKey").is_empty() { return Err((503, "This OpenRouter provider has no key set; an admin adds it in AI Admin → My AIs.".into())); }
+    if s(&p, "apiKey").is_empty() { return Err((503, "This OpenRouter provider has no key set; an admin adds it in AI Admin → Team OpenRouter.".into())); }
     let mut b = json!({ "model": pr["id"] });
     shape(&p, &mut b);
     Ok(json!({ "baseUrl": base_url(hub), "apiKey": s(&p, "apiKey"), "model": b["model"], "provider": b["provider"], "kind": if is_personal(&p) { "mine" } else { "team" }, "pair": pgm_id(&p, &pr),
