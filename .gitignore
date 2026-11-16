@@ -92,6 +92,9 @@ bridge/device-tokens.json
 bridge/device-tokens.json.tmp
 bridge/plan-drafts.json
 bridge/plan-drafts.json.tmp
+# the secret the hub shares with the Jcode PGM Server next to it (T-376; /__pgm/*): data, never shipped
+bridge/pgm-server.secret
+bridge/pgm-server.tmp-*
 # the release key that signs the native binaries (bridge/native-releases.js): its secret never leaves this machine
 bridge/release-key.json
 bridge/ai-host-sessions.json
