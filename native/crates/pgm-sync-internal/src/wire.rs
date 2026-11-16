@@ -14,18 +14,17 @@ use std::time::Duration;
 use crate::engine::{Engine, Scan};
 
 pub const SECRET_HEADER: &str = "x-vr-sync-secret";
-/// Headers a proxy adds: a call carrying one did not come straight from the peer.
-const PROXIED: [&str; 5] = ["x-forwarded-for", "x-real-ip", "cf-connecting-ip", "forwarded", "x-forwarded-host"];
 const MAX_BATCH: usize = 5000;
 
-/// Whether a call may reach the sync routes: from this machine, not through a proxy, with the secret.
+/// Whether a call may reach the sync routes: from this machine, not through a proxy, with the secret (the shared gate of
+/// pgm-net-internal, which the hub's /__pgm/ uses too).
 pub fn gate(peer: SocketAddr, header: &dyn Fn(&str) -> Option<String>, secret: &str) -> Result<(), (u16, &'static str)> {
-    use subtle::ConstantTimeEq;
-    if !peer.ip().is_loopback() { return Err((403, "The sync answers only this machine.")); }
-    if PROXIED.iter().any(|h| header(h).is_some()) { return Err((403, "The sync is not reachable through a proxy.")); }
-    let given = header(SECRET_HEADER).unwrap_or_default();
-    if secret.is_empty() || given.len() != secret.len() || !bool::from(given.as_bytes().ct_eq(secret.as_bytes())) { return Err((403, "Wrong or missing sync secret.")); }
-    Ok(())
+    use pgm_net_internal::http::{local_gate, Refused};
+    local_gate(peer, header, SECRET_HEADER, secret).map_err(|r| (403, match r {
+        Refused::NotLocal => "The sync answers only this machine.",
+        Refused::Proxied => "The sync is not reachable through a proxy.",
+        Refused::Secret => "Wrong or missing sync secret.",
+    }))
 }
 
 /// The answer to a call on `/__sync/<rest>` (already through [`gate`]). `push` applies records: call it off the async

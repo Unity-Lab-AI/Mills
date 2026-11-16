@@ -175,6 +175,9 @@ fn ext_report(a: &Account, b: &Value, now: u64) -> Resp {
     let n = out.len(); m.insert(key, (now + ttl, out));
     answer(200, json!({ "ok": true, "accepted": n, "ttlSec": ttl / 1000 }))
 }
+/// A report made for a person by another program on this machine (the Jcode PGM Server, T-376): the same as theirs, the
+/// source fixed by the caller.
+pub fn report_for(a: &Account, b: &Value, source: &str) -> Resp { let mut b = if b.is_object() { b.clone() } else { json!({}) }; b["source"] = json!(source); ext_report(a, &b, now_ms()) }
 /// The live external sessions of a person (expired reports are dropped).
 pub(crate) fn ext_live(user: &str, now: u64) -> Vec<Value> {
     let mut m = ext_store().lock().unwrap();

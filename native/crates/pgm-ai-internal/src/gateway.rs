@@ -277,6 +277,14 @@ fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally
         openai::count_tokens(&**hub, user, key, &t.prov, &t.model, u.total_input(), u.output);
     }
 }
+/// An answer another program made for the hub (the Jcode PGM Server, T-376) counted exactly as one the gateway made on
+/// `p`: the call on the key, then its usage (`native`: the provider's own usage object) into the month budget or the
+/// person's own-key counter, the usage ledger (under `model`, the upstream's id) and the key's tokens (under `routed`).
+pub fn charge_external(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, p: &Value, routed: &str, model: &str, native: &Value) {
+    let t = tally(p, routed);
+    count_call(hub, user, key, &t);
+    note_native(hub, user, key, &t, model, native);
+}
 /// The provider's full record (its own key is in it), else what routing gave.
 fn full_provider(hub: &Arc<dyn AiHub>, user: &str, prov: &Value) -> Value { hub.work().provider_get(hub.ai(), &s(prov, "id"), user).unwrap_or_else(|| prov.clone()) }
 /// Is this provider unable to answer right now (its host paused its AI, it has no key)? The refusal, in the caller's shape.
