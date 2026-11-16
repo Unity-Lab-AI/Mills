@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.57.5 — 2026-11-16
+
+PATCH: the Tools window opens on Windows.
+
+### Fixed
+- **The Tools window is no longer blank on Windows** (asked: "that window that pops up for the tools window, is pure white on windows"): opening it from the site's Tools tile or the tray built the WebView2 window inside the click's own handler, which deadlocks on Windows, so the window came up pure white and the app stopped answering. The command is now async and the tray entries open the window on their own thread (`tauri-apps/wry#583`). Linux was unaffected. `native/crates/vr-desktop/src/main.rs`; Windows and Linux app: vr-desktop rebuilt.
+- **The tray's "Desktop Unity: her look and settings…" lands on that tab**: a freshly opened Tools window opens the tab its address names (`tools.html#unity`) instead of racing a script call. `native/crates/vr-desktop/ui/tools.js`. R165 holds that every way of opening the window stays off the event loop.
+
 ## 5.57.4 — 2026-11-10
 
 PATCH: the GPU is only used while something asks for it.
