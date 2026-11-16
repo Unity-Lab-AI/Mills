@@ -699,7 +699,7 @@ async function call(p, token, body, extraHeaders = {}, retry = true) {
 const login = (username, password, deviceId) => call('/api/login', null, { username, password, deviceId });
 // Run a chat to completion; answers pc_tool events like a browser would.
 async function chat(token, message, opts = {}) {
-  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}), ...(opts.startedBy ? { _testStartedBy: opts.startedBy } : {}) }) });
+  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}), ...(opts.target ? { target: opts.target } : {}), ...(opts.startedBy ? { _testStartedBy: opts.startedBy } : {}) }) });
   if (r.status !== 200) return { status: r.status, events: [] };
   const events = []; let buf = '';
   const reader = r.body.getReader(), dec = new TextDecoder();
@@ -957,6 +957,7 @@ async function run() {
   if (process.argv.includes('--only-r600') && RUST_HUB) await r600Check(); // development: just R600 to R605 (with --stop-after R605)
   if (process.argv.includes('--only-r591') && RUST_HUB) await r591Check(); // development: just R591 to R598 (with --stop-after R598)
   if (process.argv.includes('--only-r620') && RUST_HUB) await r620Check(); // development: just R620 to R626 (with --stop-after R626)
+  if (process.argv.includes('--only-r627') && RUST_HUB) await r627Check(); // development: just R627 to R633 (with --stop-after R633)
   if (process.argv.includes('--only-r606') && RUST_HUB) await r606Check(); // development: just R606 to R612 (with --stop-after R612)
   if (process.argv.includes('--only-r614') && RUST_HUB) { await r614Check(); r619Check(); } // development: just R614 to R619 (with --stop-after R619)
   if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
@@ -3166,6 +3167,7 @@ async function run() {
     await r600Check(); // R600-R605 (T-371): the browser sign-in for Jcode PGM (the hub flow with --rust-hub; the page's files always)
     if (RUST_HUB) await r606Check(); else skip('R606', 'a person\'s own OpenRouter key next to the team\'s (T-372)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r620Check(); else skip('R620', 'the hub side of the Jcode PGM Server: /__pgm/*, the /pgm/ forward, pgmServer in /api/check (T-376)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r627Check(); else skip('R627', 'Work on a PGM session goes through the Jcode PGM Server, and its sessions are in the list (T-376 stage 3)', 'the Rust hub\'s: --rust-hub runs it');
     if (RUST_HUB) await r586Check(); else skip('R586', 'the API gateway serves the Responses API (Codex) and shows each key\'s usage by day and model (T-369, G5)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
@@ -8738,6 +8740,209 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       await call('/api/providers/remove', A, { id: tp.id });
       await call('/api/apikey/revoke', U, { id: kU.id });
       await call('/api/devices/revoke', U, { id: dev.id }); await call('/api/devices/revoke', U, { id: mach.id });
+    }
+  }
+  // R627-R633 (T-376 stage 3, team note plans/jcode-pgm-server-stage3.md F.3 / F.4): Work on a PGM session goes through the Jcode
+  // PGM Server. A fake server implements F.3 (/__srv/*, the secret checked on every call, its sessions with events and an SSE
+  // stream); R633 runs the real jcodepgm server (env VR_TEST_JCODEPGM) against the hub and the suite's fake OpenRouter.
+  async function r627Check() {
+    const http = require('http');
+    const secretFile = path.join(SB, 'pgm-server.secret');
+    const secret = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8').split('\n')[0].trim() : '';
+    // a chat to its end, or the time limit: then what came so far (timedOut)
+    const within = (p, ms) => Promise.race([p, sleep(ms).then(() => (p.evs ? { status: 0, events: p.evs, timedOut: true } : null))]);
+    const chatP = (tok, msg, opts = {}) => { const evs = []; const p = chat(tok, msg, { ...opts, onEvent: (e) => evs.push(e) }); p.evs = evs; return p; };
+    const fk = { reqs: [], refused: 0, sessions: new Map(), subs: new Map(), n: 0 };
+    const pub = (x) => { const o = { ...x }; delete o.events; delete o.mode; return o; };
+    const send = (x, v) => { for (const r of fk.subs.get(x.id) || []) r.write('data: ' + JSON.stringify(v) + '\n\n'); };
+    // the frames as Jcode PGM 0.99.9 sends them (F.8): {type: "event", session, event, ...the event}, {type: "session", ...state}
+    const push = (x, ev) => { const e = { seq: ++x.seq, at: Date.now(), ...ev }; x.events.push(e); x.updatedAt = Date.now(); send(x, { type: 'event', session: x.id, event: e, ...e }); return e; };
+    const state = (x, running) => { x.running = running; send(x, { type: 'session', session: x.id, ...pub(x) }); };
+    const make = (o) => { const id = 'ps-' + crypto.randomBytes(6).toString('hex'); const x = { id, user: o.user, title: o.title || '', project: o.project || '', branch: o.branch || '', pair: o.pair || '', worktree: o.worktree || '', runner: o.runner || { kind: 'server', since: Date.now() }, running: !!o.running, events: [], seq: 0, mode: o.mode || 'server', createdAt: Date.now(), updatedAt: Date.now() }; fk.sessions.set(id, x); return x; };
+    const serverRun = async (x, text) => { state(x, true); await sleep(80); push(x, { from: 'server', kind: 'tool', text: 'ran ls', tool: { name: 'bash', input: { command: 'ls' }, output: 'a.txt b.txt' } }); await sleep(50); push(x, { from: 'server', kind: 'assistant', text: 'server says: ' + text }); if (/SLOW/.test(text)) return; await sleep(50); state(x, false); };
+    const srv = http.createServer((req, res) => {
+      let body = ''; req.on('data', (c) => { body += c; });
+      req.on('end', async () => {
+        const u = new URL(req.url, 'http://x'), b = (() => { try { return JSON.parse(body || '{}'); } catch { return {}; } })();
+        const rec = { method: req.method, path: u.pathname, query: Object.fromEntries(u.searchParams), body: b }; fk.reqs.push(rec);
+        const out = (st, v) => { res.writeHead(st, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(v)); };
+        if (req.headers['x-pgm-secret'] !== secret) { fk.refused++; return out(403, { error: 'wrong secret' }); }
+        const m = /^\/__srv\/sessions(?:\/(ps-[0-9a-z]+))?(?:\/(events|message|stop))?$/.exec(u.pathname);
+        if (!m) return out(404, { error: 'no such route' });
+        const user = b.user || u.searchParams.get('user') || '', x = m[1] && fk.sessions.get(m[1]);
+        if (!m[1]) {
+          if (req.method === 'GET') return out(200, { sessions: [...fk.sessions.values()].filter((s) => s.user === user).map(pub) });
+          const s = make({ user, title: b.title, project: b.project, branch: b.branch, pair: b.pair, worktree: b.worktree, mode: fk.nextMode }); return out(200, { id: s.id, session: pub(s) });
+        }
+        if (!x || x.user !== user) return out(404, { error: 'no such session' });
+        const after = Number(u.searchParams.get('after') || 0);
+        if (!m[2] && req.method === 'GET') return out(200, { session: pub(x), events: x.events.filter((e) => e.seq > after) });
+        if (m[2] === 'events') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }); res.write('data: ' + JSON.stringify({ type: 'session', session: x.id, ...pub(x) }) + '\n\n');
+          for (const e of x.events.filter((e) => e.seq > after)) res.write('data: ' + JSON.stringify({ type: 'event', session: x.id, event: e, ...e }) + '\n\n');
+          if (!fk.subs.has(x.id)) fk.subs.set(x.id, new Set()); fk.subs.get(x.id).add(res); res.on('close', () => fk.subs.get(x.id).delete(res));
+          return;
+        }
+        if (m[2] === 'stop') { const was = x.running; push(x, { from: 'server', kind: 'note', text: 'stopped from the website' }); state(x, false); return out(200, { ok: true, stopped: was }); }
+        // message (F.3)
+        const text = String(b.text || ''), dev = (x.runner && x.runner.device) || 'r628-laptop';
+        if (x.mode === 'never') return out(409, { error: 'the work is on ' + dev + ', which is offline, and was never pushed' });
+        push(x, { from: 'website', kind: 'user', text });
+        if (x.mode === 'device' && b.target === 'server') { // F.8: jcode is open, the website asks for the server: the handover first
+          x.runner = { kind: 'server', since: Date.now() }; x.mode = 'server';
+          out(200, { routed: 'server', run: 'r-' + (++fk.n), from: 'handover', handover: { device: dev + '-4242', label: dev, branch: 'work/r629', commit: 'abc123def4567890' } }); serverRun(x, text); return;
+        }
+        if (x.mode === 'device') {
+          out(200, { routed: 'device', device: dev + '-4242', label: dev, seq: x.seq });
+          state(x, true); await sleep(150); push(x, { from: 'device:' + dev, kind: 'assistant', text: 'jcode says: ' + text }); await sleep(80); state(x, false); return;
+        }
+        const ans = x.mode === 'handover' ? { routed: 'server', run: 'r-' + (++fk.n), handover: { device: dev, branch: 'work/r629', commit: 'abc123def4567890' } }
+          : x.mode === 'lastpush' ? { routed: 'server', run: 'r-' + (++fk.n), from: 'last-push', note: 'the newest work is on ' + dev + '; continued from abc1234' } : { routed: 'server', run: 'r-' + (++fk.n) };
+        x.runner = { kind: 'server', since: Date.now() };
+        out(200, ans); serverRun(x, text);
+      });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const fakeUrl = `http://127.0.0.1:${srv.address().port}`;
+    const localCfgFile = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(localCfgFile), local0 = hadLocal ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : null;
+    const setLocal = (k, v) => { const c = fs.existsSync(localCfgFile) ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : {}; if (v === undefined) delete c[k]; else c[k] = v; fs.writeFileSync(localCfgFile, JSON.stringify(c, null, 2)); };
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic'], allowFallbacks: false }];
+    const tp = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R627 team', apiKey: R591_KEY, pairs, shared: true })).data.provider || {};
+    const info = (evs) => evs.filter((e) => e.type === 'bridge_info').map((e) => e.text).join(' | ');
+    const errs = (evs) => evs.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ');
+    const done = (evs) => (evs.find((e) => e.type === 'bridge_done') || {}).code;
+    const result = (evs) => evs.find((e) => e.type === 'result') || {};
+    const srvReqs = (from, p) => fk.reqs.slice(from).filter((r) => !p || p(r));
+    const list = async () => (await call('/api/work/sessions?archived=1', U)).data;
+    const mine = async (sid) => ((await list()).sessions || []).find((s) => s.id === sid) || {};
+    const newSession = async (title) => (await call('/api/work/sessions/new', U, { title, provider: tp.id, model: 'or/sonnet', background: true })).data.id;
+    const others = [];
+    try {
+      setLocal('pgmServer', { url: fakeUrl });
+      // R627: create on the first send, then message; the server's events are the page's transcript
+      const sid = await newSession('R627 PGM session'); others.push(sid);
+      const n0 = fk.reqs.length;
+      const r1 = await within(chatP(U,'hello r627', { session: sid }), 30000) || { events: [] }, e1 = r1.events;
+      const created = srvReqs(n0, (r) => r.method === 'POST' && r.path === '/__srv/sessions'), msg1 = srvReqs(n0, (r) => /\/message$/.test(r.path));
+      const s1 = await mine(sid), pid = (s1.pgm || {}).id || '', wt = (s1.worktree || {}).path || '';
+      const toolUse = e1.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.name === 'bash')), toolRes = e1.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.content === 'a.txt b.txt'));
+      const n1 = fk.reqs.length;
+      const r2 = await within(chatP(U,'second r627', { session: sid }), 30000) || { events: [] }, e2 = r2.events;
+      const created2 = srvReqs(n1, (r) => r.method === 'POST' && r.path === '/__srv/sessions').length, msg2 = srvReqs(n1, (r) => /\/message$/.test(r.path))[0] || { body: {} };
+      const leaked = [...e1, ...e2].some((e) => JSON.stringify(e).includes(secret));
+      check('R627', 'a Work session on the team\'s OpenRouter goes through the Jcode PGM Server when the hub has one: the first message creates the PGM session (POST /__srv/sessions with the person, the session\'s title, its branch, the pair and the session\'s own worktree), every message goes to /__srv/sessions/<id>/message with the worktree, project, branch and pair, target "auto", and the hub\'s MCP servers and system prompt for a run on the server (as the hub\'s own Work runs get them), and the server\'s events come back as the usual Work transcript (a tool use and its result, the answer\'s text, Done with that text, bridge_done 0) without the website\'s own message twice; the Work session keeps the PGM id, the second message reuses it, every call carries the shared secret (never shown on the page) and the hub runs no jcodepgm itself',
+        created.length === 1 && created[0].body.user === 't-user' && created[0].body.title === 'R627 PGM session' && created[0].body.pair === 'or/sonnet' && /^work\/t-user/.test(created[0].body.branch || '') && !!wt && created[0].body.worktree === wt && fs.existsSync(wt)
+        && msg1.length === 1 && msg1[0].path === '/__srv/sessions/' + pid + '/message' && msg1[0].body.text === 'hello r627' && msg1[0].body.worktree === wt && msg1[0].body.branch === created[0].body.branch && 'project' in msg1[0].body
+        && msg1[0].body.target === 'auto' && msg1[0].body.pair === 'or/sonnet' && !!(msg1[0].body.mcp && msg1[0].body.mcp.mcpServers && msg1[0].body.mcp.mcpServers.board) && /Worktree law|t-user/.test(msg1[0].body.systemPrompt || '')
+        && /^ps-/.test(pid) && toolUse && toolRes && /server says: hello r627/.test(texts(e1)) && result(e1).result === 'server says: hello r627' && result(e1).is_error === false && done(e1) === 0 && /Using the Jcode PGM Server \(OpenRouter · Sonnet\)/.test(info(e1))
+        && !/You \(website\): hello r627/.test(info(e1)) && !/jcode-answer/.test(texts(e1))
+        && created2 === 0 && msg2.path === '/__srv/sessions/' + pid + '/message' && /server says: second r627/.test(texts(e2)) && !/server says: hello r627/.test(texts(e2)) && done(e2) === 0 && fk.refused === 0 && !leaked,
+        `events ${e1.map((e) => e.type).join(',')}${r1.timedOut ? ' (timed out)' : ''}; server saw ${fk.reqs.slice(n0, n0 + 12).map((r) => r.method + ' ' + r.path.replace(/ps-[0-9a-f]+/, '<id>') + (r.query.after ? '?after=' + r.query.after : '')).join(', ')}; created ${created.length} ${JSON.stringify(created[0] && created[0].body)} wt ${wt}; msg ${JSON.stringify(msg1[0] && msg1[0].body)}; pid ${pid}; tool ${toolUse}/${toolRes}; text "${texts(e1).slice(0, 120)}" result "${result(e1).result}" done ${done(e1)}; info "${info(e1).slice(0, 200)}" err "${errs(e1)}"; second created ${created2} "${texts(e2).slice(0, 80)}" done ${done(e2)}; refused ${fk.refused} leaked ${leaked}`);
+
+      // R628: routed to jcode on the device; what was typed in jcode meanwhile shows too
+      const x = fk.sessions.get(pid) || make({ user: 't-user' });
+      x.mode = 'device'; x.runner = { kind: 'device', device: 'r628-laptop', since: Date.now() };
+      push(x, { from: 'device:r628-laptop', kind: 'user', text: 'typed in jcode r628' }); push(x, { from: 'device:r628-laptop', kind: 'assistant', text: 'jcode answered in jcode r628' });
+      const r3 = await within(chatP(U,'device please r628', { session: sid }), 30000) || { events: [] }, e3 = r3.events;
+      const iSent = e3.findIndex((e) => e.type === 'bridge_info' && /^Sent to jcode on r628-laptop/.test(e.text)), iDev = e3.findIndex((e) => e.type === 'assistant' && /jcode says: device please r628/.test(JSON.stringify(e)));
+      check('R628', 'a message to a PGM session that jcode runs on the person\'s computer is sent to jcode: the page says "Sent to jcode on <device>", jcode\'s answer streams into the same transcript after it and the run ends with it (Done, bridge_done 0); a turn typed in jcode meanwhile shows when the website sends next (the person\'s jcode message as a line, jcode\'s answer as text), and the session says it runs in jcode on that device',
+        iSent >= 0 && iDev > iSent && /You in jcode on r628-laptop: typed in jcode r628/.test(info(e3)) && /jcode answered in jcode r628/.test(texts(e3)) && result(e3).result === 'jcode says: device please r628' && done(e3) === 0 && /running in jcode on r628-laptop/.test(info(e3)),
+        `sent at ${iSent} device answer at ${iDev}; info "${info(e3).slice(0, 300)}"; text "${texts(e3).slice(0, 160)}"; done ${done(e3)} err "${errs(e3)}"`);
+
+      // R629: the handover, the last push and the 409, in plain lines
+      // "continue on the server" while jcode has it (target server): the handover is waited for inside the message call (F.8)
+      x.mode = 'device'; x.runner = { kind: 'device', device: 'r628-laptop', label: 'r628-laptop', since: Date.now() }; const nH = fk.reqs.length;
+      const r4 = await within(chatP(U,'handover r629', { session: sid, target: 'server' }), 30000) || { events: [] }, e4 = r4.events;
+      const hoTarget = (srvReqs(nH, (r) => /\/message$/.test(r.path))[0] || { body: {} }).body.target;
+      x.mode = 'lastpush'; const r5 = await within(chatP(U,'last push r629', { session: sid }), 30000) || { events: [] }, e5 = r5.events;
+      x.mode = 'never'; x.runner = { kind: 'device', device: 'r629-laptop', since: Date.now() };
+      const r6 = await within(chatP(U,'never pushed r629', { session: sid }), 30000) || { events: [] }, e6 = r6.events;
+      x.mode = 'server'; const r7 = await within(chatP(U,'free again r629', { session: sid }), 30000) || { events: [] }, e7 = r7.events;
+      check('R629', 'what the server answers about unfinished work is said plainly: "continue on the server" while jcode has the session sends target "server" and its handover ("jcode on <device> handed its unfinished work over: committed and pushed <branch> at <commit>") and a continue from the last push (the server\'s note) are lines before the server\'s answer; "the work is on <device>, which is offline, and was never pushed" (409) is the run\'s error as the server says it, the run ends (not 0) and the session takes the next message at once',
+        hoTarget === 'server' && /jcode on r628-laptop handed its unfinished work over: committed and pushed work\/r629 at abc123def456/.test(info(e4)) && /server says: handover r629/.test(texts(e4)) && done(e4) === 0
+        && /The newest work is on r628-laptop; continued from abc1234/.test(info(e5)) && /server says: last push r629/.test(texts(e5)) && done(e5) === 0
+        && /the work is on r629-laptop, which is offline, and was never pushed/i.test(errs(e6)) && done(e6) !== 0 && !result(e6).type
+        && r7.status === 200 && /server says: free again r629/.test(texts(e7)) && done(e7) === 0,
+        `handover target ${hoTarget} "${info(e4).slice(0, 200)}" ${done(e4)}; last push "${info(e5).slice(0, 200)}" ${done(e5)}; never "${errs(e6)}" ${done(e6)}; next ${r7.status} ${done(e7)}`);
+
+      // R630: Stop
+      const n2 = fk.reqs.length;
+      const slow = within(chatP(U,'SLOW stop me r630', { session: sid }), 30000); await sleep(1200);
+      const t0 = Date.now(), st = await call('/api/stop', U, { session: sid }), r8 = await slow || { events: [] }, took = Date.now() - t0, e8 = r8.events;
+      const stopReq = srvReqs(n2, (r) => /\/stop$/.test(r.path))[0] || { body: {} };
+      const r9 = await within(chatP(U,'after stop r630', { session: sid }), 30000) || { events: [] };
+      check('R630', 'Stop on a PGM session asks the server to stop (POST /__srv/sessions/<id>/stop for that person) and the run ends at once without a Done and not with 0; the session takes the next message straight after',
+        st.status === 200 && stopReq.path === '/__srv/sessions/' + pid + '/stop' && stopReq.body.user === 't-user' && done(e8) !== 0 && !result(e8).type && took < 4000 && /server says: SLOW stop me r630/.test(texts(e8)) && r9.status === 200 && done(r9.events) === 0,
+        `stop ${st.status} ${stopReq.path} ${JSON.stringify(stopReq.body)} done ${JSON.stringify(done(e8))} result ${!!result(e8).type} took ${took}ms; next ${r9.status} ${done(r9.events)}`);
+
+      // R631: the list has the person's PGM sessions (one started in jcode, no report); opening it attaches a Work session, live
+      const j = make({ user: 't-user', title: 'R631 started in jcode', project: 'UnityAILab/r631-not-here', branch: 'work/r631', pair: 'or/sonnet', runner: { kind: 'device', device: 'r631-laptop', since: Date.now() }, running: true, mode: 'device' });
+      push(j, { from: 'device:r631-laptop', kind: 'user', text: 'start in jcode r631' }); push(j, { from: 'device:r631-laptop', kind: 'assistant', text: 'jcode answer one r631' });
+      const other = make({ user: 't-admin', title: 'R631 someone else\'s' });
+      const l1 = await list(), ex = (l1.external || []).find((e) => e.id === j.id) || {}, exOther = (l1.external || []).some((e) => e.id === other.id);
+      const op = await call('/api/work/sessions/pgm/open', U, { id: j.id }), wsid = op.data.id;
+      const l2 = await list(), ws = (l2.sessions || []).find((s) => s.id === wsid) || {}, stillExt = (l2.external || []).some((e) => e.id === j.id);
+      if (wsid) others.push(wsid);
+      // the page joins the session's run (GET /api/work/attach, as loadConversation does) and reads until the history is there
+      const at1 = (await call('/api/work/attach?session=' + wsid + '&run=&after=0', U)).data || {};
+      const ev1 = [...(at1.events || [])];
+      for (let i = 0; i < 20 && at1.busy && !texts(ev1).includes('jcode answer one r631'); i++) { const d = (await call('/api/work/attach?session=' + wsid + '&run=' + (at1.run || '') + '&after=' + (at1.next || 0), U)).data || {}; ev1.push(...(d.events || [])); at1.next = d.next; at1.busy = d.busy; }
+      at1.busy = at1.busy && fk.sessions.get(j.id).running;
+      push(j, { from: 'device:r631-laptop', kind: 'assistant', text: 'jcode answer two r631' }); setTimeout(() => state(j, false), 300);
+      let at2 = {}, ev2 = []; for (let i = 0; i < 20; i++) { at2 = (await call('/api/work/attach?session=' + wsid + '&run=' + (at1.run || '') + '&after=' + (at1.next || 0), U)).data || {}; ev2.push(...(at2.events || [])); if (!at2.busy) break; at1.next = at2.next; }
+      const again = await call('/api/work/sessions/pgm/open', U, { id: j.id });
+      j.mode = 'server'; const n3 = fk.reqs.length;
+      const r10 = await within(chatP(U,'continue on the website r631', { session: wsid }), 30000) || { events: [] };
+      const createdNew = srvReqs(n3, (r) => r.method === 'POST' && r.path === '/__srv/sessions').length, msgJ = srvReqs(n3, (r) => /\/message$/.test(r.path))[0] || {};
+      const bad = await call('/api/work/sessions/pgm/open', U, { id: other.id }), badId = await call('/api/work/sessions/pgm/open', U, { id: '../etc' });
+      check('R631', 'the session list has the person\'s PGM sessions from the server (GET /__srv/sessions, no report needed), saying "running in jcode on <device>", and never another person\'s; opening one started in jcode makes its Work session on the fly with the same title and branch, the PGM id and the OpenRouter pair, on screen, and it leaves "Other tools"; the page joining the session gets its transcript (what was typed and answered in jcode) and follows it live until jcode is done; opening it again finds the same session; sending continues that PGM session (no new one); another person\'s or a malformed id is refused',
+        ex.source === 'pgm-server' && ex.pgm === true && ex.where === 'running in jcode on r631-laptop' && ex.title === 'R631 started in jcode' && !exOther
+        && op.status === 200 && op.data.created === true && ws.title === 'R631 started in jcode' && (ws.pgm || {}).id === j.id && /running in jcode on r631-laptop/.test((ws.pgm || {}).where || '') && !!ws.provider && ws.provider !== 'host' && ws.model === 'or/sonnet' && l2.current === wsid && !stillExt
+        && at1.busy === true && ev1.some((e) => e.type === 'bridge_info' && e.text === 'You in jcode on r631-laptop: start in jcode r631') && texts(ev1).includes('jcode answer one r631') && ev1.some((e) => e.type === 'bridge_info' && /running in jcode on r631-laptop/.test(e.text))
+        && texts(ev2).includes('jcode answer two r631') && at2.busy === false
+        && again.status === 200 && again.data.id === wsid && again.data.created === false
+        && createdNew === 0 && msgJ.path === '/__srv/sessions/' + j.id + '/message' && /server says: continue on the website r631/.test(texts(r10.events)) && done(r10.events) === 0
+        && bad.status === 404 && badId.status === 400,
+        `ext ${JSON.stringify(ex)} other ${exOther}; open ${op.status} ${JSON.stringify(op.data)} ws ${JSON.stringify({ t: ws.title, pgm: ws.pgm, p: ws.provider, m: ws.model })} current ${l2.current === wsid} ext ${stillExt}; attach busy ${at1.busy} "${texts(ev1).slice(0, 80)}" info "${info(ev1).slice(0, 200)}"; live "${texts(ev2).slice(0, 80)}" busy ${at2.busy}; again ${again.status} ${JSON.stringify(again.data)}; send new ${createdNew} ${msgJ.path} done ${done(r10.events)}; refused ${bad.status}/${badId.status}`);
+
+      // R632: without a server the old engine runs; with one, OpenRouter Work needs no jcode.command
+      setLocal('jcode', { command: '' });
+      const wo = ((await call('/api/providers', U)).data.providers || []).find((p) => p.id === tp.id) || {};
+      const pick = await call('/api/model', U, { session: sid, provider: tp.id, model: 'or/sonnet' });
+      const rNo = await within(chatP(U,'no jcode needed r632', { session: sid }), 30000) || { events: [] };
+      setLocal('jcode', undefined); setLocal('pgmServer', undefined);
+      const n4 = fk.reqs.length;
+      const rOld = await within(chatP(U,'old engine r632 ORCALL', { session: sid, fresh: true }), 30000) || { events: [] };
+      check('R632', 'without a Jcode PGM Server (no pgmServer.url) an OpenRouter session runs Jcode PGM through the hub\'s own relay exactly as before (the fake jcodepgm answers, the server is never called); with a server, OpenRouter Work is offered and runs even when jcode.command is empty (no workOff, picking it is 200, the message goes to the server)',
+        wo.workOff === undefined && pick.status === 200 && /server says: no jcode needed r632/.test(texts(rNo.events)) && done(rNo.events) === 0
+        && /jcode-answer model=anthropic\/claude-sonnet-4\.5 provider=openrouter/.test(texts(rOld.events)) && done(rOld.events) === 0 && srvReqs(n4).length === 0,
+        `workOff ${wo.workOff} pick ${pick.status}; with server "${texts(rNo.events).slice(0, 80)}" ${done(rNo.events)} err "${errs(rNo.events)}"; old "${texts(rOld.events).slice(0, 120)}" ${done(rOld.events)} err "${errs(rOld.events)}"; server calls ${srvReqs(n4).length}`);
+
+      // R633: the real jcodepgm server (VR_TEST_JCODEPGM) with the hub and the fake OpenRouter
+      const bin = process.env.VR_TEST_JCODEPGM || '';
+      if (!bin || !fs.existsSync(bin)) skip('R633', 'a real Jcode PGM Server with the hub: create + message, a server run streams its answer', bin ? 'VR_TEST_JCODEPGM points at nothing (' + bin + ')' : 'VR_TEST_JCODEPGM is not set (the path of a jcodepgm binary with stage 3)');
+      else {
+        // a free port, never 7783-7792 (the PGM products and dev's Jcode PGM Server live there)
+        let port = await freePort(PORT + 90); if (port >= 7783 && port <= 7792) port = await freePort(7800);
+        const stateDir = path.join(SCRATCH, 'r633-pgm-state'); fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+        const log = []; const ps = spawn(bin, ['server', '--listen', '127.0.0.1:' + port, '--hub', H, '--hub-secret-file', secretFile, '--state', stateDir, '--openrouter-base', `http://127.0.0.1:${OLLAMA_PORT}/orapi`, '--quiet-log'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        ps.stdout.on('data', (d) => log.push(String(d))); ps.stderr.on('data', (d) => log.push(String(d)));
+        try {
+          let up = false; for (let i = 0; i < 60 && !up; i++) { try { up = (await fetch(`http://127.0.0.1:${port}/pgm/info`)).status === 200; } catch {} if (!up) await sleep(250); }
+          setLocal('pgmServer', { url: `http://127.0.0.1:${port}`, stateFile: path.join(stateDir, 'server.json') });
+          const rsid = await newSession('R633 real server'); others.push(rsid);
+          const rr = await within(chatP(U,'real server r633 ORCALL', { session: rsid }), 120000) || { events: [] }, rs = await mine(rsid);
+          check('R633', 'a real Jcode PGM Server (jcodepgm server, VR_TEST_JCODEPGM) next to the hub: the hub creates the PGM session there and sends the message, the server runs it with the fake OpenRouter through the hub\'s routing, and its answer streams into the Work transcript (Done, bridge_done 0)',
+            up && /^ps-/.test((rs.pgm || {}).id || '') && /or says/.test(texts(rr.events)) && done(rr.events) === 0,
+            `up ${up}; pgm ${JSON.stringify(rs.pgm)}; text "${texts(rr.events).slice(0, 160)}" done ${done(rr.events)} err "${errs(rr.events)}" info "${info(rr.events).slice(0, 200)}"; log ${log.join('').slice(-300)}`);
+        } finally { try { ps.kill(); } catch {} try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch {} }
+      }
+    } finally {
+      if (hadLocal) fs.writeFileSync(localCfgFile, JSON.stringify(local0, null, 2)); else { try { fs.unlinkSync(localCfgFile); } catch {} }
+      for (const s of fk.subs.values()) for (const r of s) { try { r.end(); } catch {} }
+      srv.close(); if (srv.closeAllConnections) srv.closeAllConnections();
+      for (const s of others) await call('/api/work/sessions/delete', U, { id: s });
+      await call('/api/providers/remove', A, { id: tp.id });
     }
   }
   // R546 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control

@@ -96,6 +96,13 @@ pub async fn forward(hub: &Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -
         Err((st, why)) => no(st, &format!("The Jcode PGM Server could not be reached: {why}.")),
     }
 }
+/// The server for Work (stage 3, F.4): its address and the shared secret, when `pgmServer.url` is an address on this machine
+/// and the secret is there (read fresh, like the rest of the config).
+pub fn work_server(hub: &Hub) -> Option<(String, String)> {
+    let base = server_url(&conf(&hub.root))?.ok()?;
+    let secret = hub.mods.pgm.secret.clone();
+    (!secret.is_empty()).then_some((base, secret))
+}
 /// The request's head as a [`Req`] (no body): for the helpers that look at headers only.
 fn head_req(parts: &hyper::http::request::Parts, peer: SocketAddr) -> Req {
     Req { method: parts.method.clone(), path: parts.uri.path().to_string(), query: parts.uri.query().unwrap_or("").to_string(), headers: parts.headers.clone(), body: bytes::Bytes::new(), peer }

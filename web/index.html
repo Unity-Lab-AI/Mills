@@ -2985,7 +2985,7 @@ function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = nu
 let runOutcome = null; // set by handleEvent: { state, text } for the message being worked on
 // Several Work sessions (T-287): opening another one while this one runs leaves its run going on the hub (the session
 // list follows it in the background); workGen tells a reply loop that the screen now shows another session.
-let workGen = 0, workAbort = null, slotWait = false;
+let workGen = 0, workAbort = null, slotWait = false, pgmTarget = '';
 async function send(message) {
   const gen = workGen, ac = new AbortController(); workAbort = ac;
   const mine = bubble('me'); renderText(mine, message); record('me', message); scroll(true); // you sent it: to the bottom
@@ -2997,7 +2997,8 @@ async function send(message) {
   try {
     postLive();
     const context = watchContext(); // summaries of the shared sessions you are watching, for your own Claude
-    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh, ...(context ? { context } : {}) }), signal: ac.signal });
+    const target = pgmTarget; pgmTarget = ''; // /onserver (T-376 stage 3): a PGM session continues on the server
+    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh, ...(context ? { context } : {}), ...(target ? { target } : {}) }), signal: ac.signal });
     if (res.status === 429) { // over the session limit: the message stays queued in this session and goes when a slot frees
       const d = await res.json().catch(() => ({}));
       clearInterval(tick); hideThinking(); mine.remove();
@@ -3342,6 +3343,7 @@ const SLASH = [
   { cmd: '/clear', desc: 'Clear the conversation: Claude starts fresh on your next message (the session, its worktree and its files stay)', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/clear', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
   { cmd: '/new', desc: 'Same as /clear: a fresh conversation in this session', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/new', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
   { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
+  { cmd: '/onserver', desc: 'A PGM session (OpenRouter through the Jcode PGM Server) that jcode on your computer has: continue it on the server with this message (jcode hands its unfinished work over first)', args: '<message>', local: (a) => { if (!String(a || '').trim()) { sys('Say what the server should do: /onserver <message>', true); return; } if (busy) { sys('Wait for the reply going now, then try again.', true); return; } pgmTarget = 'server'; send(String(a).trim()); } },
   { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', choices: ['opus', 'sonnet', 'haiku', 'fable', 'default'], local: (a) => slashModel(a) },
   { cmd: '/hyperwork', desc: 'Send a prompt through a Hyper Workflow (it runs on the hub; type a name to see the list)', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/hw', desc: 'Short for /hyperwork', args: '<name> <prompt>', local: (a) => hyperwork(a) },
