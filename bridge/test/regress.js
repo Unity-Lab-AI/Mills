@@ -1101,7 +1101,7 @@ async function run() {
   check('R17', '[static] input never disabled while busy; Queue / Send now present', !/\$\('input'\)\.disabled\s*=/.test(html) && html.includes("'Queue'") && html.includes("'Send now'"));
   check('R18', '[static] page retries 502/503/504/530 and re-finds the hub address', /\[502, 503, 504, 530\]/.test(html) && /findBridge\(\)/.test(html));
   check('R19', '[static] login form has username + password; ?user= only pre-fills', hasIds && /get\('user'\)/.test(html) && !/mills-bridge-\$\{/.test(html));
-  check('R20', '[static] menu with Work/Chat, Admin hidden unless admin, ← Menu in three screens', (html.match(/data-back/g) || []).length >= 4 && /goAdmin'\)\.hidden = !me\.admin/.test(html));
+  check('R20', '[static] menu with Work/Chat, Site admin hidden unless a site permission allows it (T-379; the admin flag on an older hub), ← Menu in three screens', (html.match(/data-back/g) || []).length >= 4 && /goAdmin'\)\.hidden = !siteAdminAny\(\)/.test(html) && /function siteCan\(perm\) \{[^\n]*return !!\(me && me\.admin\)/.test(html));
 
   // Chat (E2E)
   const pairs = {};
@@ -4573,7 +4573,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
     const seen = {
       box: /<div class="setSection" id="healthBox" hidden>[\s\S]{0,1500}<div class="setSection" id="auditBox" hidden><b><svg class="ic" aria-hidden="true"><use href="#i-shield"\/><\/svg> Security log<\/b>/.test(page),
-      reads: /json\('\/api\/admin\/audit\?limit=300'/.test(page) && /Chain broken at entry \$\{v\.brokenAt\}/.test(page) && /loadHealth\(\);\n  loadAudit\(\);/.test(page),
+      reads: /json\('\/api\/admin\/audit\?limit=300'/.test(page) && /Chain broken at entry \$\{v\.brokenAt\}/.test(page) && /if \(siteCan\('VIEW_HEALTH'\)\) loadHealth\(\);[^\n]*\n  if \(siteCan\('VIEW_SECURITY_LOG'\)\) loadAudit\(\);/.test(page),
       ignored: /^bridge\/security\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     };
     if (!RUST_HUB) seen.jsHub = (await call('/api/admin/audit', A)).status !== 200 && (await call('/api/status')).status === 200;
@@ -6862,7 +6862,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const dflt = (await sum()).find((x) => !['t-admin', 't-user'].includes(x.username)) || {};
     const adminsBefore = (await sum()).filter((x) => x.admin).map((x) => x.username);
     const mkD = await call('/api/admin/set-admin', A, { username: dflt.username, admin: true });
-    const afterD = await sum(), localMode = fs.statSync(local).mode & 0o777, localSame = !hadLocal || fs.readFileSync(local).equals(before);
+    const afterD = await sum(), localMode = fs.existsSync(local) ? fs.statSync(local).mode & 0o777 : 0 /* the Rust hub refuses (T-379): no file is made */, localSame = !hadLocal || fs.readFileSync(local).equals(before);
     const leak = afterD.filter((x) => x.admin).map((x) => x.username).sort().join(',');
     await call('/api/admin/set-admin', A, { username: dflt.username, admin: false });
     if (hadLocal) fs.writeFileSync(local, before);
@@ -6880,7 +6880,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // R637-R640 (T-379): Site admin (site roles on the chat's ladder, custom roles, the site-wide settings) and AI Admin. The Rust
   // hub's: the JavaScript hub has none of these routes. Each check makes its own accounts / roles and takes them away again.
   if (RUST_HUB) await siteRolesCheck(); else for (const id of Object.keys(L637)) skip(id, L637[id], 'the Rust hub\'s: --rust-hub runs it');
-  check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
+  check('R88', '[static] page: code sandbox workers + the Unity switches (AI Admin, web/aiadmin.js since T-379)', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /\/api\/admin\/unity-tools/.test(fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8')));
   { // 5.46.1: the @ picker wrote Unity's account name (@claude), which calls nobody (R36), so a picked or Tab / Enter-completed mention never reached her
     const pickerUsesHandle = /b\.dataset\.user = h;/.test(html) && /insertMention\(h\)/.test(html) && !/insertMention\(m\.username\)/.test(html) && !/b\.dataset\.user = m\.username;/.test(html);
     const handleFn = /const mentionHandleOf = \(m\) => m\.agent \? \(m\.display \|\| 'unity'\)\.toLowerCase\(\)\.replace\(\/\\s\+\/g, ''\) : m\.username;/.test(html);
@@ -8467,14 +8467,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     // R599: the page: the provider form for an admin (key field and the pairs editor), the Work picker's two groups, the budget box
     const pageOr = await (await fetch(H + '/')).text();
     const blkPick = pageOr.slice(pageOr.indexOf('function showModels(d)'), pageOr.indexOf('// The project picker (Work header)'));
-    const blkOr = pageOr.slice(pageOr.indexOf('function pairsEditor('), pageOr.indexOf('// ── Settings → My AIs: providers'));
+    const blkOr = pageOr.slice(pageOr.indexOf('function pairsEditor('), pageOr.indexOf('// ── AI Admin → My AIs: providers'));
+    const aiAdm = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'); // T-379: the team's OpenRouter is AI Admin → Global
     const blkProv = pageOr.slice(pageOr.indexOf('async function renderProviders()'), pageOr.indexOf('function sysSettings('));
     const orIcons = (blkOr + blkProv).match(/href="#(i-[a-z-]+)"/g) || [], symbols = pageOr.match(/<symbol id="(i-[a-z-]+)"/g) || [];
-    check('R599', 'the page: Settings → My AIs offers an admin the OpenRouter kind (the key field, a pairs editor with id, label, OpenRouter model, provider order and allow-fallbacks per row, add and remove a pair; the owner can edit the pairs and replace the key later, the key is never filled back in); the Work AI picker shows two kinds of group, "Claude (<host>)" and "OpenRouter" (a pair shows its label, a provider the server cannot run is greyed with its reason); Settings has an OpenRouter budget box (the month\'s spend against the cap with a meter, the opt-in fallback switch with its pair, and for admins everyone\'s month with a cap field per person); only SVG icons from the page\'s own set, no emoji',
-      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /\['openrouter', 'OpenRouter \(the team key/.test(blkProv) && /me\.admin \? \[\['openrouter'/.test(blkProv) && /body\.pairs = pe\.get\(\)/.test(blkProv) && /pairsEditor\(p\.pairs/.test(blkProv) && /body\.apiKey = nk\.value/.test(blkProv) && !/nk\.value = p/.test(blkProv)
+    check('R599', 'the page: AI Admin → Global → Team OpenRouter (Settings → My AIs before T-379) offers the OpenRouter kind (the key field, a pairs editor with id, label, OpenRouter model, provider order and allow-fallbacks per row, add and remove a pair; the owner can edit the pairs and replace the key later, the key is never filled back in); the Work AI picker shows two kinds of group, "Claude (<host>)" and "OpenRouter" (a pair shows its label, a provider the server cannot run is greyed with its reason); Settings has an OpenRouter budget box (the month\'s spend against the cap with a meter, the opt-in fallback switch with its pair, and for admins everyone\'s month with a cap field per person); only SVG icons from the page\'s own set, no emoji',
+      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /id="agOrBox"/.test(pageOr) && /kind: 'openrouter', label: label\.value, apiKey: key\.value, pairs: pe\.get\(\)/.test(aiAdm) && /orProviderEditor\(p, renderTeamOr\)/.test(aiAdm) && /pairsEditor\(p\.pairs/.test(blkOr) && /body\.apiKey = nk\.value/.test(blkOr) && !/nk\.value = p/.test(blkOr) && !/'openrouter', 'OpenRouter/.test(blkProv)
       && /allow fallbacks/.test(blkOr) && /OpenRouter model, e\.g\./.test(blkOr) && /providers in order/.test(blkOr) && /Add a pair/.test(blkOr)
       && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
-      && /\/api\/openrouter\/budget'\)/.test(blkOr) && /\/api\/openrouter\/fallback/.test(blkOr) && /\/api\/openrouter\/budget\/all/.test(blkOr) && /\/api\/openrouter\/budget\/cap/.test(blkOr) && /Use OpenRouter when Claude is unavailable/.test(blkOr) && /'orMeter'/.test(blkOr)
+      && /\/api\/openrouter\/budget'\)/.test(blkOr) && /\/api\/openrouter\/fallback/.test(blkOr) && /\/api\/openrouter\/budget\/all/.test(aiAdm) && /\/api\/openrouter\/budget\/cap/.test(aiAdm) && /Use OpenRouter when Claude is unavailable/.test(blkOr) && /'orMeter'/.test(blkOr)
       && orIcons.length >= 3 && orIcons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blkOr),
       `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
     await call('/api/providers/remove', A, { id: pv.id });
@@ -8782,13 +8783,14 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
 
     // R612: the page: the key box in Settings → OpenRouter budget, the admin switch, the picker
     const page = await (await fetch(H + '/')).text();
-    const blk = page.slice(page.indexOf('async function renderOrBudget()'), page.indexOf('// ── Settings → My AIs: providers'));
+    const blk = page.slice(page.indexOf('async function renderOrBudget()'), page.indexOf('// ── AI Admin → My AIs: providers'));
+    const aiAdm = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'); // T-379: the personal-keys switch is in AI Admin → Global
     const blkP = page.slice(page.indexOf('async function renderProviders()'), page.indexOf('function sysSettings('));
     const blkPick = page.slice(page.indexOf('function showModels(d)'), page.indexOf('// The project picker (Work header)'));
     const icons = blk.match(/href="#(i-[a-z-]+)"/g) || [], symbols = page.match(/<symbol id="(i-[a-z-]+)"/g) || [];
-    check('R612', 'the page: Settings → OpenRouter budget has "My OpenRouter key" (a password field to paste or replace it, "Stored: …abcd" from the last four characters the hub sends, Test and a Remove with an icon, the key never filled back in), "My own models (optional)" with the same pairs editor, a line for what the person spent on their own key beside the team key\'s, and for admins the "Allow personal OpenRouter keys" switch; Settings → My AIs lists "my OpenRouter" without share, remove or edit buttons; the Work picker names its group "OpenRouter · my OpenRouter"; icons are SVG symbols that exist and no emoji',
-      /My OpenRouter key/.test(blk) && /ki\.type = 'password'/.test(blk) && /'Stored: ' \+ mykey\.last4/.test(blk) && !/ki\.value = mykey/.test(blk) && /\/api\/openrouter\/mykey'/.test(blk) && /\/api\/openrouter\/mykey\/remove/.test(blk) && /\/api\/openrouter\/mykey\/test/.test(blk) && /\/api\/openrouter\/personal/.test(blk)
-      && /My own models \(optional\)/.test(blk) && /pairsEditor\(mykey\.pairs/.test(blk) && /Your own key: /.test(blk) && /team key /.test(blk) && /Allow personal OpenRouter keys/.test(blk) && /if \(me\.admin\) \{ \/\/ the admin's switch/.test(blk)
+    check('R612', 'the page: AI Admin → My OpenRouter (Settings → OpenRouter budget before T-379) has "My OpenRouter key" (a password field to paste or replace it, "Stored: …abcd" from the last four characters the hub sends, Test and a Remove with an icon, the key never filled back in), "My own models (optional)" with the same pairs editor, a line for what the person spent on their own key beside the team key\'s, and for admins the "Allow personal OpenRouter keys" switch; Settings → My AIs lists "my OpenRouter" without share, remove or edit buttons; the Work picker names its group "OpenRouter · my OpenRouter"; icons are SVG symbols that exist and no emoji',
+      /My OpenRouter key/.test(blk) && /ki\.type = 'password'/.test(blk) && /'Stored: ' \+ mykey\.last4/.test(blk) && !/ki\.value = mykey/.test(blk) && /\/api\/openrouter\/mykey'/.test(blk) && /\/api\/openrouter\/mykey\/remove/.test(blk) && /\/api\/openrouter\/mykey\/test/.test(blk) && /\/api\/openrouter\/personal/.test(aiAdm)
+      && /My own models \(optional\)/.test(blk) && /pairsEditor\(mykey\.pairs/.test(blk) && /Your own key: /.test(blk) && /team key /.test(blk) && /Allow personal OpenRouter keys/.test(aiAdm) && /Which key pays/.test(blk)
       && /owner === me\.username && !p\.personal/.test(blkP) && /p\.personal/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick)
       && icons.length >= 3 && icons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blk + blkP),
       `served ${page.length}b; icons ${icons.join(',')}`);
@@ -9207,6 +9209,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       .concat(['srcBox', 'provBox', 'orBox', 'hostBox'].filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !aiBox.includes('id="' + id + '"')));
     const groups = [...box.matchAll(/<section class="setGroup"[^>]*>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
     seen.groups = groups.length; seen.headless = groups.filter((g) => !/^\s*<h3>[^<]+<\/h3><p class="setHint">[\s\S]+?<\/p>/.test(g)).length;
+    seen.aiGroups = (aiBox.split('id="aiPersonal"')[1] || '').match(/<h3>[^<]+<\/h3>/g)?.map((h) => h.slice(4, -5)).join(','); // T-379: the four AI groups moved to AI Admin → Yours
     const pane = (n) => (box.match(new RegExp('<div data-setpane="' + n + '"[^>]*>([\\s\\S]*?)\\n     </div>')) || [])[1] || '';
     const strip = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
     const served = (n) => [...pane(n).matchAll(/<section class="setGroup"[^>]*>\s*<h3>([^<]+)<\/h3><p class="setHint">([\s\S]*?)<\/p>([\s\S]*?)<\/section>/g)].map((m) => ({ title: m[1], text: m[1] + ' ' + strip(m[2]), rows: [strip(m[3])] }));
@@ -9246,7 +9249,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
     seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
-    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Appearance,Desktop Unity' && seen.workGroups === 'Chat and Work,My projects,When the AI asks' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 13 && !seen.headless && seen.aiGroups === 'AI source,My AIs,My OpenRouter,My AI hosts' && seen.appGroups === 'Appearance,Desktop Unity' && seen.workGroups === 'Chat and Work,My projects,When the AI asks' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
       && seen.connGroups === 'API access,Signed-in devices,My machines,My Forgejo'
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
       && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
