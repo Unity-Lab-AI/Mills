@@ -191,6 +191,12 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .orData.zdr { background: color-mix(in srgb, var(--good) 18%, transparent); }
 .orData.safety { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .orData.train { background: color-mix(in srgb, var(--bad) 18%, transparent); }
+/* T-385: a provider's deal (the price before it struck through), its service tier, and the "More" row under it */
+.orDeal { font-size: .72rem; font-weight: 600; padding: .05rem .4rem; border-radius: 999px; white-space: nowrap; background: color-mix(in srgb, var(--good) 22%, transparent); border: 1px solid color-mix(in srgb, var(--good) 45%, var(--hairline)); }
+.orBefore { color: var(--muted); font-size: .8em; }
+.orTier { font-size: .7rem; padding: .05rem .4rem; border-radius: 999px; border: 1px solid var(--hairline); color: var(--muted); white-space: nowrap; }
+.orMoreRow > td { background: var(--surface-sunk); font-size: .85rem; line-height: 1.5; }
+.orMoreRow b { font-weight: 600; }
 .orUseBar { font-size: .78rem; color: var(--muted); padding: .2rem .8rem; border-bottom: 1px solid var(--hairline); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orUseBar[hidden] { display: none; }
 .orUseBar.over { color: var(--bad); }

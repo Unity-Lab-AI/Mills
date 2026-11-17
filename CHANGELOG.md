@@ -7,6 +7,43 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.73.0 — 2026-11-17
+
+MINOR: **AI Admin's OpenRouter picker shows everything OpenRouter says about each provider of a model: its deals, every
+price, its service tier, its uptime over time and who runs it; the model search can be only the deals or only the free
+models** (T-385; Sponge: "we will need all of that information").
+
+- **Deals.** OpenRouter puts a provider's deal in `pricing.discount` (113 of 1,443 endpoints had one on 2026-11-17, up to
+  70 % off), already taken off the listed price. The picker shows the price with the price before the deal struck through
+  (price / (1 − discount)) and a "41% off" badge, sorts by the biggest deal, and filters to "Deals only".
+- **Deals only, across models.** The model list never says a deal (only a model's endpoints do), so the hub keeps a deals
+  index: in the background it asks every model's providers, four at a time, keeps each answer in the catalogue's cache
+  (provider lists then open at once) and holds each model's biggest deal for 6 hours. The search's "Deals only" lists the
+  models some provider gives a deal on ("up to 41% off"), and says it is still looking them up the first time. "Free
+  only" lists the free models (`:free`).
+- **Every price:** cache read and write, and in "More" the tiered prices (OpenRouter's `overrides`: dearer from 200k
+  prompt tokens, say, or **by time of day**: Tencent is cheaper from 16:00 to midnight UTC, an off-peak deal; OpenRouter
+  sends `utc_start` / `utc_end` as hhmm) and every other price (reasoning, audio, image tokens, cache write for an hour per million; per
+  input image, per web search, per request). Prices under $0.10 per million show three decimals.
+- **Service tier** (flex / priority / ultrafast; a provider may list the same model on several) as a badge, with a
+  filter; the entry's name says it.
+- **Uptime** over the last 5 minutes, 30 minutes and a day; limits (context, prompt at most, out at most); the
+  parameters the endpoint takes.
+- **Who runs it**, from OpenRouter's provider list (`GET /providers`, a day in the cache): headquarters, the countries
+  its datacenters are in, links to its privacy policy, terms and status page (only http(s) links). The provider filter
+  matches countries and tiers too.
+- `GET /api/openrouter/catalog/models` takes `deals=1` and `free=1` and answers each model's `cacheReadPerM`,
+  `cacheWritePerM`, `more`, `tiers`, `free`, `bestDeal` and the index's state (`deals`); `…/endpoints` adds `discount`,
+  `inPerMBefore`, `outPerMBefore`, `cacheWritePerM`, `more`, `tiers`, `free`, `serviceTier`, `uptime5m`, `uptime1d`,
+  `maxPrompt`, `params`, `toolChoice`, `implicitCaching`, `latency`, `throughput` (the percentiles) and `providerInfo`.
+  All add-only.
+- Checks: **R652** (the hub against the fake OpenRouter: the deal and the price before it, the tier, tiered and other
+  prices, uptime, limits, who runs it, a `javascript:` policy link never shown, "deals only" once the index is built,
+  "free only", and the page's own words for all of it, run from aiadmin.js); unit tests
+  `a_deal_shows_with_the_price_before_it_and_every_other_fact_an_endpoint_has` and
+  `the_model_list_can_be_only_the_deals_or_only_the_free_ones`.
+- Modules: web/aiadmin.js 1.3.0, web/polish.css 1.3.1; pgm-ai-internal's openrouter_catalog.rs.
+
 ## 5.72.0 — 2026-11-17
 
 MINOR: **OpenRouter keys are named, anyone adds them, each a person's own or the team's, each with optional limits; and
