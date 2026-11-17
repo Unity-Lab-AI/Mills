@@ -11,5 +11,5 @@ pub use pgm_ai_internal::openai::*;
 fn d(hub: &Arc<Hub>) -> Arc<dyn AiHub> { hub.clone() }
 pub async fn v1(hub: &Arc<Hub>, r: &Req) -> Routed { Routed::Answer(pgm_ai_internal::openai::v1(&d(hub), r).await) }
 pub fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> { pgm_ai_internal::openai::route(&d(hub), r, a).map(Routed::Answer) }
-/// AI Admin → Team OpenRouter's routes that ask OpenRouter itself (T-381): the model catalogue.
-pub async fn openrouter_async(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> { pgm_ai_internal::openrouter_catalog::route(&d(hub), r, a).await.map(Routed::Answer) }
+/// AI Admin → Team OpenRouter's routes that ask OpenRouter itself (T-381): the model catalogue, the key's limits and what is left on it.
+pub async fn openrouter_async(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> { let h = d(hub); match pgm_ai_internal::openrouter_catalog::route(&h, r, a).await { Some(x) => Some(Routed::Answer(x)), None => pgm_ai_internal::openrouter_team::route(&h, r, a).await.map(Routed::Answer) } }

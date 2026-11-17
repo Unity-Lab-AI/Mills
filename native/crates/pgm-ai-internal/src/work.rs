@@ -1099,7 +1099,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let hprov = or_plan.as_ref().map(|p| p.prov.clone()).unwrap_or_else(|| prov.clone());
     let mut or_tok: Option<String> = None;
     if let Some(pl) = &or_plan {
-        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed);
+        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed, &sx.sid);
         relay_env = crate::openrouter::relay_env(hub.cfg().port, &tok); relay_env.extend(pl.env.iter().cloned());
         or_tok = Some(tok);
         if let Some(l) = &fb_line { w.emit(&sx.key, json!({ "type": "bridge_info", "text": l })); }

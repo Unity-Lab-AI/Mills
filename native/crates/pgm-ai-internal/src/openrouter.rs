@@ -207,7 +207,9 @@ pub async fn test_mykey(hub: &Arc<dyn AiHub>, u: &str) -> Resp {
 /// The plain refusal when the person is at or over the team cap, for a provider the team pays for; None for a person's own.
 pub fn guard(hub: &dyn AiHub, u: &str, p: &Value) -> Option<String> { if is_personal(p) { None } else { refusal(hub, u) } }
 /// An answer's cost: the team key's counts against the month budget, a person's own in their `mine` counter.
-pub fn note_for(hub: &dyn AiHub, u: &str, personal: bool, usage: &Value) { if personal { note_mine(hub, u, usage) } else { note_cost(hub, u, usage) } }
+pub fn note_for(hub: &dyn AiHub, u: &str, personal: bool, usage: &Value) { note_for_in(hub, u, personal, usage, "") }
+/// The same, for an answer made in a Work session (the team key's ledger keeps the session, for its spend in Work; T-381).
+pub fn note_for_in(hub: &dyn AiHub, u: &str, personal: bool, usage: &Value, session: &str) { if personal { note_mine(hub, u, usage) } else { note_cost_in(hub, u, usage, session) } }
 fn cost_of(usage: &Value) -> f64 { usage["cost"].as_f64().or_else(|| usage["cost"].as_str().and_then(|t| t.trim().parse().ok())).filter(|c: &f64| c.is_finite() && *c > 0.0).unwrap_or(0.0) }
 /// Adds one answer of the person's own key to their month's `mine` counter (information only: no cap applies).
 pub fn note_mine(hub: &dyn AiHub, u: &str, usage: &Value) {
@@ -241,13 +243,17 @@ pub fn cap_of(hub: &dyn AiHub, u: &str) -> (f64, bool) { match rec(hub, u)["capU
 pub fn spent_of(hub: &dyn AiHub, u: &str) -> (f64, u64) { let r = rec(hub, u); let m = &r["months"][month()]; (m["usd"].as_f64().unwrap_or(0.0), m["calls"].as_u64().unwrap_or(0)) }
 /// The plain refusal when the person is at or over this month's cap (None = they may go on).
 pub fn refusal(hub: &dyn AiHub, u: &str) -> Option<String> {
+    if let Some(m) = crate::openrouter_team::refusal(hub) { return Some(m); } // the team key's own limits first: they stop everyone (T-381)
     let (spent, _) = spent_of(hub, u); let (cap, _) = cap_of(hub, u);
     (spent >= cap).then(|| format!("Your OpenRouter budget for {} is used up: {:.2} of {:.2} USD. It resets on {} (00:00 UTC); an admin can raise your cap in AI Admin → Team OpenRouter.", month_name(&month()), spent, cap, resets_on()))
 }
 /// Adds one answer's cost (`usage.cost`, OpenRouter's own number in USD) to the person's month.
-pub fn note_cost(hub: &dyn AiHub, u: &str, usage: &Value) {
+pub fn note_cost(hub: &dyn AiHub, u: &str, usage: &Value) { note_cost_in(hub, u, usage, "") }
+/// The same, and the team key's ledger (its 5 h / 7 d / month limits and a session's spend; openrouter_team.rs).
+pub fn note_cost_in(hub: &dyn AiHub, u: &str, usage: &Value, session: &str) {
     if !pgm_identity_internal::valid_username(u) || !usage.is_object() { return; }
     let cost = usage["cost"].as_f64().or_else(|| usage["cost"].as_str().and_then(|t| t.trim().parse().ok())).filter(|c: &f64| c.is_finite() && *c > 0.0).unwrap_or(0.0);
+    crate::openrouter_team::record(hub, u, cost, session);
     let m = month();
     edit(hub, u, |r| {
         let e = &mut r["months"][m.as_str()];
@@ -343,20 +349,20 @@ pub fn work_plan(hub: &dyn AiHub, u: &str, p: &Value, state_model: &str) -> Resu
     let prov = json!({ "kind": crate::jcode::KIND, "label": label, "command": cmd, "args": args, "provider": "openrouter", "models": [model] });
     Ok(WorkPlan { prov, model, routed, env, label })
 }
-struct RelayEnt { user: String, prov: String, routed: String, exp: u64 }
+struct RelayEnt { user: String, prov: String, routed: String, session: String, exp: u64 }
 static RELAYS: LazyLock<Mutex<HashMap<String, RelayEnt>>> = LazyLock::new(Mutex::default);
 /// A run's own relay token (for its life; 12 hours at most).
-pub fn relay_token(user: &str, prov: &str, routed: &str) -> String {
+pub fn relay_token(user: &str, prov: &str, routed: &str, session: &str) -> String {
     let t = pgm_core_internal::crypto::random_hex(24); let now = now_ms();
     let mut m = RELAYS.lock().unwrap_or_else(|e| e.into_inner());
     m.retain(|_, e| e.exp > now);
-    m.insert(t.clone(), RelayEnt { user: user.into(), prov: prov.into(), routed: routed.into(), exp: now + 12 * 3_600_000 });
+    m.insert(t.clone(), RelayEnt { user: user.into(), prov: prov.into(), routed: routed.into(), session: session.into(), exp: now + 12 * 3_600_000 });
     t
 }
 pub fn relay_forget(t: &str) { RELAYS.lock().unwrap_or_else(|e| e.into_inner()).remove(t); }
 /// The run's jcode reaches OpenRouter (or the provider) through this hub: its API base.
 pub fn relay_env(port: u16, token: &str) -> Vec<(String, String)> { vec![("JCODE_OPENROUTER_API_BASE".into(), format!("http://127.0.0.1:{port}{RELAY}{token}"))] }
-fn work_key() -> crate::openai::KeyCtx { crate::openai::KeyCtx { id: "work-run".into(), label: "Work run".into(), named: true, ..Default::default() } }
+fn work_key(session: &str) -> crate::openai::KeyCtx { crate::openai::KeyCtx { id: "work-run".into(), label: "Work run".into(), named: true, session: session.into(), ..Default::default() } }
 /// `/or-relay/<token>/chat/completions` (and `/models`): a Work run's jcode reaching its provider, from this machine only.
 /// The call goes on through the gateway's raw chat passthrough as the run's person, to the run's provider and model
 /// (whatever model the call names), so the key, the routing, the budget and the usage are the hub's.
@@ -365,8 +371,8 @@ pub async fn relay(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
     let (tok, sub) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let behind = hub.cfg().get("behindProxy") == Some(&json!(true));
     let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
-    let ent = if tok.len() == 48 && r.peer.ip().is_loopback() && !outside { RELAYS.lock().unwrap_or_else(|e| e.into_inner()).get(tok).filter(|e| e.exp > now_ms()).map(|e| (e.user.clone(), e.prov.clone(), e.routed.clone())) } else { None };
-    let Some((user, pid, routed)) = ent else { return crate::openai::oa_error(401, "Unknown relay.", "authentication_error") };
+    let ent = if tok.len() == 48 && r.peer.ip().is_loopback() && !outside { RELAYS.lock().unwrap_or_else(|e| e.into_inner()).get(tok).filter(|e| e.exp > now_ms()).map(|e| (e.user.clone(), e.prov.clone(), e.routed.clone(), e.session.clone())) } else { None };
+    let Some((user, pid, routed, session)) = ent else { return crate::openai::oa_error(401, "Unknown relay.", "authentication_error") };
     let Some(p) = hub.work().provider_get(hub.ai(), &pid, &user) else { return crate::openai::oa_error(503, "The provider of this run is gone.", "service_unavailable") };
     let real = if p["kind"] == json!(KIND) { pair(&p, &routed).map(|x| s(&x, "model")).unwrap_or_else(|| routed.clone()) } else { routed.clone() };
     match (r.method.as_str(), sub) {
@@ -375,7 +381,7 @@ pub async fn relay(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
             let Ok(mut b) = serde_json::from_slice::<Value>(&r.body) else { return crate::openai::oa_error(400, "Body is not JSON.", "invalid_request_error") };
             if !b.is_object() { return crate::openai::oa_error(400, "Body is not a JSON object.", "invalid_request_error"); }
             b["model"] = json!(routed);
-            crate::gateway::chat_raw(hub, &user, &work_key(), &p, &routed, b).await
+            crate::gateway::chat_raw(hub, &user, &work_key(&session), &p, &routed, b).await
         }
         _ => crate::openai::oa_error(404, "This relay serves POST /chat/completions and GET /models.", "not_found_error"),
     }
