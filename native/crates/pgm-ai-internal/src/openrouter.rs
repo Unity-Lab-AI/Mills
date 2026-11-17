@@ -130,6 +130,52 @@ pub fn step_name(st: &Value) -> String { let l = s(st, "label"); if !l.is_empty(
 pub fn may_switch(status: u16) -> bool { matches!(status, 0 | 404 | 408 | 429 | 500 | 502 | 503 | 504 | 520..=529) }
 /// The words of a switch: "model 1: deepseek via stepfun unavailable (503: …), switching to model 2: deepseek via cloudflare".
 pub fn switch_line(from: usize, a: &Value, why: &str, b: &Value) -> String { format!("model {}: {} unavailable ({why}), switching to model {}: {}", from + 1, step_name(a), from + 2, step_name(b)) }
+/// One OpenRouter answer the chain settled on: the response, and what was read of its stream to see that it had started
+/// (to be sent on before the rest; empty when nothing was read).
+pub struct Chained { pub resp: reqwest::Response, pub head: bytes::Bytes }
+/// A request to OpenRouter along its entry's chain (T-381): step 1, then each fallback while a step fails before it answers:
+/// a status [`may_switch`] allows, not reached, or, with `peek` (a stream), an error as the stream's first event (OpenRouter
+/// sends a failure after the 200 that way). Returns the answer it settled on (or why none came) and the switch lines, in
+/// order. An entry without a chain is one plain request. `headers` go along (the content type is OpenRouter's own).
+pub async fn send_chain(hub: &dyn AiHub, p: &Value, path: &str, body: &[u8], headers: &[(String, String)], peek: bool) -> (Result<Chained, String>, Vec<String>) {
+    let bv: Value = serde_json::from_slice(body).unwrap_or_else(|_| json!({}));
+    let chain = pair(p, &s(&bv, "model")).map(|pr| steps_of(&pr)).filter(|st| st.len() > 1).unwrap_or_default();
+    let n = chain.len().max(1);
+    let (mut lines, mut step) = (vec![], 0usize);
+    loop {
+        let mut b2 = bv.clone(); if !chain.is_empty() && b2.is_object() { b2["_vr_step"] = json!(step); }
+        let mut rb = post(hub, p, path, &serde_json::to_vec(&b2).unwrap_or_default());
+        for (k, v) in headers { if !k.eq_ignore_ascii_case("content-type") { rb = rb.header(k.as_str(), v.as_str()); } }
+        let more = step + 1 < n;
+        let why = match rb.send().await {
+            Err(e) => { if !more { return (Err(e.to_string()), lines); } why_of(0, b"") }
+            Ok(r) => {
+                let st = r.status().as_u16();
+                if !(200..300).contains(&st) {
+                    if !(more && may_switch(st)) { return (Ok(Chained { resp: r, head: bytes::Bytes::new() }), lines); }
+                    let t = r.bytes().await.unwrap_or_default(); why_of(st, &t)
+                } else if peek && more {
+                    let mut r = r; let (mut head, mut first) = (Vec::new(), None);
+                    while first.is_none() && head.len() < 65_536 { match r.chunk().await { Ok(Some(c)) => { head.extend_from_slice(&c); first = first_event(&head); } _ => break } }
+                    match first.filter(|e| e["error"].is_object()) {
+                        Some(e) => { let code = e["error"]["code"].as_u64().map(|c| c as u16).unwrap_or(502); if !may_switch(code) { return (Ok(Chained { resp: r, head: bytes::Bytes::from(head) }), lines); } why_of(code, &serde_json::to_vec(&e).unwrap_or_default()) }
+                        None => return (Ok(Chained { resp: r, head: bytes::Bytes::from(head) }), lines),
+                    }
+                } else { return (Ok(Chained { resp: r, head: bytes::Bytes::new() }), lines); }
+            }
+        };
+        lines.push(switch_line(step, &chain[step], &why, &chain[step + 1]));
+        step += 1;
+    }
+}
+/// The first data event of an SSE stream read so far, once its line is complete (comments and blank lines skipped; [DONE] or
+/// a line that is not JSON is an empty object).
+pub fn first_event(buf: &[u8]) -> Option<Value> {
+    let t = String::from_utf8_lossy(buf);
+    let mut parts: Vec<&str> = t.split('\n').collect(); parts.pop(); // the last piece is not a whole line yet
+    for line in parts { let l = line.trim_end_matches('\r'); if let Some(d) = l.strip_prefix("data:") { let d = d.trim(); return Some(if d == "[DONE]" { json!({}) } else { serde_json::from_str(d).unwrap_or_else(|_| json!({})) }); } }
+    None
+}
 /// A failed step's reason in a few words: OpenRouter's error message, else the status.
 pub fn why_of(status: u16, body: &[u8]) -> String {
     let j: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -574,6 +620,14 @@ mod tests {
         for bad in [json!([{ "id": "x", "steps": [{ "model": "", "provider": "a" }] }]), json!([{ "id": "x", "steps": [{ "model": "m/n", "provider": "a b" }] }]), json!([{ "id": "x", "steps": (0..9).map(|_| json!({ "model": "m/n" })).collect::<Vec<_>>() }])] {
             assert!(clean_pairs(&bad).is_err(), "{bad}");
         }
+    }
+    #[test]
+    fn a_streams_first_event_is_found_once_its_line_is_whole() {
+        assert_eq!(first_event(b": OPENROUTER PROCESSING\n\n"), None);
+        assert_eq!(first_event(b": OPENROUTER PROCESSING\n\ndata: {\"error\":{\"code\":503"), None, "not a whole line yet");
+        assert_eq!(first_event(b": x\n\ndata: {\"error\":{\"code\":503,\"message\":\"down\"}}\n"), Some(json!({ "error": { "code": 503, "message": "down" } })));
+        assert_eq!(first_event(b"data: {\"choices\":[]}\r\n"), Some(json!({ "choices": [] })));
+        assert_eq!(first_event(b"data: [DONE]\n"), Some(json!({})));
     }
     #[test]
     fn a_step_gives_way_only_when_its_endpoint_is_missing_busy_or_down() {

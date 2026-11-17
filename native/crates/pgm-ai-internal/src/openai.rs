@@ -318,7 +318,7 @@ async fn complete_inner(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
             let (status, ct, src) = if kind == "openai" || kind == "openrouter" {
                 let mut rb = if kind == "openrouter" { crate::openrouter::post(&**hub, &p, "/chat/completions", body.to_string().as_bytes()) } else { self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string()) };
                 if kind == "openai" && !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
-                let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
+                let r = if kind == "openrouter" { let (x, lines) = crate::openrouter::send_chain(&**hub, &p, "/chat/completions", body.to_string().as_bytes(), &[], false).await; if !lines.is_empty() { eprintln!("[vr-hub] openrouter for {user}: {}", lines.join(" | ")); } x.map(|c| c.resp) } else { rb.send().await.map_err(|e| e.to_string()) }.map_err(|e| err(502, e))?; // T-381: an entry's chain
                 (r.status().as_u16(), r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string(), Src::Http(r))
             } else {
                 let r = ai.provider_fetch_for(user, "", &host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;
@@ -435,7 +435,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
             let (status, src) = if kind == "openai" || kind == "openrouter" {
                 let mut rb = if kind == "openrouter" { crate::openrouter::post(&**hub, &p, "/chat/completions", body.to_string().as_bytes()) } else { self_http(&**hub).post(format!("{}/chat/completions", s(&p, "baseUrl"))).header("content-type", "application/json").body(body.to_string()) };
                 if kind == "openai" && !s(&p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(&p, "apiKey"))); }
-                let r = rb.send().await.map_err(|e| err(502, e.to_string()))?;
+                let r = if kind == "openrouter" { let (x, lines) = crate::openrouter::send_chain(&**hub, &p, "/chat/completions", body.to_string().as_bytes(), &[], false).await; if !lines.is_empty() { eprintln!("[vr-hub] openrouter for {user}: {}", lines.join(" | ")); } x.map(|c| c.resp) } else { rb.send().await.map_err(|e| e.to_string()) }.map_err(|e| err(502, e))?; // T-381: an entry's chain
                 (r.status().as_u16(), Src::Http(r))
             } else {
                 let r = ai.provider_fetch_for(user, "", &host, &pid, "/chat/completions", "POST", vec![("content-type".into(), "application/json".into())], body.to_string().into_bytes()).await.map_err(|e| err(e.status, e.msg))?;

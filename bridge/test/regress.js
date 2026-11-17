@@ -76,7 +76,7 @@ const L614 = { // T-375: /transfer in Work (a handoff, then a fresh session that
 };
 const L647 = { // T-381: AI Admin → Team OpenRouter (r647Check)
   R647: 'AI Admin\'s model picker reads OpenRouter\'s catalogue with the team key: the models matching every word typed (price per million in and out), one model\'s providers fastest first with price, speed, first-token time and their data policy (no retention, retains without training, retains and may train, from OpenRouter\'s ZDR list); only the Manage AI permission may use it, and an unknown or malformed model is a plain error',
-  R648: 'a team entry is a named chain: when model 1\'s provider is down before answering, the hub sends the same request to model 2 (each step its own model on exactly its provider endpoint) and says so in words (model 1: … unavailable (503: …), switching to model 2: …); a credits refusal (402) is never passed on to the next model',
+  R648: 'a team entry is a named chain: when model 1\'s provider is down before answering, the hub sends the same request to model 2 (each step its own model on exactly its provider endpoint) and says so in words (model 1: … unavailable (503: …), switching to model 2: …), on every way in (OpenAI chat, the Anthropic-shaped /v1/messages) and also when a stream fails as its first event; a credits refusal (402) is never passed on to the next model',
   R649: 'the team key has limits for everyone together (5 hours and 7 days rolling, the month; 10 / 20 / 20 dollars by default) that only Manage AI changes and never above the key\'s own limit on OpenRouter; spend reaching one is refused in the caller\'s API shape naming the window and when it frees up; everyone sees the windows, the key\'s limit and, with a management key set, the account\'s credits left',
   R650: 'the page: AI Admin searches models and picks a provider by price, speed and data policy to add a fallback or another fallback; Work\'s picker names the team\'s entries This hub · OpenRouter, and Work shows the team OpenRouter line only while the session on screen runs on the team\'s OpenRouter',
 };
@@ -256,6 +256,7 @@ function fakeOpenRouter(req, res, body) {
   if (![R591_KEY, R606_KEY, R606_KEY_U].some((k) => h.authorization === 'Bearer ' + k)) { fakeOr.refused.push(h.authorization); res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } })); }
   fakeOr.calls.push({ headers: h, body: b, url: req.url });
   if (b.model === 'dead/r647') { res.writeHead(503, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 503, message: 'No instances available' } })); } // R648: model 1 is down
+  if (b.model === 'midstream/r647') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(': OPENROUTER PROCESSING\n\ndata: ' + JSON.stringify({ error: { code: 503, message: 'Provider went away' } }) + '\n\ndata: [DONE]\n\n'); } // R648: a stream that fails as its first event
   if (b.model === 'broke/r647') { res.writeHead(402, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 402, message: 'Insufficient credits', metadata: { limit_source: 'openrouter_credits' } } })); } // R648: credits never switch
   if (body.includes('OR-ERR')) { res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '3' }); return res.end(JSON.stringify({ error: { message: 'Rate limit reached for the pair (r591)', code: 429 } })); }
   const lm = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
@@ -8891,7 +8892,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       check('R647', L647.R647, okCatalog, JSON.stringify(seen));
       // R648: an entry is a named chain; model 1 down (503) gives way to model 2, said in words; credits (402) never switch
       const steps = [{ model: 'dead/r647', provider: 'stepfun' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4', label: 'deepseek via deepinfra' }];
-      const up = await call('/api/providers/update', A, { id: tp.id, pairs: [{ id: 'deepseek', label: 'deepseek', steps }, { id: 'broke', label: 'broke', steps: [{ model: 'broke/r647', provider: 'x' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4' }] }] });
+      const up = await call('/api/providers/update', A, { id: tp.id, pairs: [{ id: 'deepseek', label: 'deepseek', steps }, { id: 'broke', label: 'broke', steps: [{ model: 'broke/r647', provider: 'x' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4' }] },
+        { id: 'midstream', label: 'midstream', steps: [{ model: 'midstream/r647', provider: 'x' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4', label: 'deepseek via deepinfra' }] }] });
       k = (await call('/api/apikey/create', A, { label: 'r647', providers: [tp.id] })).data;
       fakeOr.calls.length = 0;
       const ask = await g('/v1/chat/completions', k.key, { model: 'deepseek', messages: [{ role: 'user', content: 'hi r647' }] });
@@ -8901,8 +8903,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.saved = up.status; seen.ask = ask.status + ' ' + ((ask.json || {}).choices || [{}])[0].message?.content;
       seen.switch = ask.headers.get('x-vr-openrouter-switch'); seen.sent = sent.join(' | ');
       seen.broke = broke.status + ' after ' + fakeOr.calls.length + ' call(s)';
+      // the same chain on the Anthropic-shaped way in (/v1/messages, translated for OpenRouter), and a stream whose first event is the failure
+      const viaMsgs = await g('/v1/messages', k.key, { model: 'deepseek', max_tokens: 64, messages: [{ role: 'user', content: 'hi r647 messages' }] });
+      const viaStream = await g('/v1/chat/completions', k.key, { model: 'midstream', stream: true, messages: [{ role: 'user', content: 'hi r647 stream' }] });
+      seen.msgs = viaMsgs.status + ' ' + (viaMsgs.json || {}).type + ' | ' + viaMsgs.headers.get('x-vr-openrouter-switch');
+      seen.stream = viaStream.status + ' ' + /or says: hi r647 stream/.test(viaStream.text) + ' ' + /Provider went away/.test(viaStream.text.split('or says')[0]) + ' | ' + viaStream.headers.get('x-vr-openrouter-switch');
       check('R648', L647.R648, up.status === 200 && ask.status === 200 && seen.switch === 'model 1: dead/r647 via stepfun unavailable (503: No instances available), switching to model 2: deepseek via deepinfra'
-        && seen.sent === 'dead/r647 {"allow_fallbacks":false,"order":["stepfun"]} | deepseek/deepseek-chat-v3.1 {"allow_fallbacks":false,"order":["deepinfra/fp4"]}' && seen.broke === '402 after 1 call(s)', JSON.stringify(seen));
+        && seen.sent === 'dead/r647 {"allow_fallbacks":false,"order":["stepfun"]} | deepseek/deepseek-chat-v3.1 {"allow_fallbacks":false,"order":["deepinfra/fp4"]}' && seen.broke === '402 after 1 call(s)'
+        && seen.msgs === '200 message | model 1: dead/r647 via stepfun unavailable (503: No instances available), switching to model 2: deepseek via deepinfra'
+        && seen.stream === '200 true false | model 1: midstream/r647 via x unavailable (503: Provider went away), switching to model 2: deepseek via deepinfra', JSON.stringify(seen));
       // R649: the team key's limits for everyone together, and what is left (the ledger already holds the earlier checks' spend:
       // everything is measured from it)
       const t0 = await call('/api/openrouter/team', U), base = (w) => ((t0.data.windows || {})[w] || {}).spentUsd || 0, r2 = (x) => Math.round(x * 1e6) / 1e6;
