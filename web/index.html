@@ -3733,7 +3733,7 @@ async function refreshOrUse() {
   let st; try { st = await json('/api/openrouter/team' + (sid ? '?session=' + encodeURIComponent(sid) : '')); } catch { bar.hidden = true; return; }
   const m = (n) => '$' + Number(n || 0).toFixed(2), w = st.windows || {}, parts = [];
   for (const [k, l] of [['fiveHour', '5h'], ['week', '7d'], ['month', 'month']]) if (w[k]) parts.push(l + ' ' + m(w[k].spentUsd) + ' / ' + m(w[k].capUsd) + (w[k].over ? ' (limit reached)' : ''));
-  if (st.credits) parts.push('credits ' + m(st.credits.leftUsd) + ' left');
+  if (st.credits) parts.push('credits ' + m(st.credits.leftUsd) + ' left'); else if (st.hasKey) parts.push('credits: needs a management key (AI Admin)'); // OpenRouter tells the balance to a management key only
   if (st.session) parts.push('this session ' + m(st.session.spentUsd));
   bar.textContent = 'This hub · OpenRouter · ' + parts.join(' · ');
   bar.classList.toggle('over', !!st.over);

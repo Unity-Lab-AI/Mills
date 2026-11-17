@@ -7,6 +7,19 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.71.1 — 2026-11-17
+
+PATCH: **the fallback chain on every way in, also for a stream that fails as its first event** (T-381 follow-up, from
+Sponge: "make sure the things I should know are coded in").
+
+- **Every way to OpenRouter walks the chain:** the OpenAI chat API and Work's relay as before, now also the Anthropic-shaped `/v1/messages`, the Responses API translated to chat, and the hub's own calls (Unity, the prompt enhancer, a /transfer handoff writer).
+  - The walk moved into one place (`openrouter::send_chain`, used by the gateway's `oa_upstream` and the hub's text paths).
+  - The switch lines reach the caller on every answer (`x-vr-openrouter-switch`), also on answers the hub builds itself and on the error when every step failed. The hub's own calls write them to the log.
+- **A stream that fails as its first event** (OpenRouter sends a failure after the 200 that way) now gives way to the next step too. The hub reads the stream up to its first data event; if that is a switchable error, the next step is tried, otherwise what was read goes on first and the rest follows. The Jcode PGM Server does the same (Jcode PGM 0.99.12).
+- **Work's OpenRouter line** says "credits: needs a management key (AI Admin)" when the balance cannot be shown, instead of leaving it out.
+- **Versions:** web/index.html 1.55.1.
+- **Checks:** R648 also sends the chain through `/v1/messages` and through a stream whose first event is the failure. A unit test covers reading a stream's first event.
+
 ## 5.71.0 — 2026-11-17
 
 MINOR: **Team OpenRouter in AI Admin: model + provider picker, named fallback chains, the key's own limits, credits in

@@ -129,10 +129,10 @@ impl UsageReader {
 }
 
 /// An upstream body as it comes: from the internet or from an AI host.
-enum Up { Http(reqwest::Response), Host(mpsc::Receiver<Result<Bytes, String>>), Mem(Option<Bytes>) }
+enum Up { Http(reqwest::Response), Host(mpsc::Receiver<Result<Bytes, String>>), Mem(Option<Bytes>), Pre(Option<Bytes>, reqwest::Response) }
 impl Up {
     async fn next(&mut self) -> Option<Result<Bytes, String>> {
-        match self { Up::Http(r) => match r.chunk().await { Ok(Some(b)) => Some(Ok(b)), Ok(None) => None, Err(e) => Some(Err(e.to_string())) }, Up::Host(rx) => rx.recv().await, Up::Mem(b) => b.take().map(Ok) }
+        match self { Up::Http(r) => match r.chunk().await { Ok(Some(b)) => Some(Ok(b)), Ok(None) => None, Err(e) => Some(Err(e.to_string())) }, Up::Host(rx) => rx.recv().await, Up::Mem(b) => b.take().map(Ok), Up::Pre(h, r) => match h.take() { Some(b) => Some(Ok(b)), None => match r.chunk().await { Ok(Some(b)) => Some(Ok(b)), Ok(None) => None, Err(e) => Some(Err(e.to_string())) } } }
     }
 }
 type Upstream = (u16, Vec<(String, String)>, Up);
@@ -152,6 +152,12 @@ fn err_resp(f: Fmt, status: u16, m: &str) -> Resp {
 /// `retry-after` of an upstream answer, put on an error we made from it.
 fn with_retry(mut r: Resp, hs: &[(String, String)]) -> Resp {
     if let Some(v) = hs.iter().find(|(k, _)| k.eq_ignore_ascii_case("retry-after")).and_then(|(_, v)| hyper::header::HeaderValue::from_str(v).ok()) { r.headers_mut().insert("retry-after", v); }
+    with_switch(r, hs)
+}
+/// An OpenRouter entry's chain switches (x-vr-openrouter-switch, one per switch) on an answer the hub built itself (a
+/// translated whole answer, an error after every step failed), as the raw paths pass them on (T-381).
+fn with_switch(mut r: Resp, hs: &[(String, String)]) -> Resp {
+    for (_, v) in hs.iter().filter(|(k, _)| k.eq_ignore_ascii_case("x-vr-openrouter-switch")) { if let Ok(v) = hyper::header::HeaderValue::from_str(v) { r.headers_mut().append("x-vr-openrouter-switch", v); } }
     r
 }
 /// The words of an upstream error body (Anthropic's and OpenAI's both: `error.message`), else the start of the body.
@@ -163,7 +169,7 @@ fn upstream_message(status: u16, body: &[u8]) -> String {
 /// The upstream answer's headers of an OpenAI-speaking provider that go back: `retry-after`, the request id and the plain
 /// rate-limit numbers.
 pub fn oa_response_headers(h: &[(String, String)]) -> Vec<(String, String)> {
-    h.iter().filter(|(k, _)| { let k = k.to_ascii_lowercase(); k == "retry-after" || k == "x-request-id" || k.starts_with("x-ratelimit-") }).map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect()
+    h.iter().filter(|(k, _)| { let k = k.to_ascii_lowercase(); k == "retry-after" || k == "x-request-id" || k.starts_with("x-ratelimit-") || k == "x-vr-openrouter-switch" }).map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect()
 }
 
 /// What a stream's pump needs of a flow: the bytes to send for the bytes that came (raw: the same; translated: the other
@@ -322,16 +328,25 @@ const CHAT: &str = "/chat/completions";
 async fn oa_upstream(hub: &Arc<dyn AiHub>, user: &str, p: &Value, path: &str, body: Vec<u8>, stream: bool, cancel: &Arc<openai::Cancel>, f: Fmt) -> Result<Upstream, Resp> {
     let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
     if stream { headers.push(("accept".into(), "text/event-stream".into())); }
-    if s(p, "kind") == "openai" || s(p, "kind") == crate::openrouter::KIND {
-        // OpenRouter: its fixed address, the pair's model and provider routing, usage with the cost, the hub's referer and title (openrouter.rs)
-        let or = s(p, "kind") == crate::openrouter::KIND;
-        let mut rb = if or { crate::openrouter::post(&**hub, p, path, &body) } else { openai::self_http(&**hub).post(format!("{}{path}", s(p, "baseUrl").trim_end_matches('/'))).body(body) };
-        for (k, v) in &headers { if !(or && k.eq_ignore_ascii_case("content-type")) { rb = rb.header(k.as_str(), v.as_str()); } }
-        if !or && !s(p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(p, "apiKey"))); }
-        let sent = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = rb.send() => x };
-        let resp = match sent { Ok(x) => x, Err(e) => return Err(err_resp(f, 502, &format!("{} could not be reached: {e}", if or { "OpenRouter" } else { "The endpoint" }))) };
+    if s(p, "kind") == crate::openrouter::KIND {
+        // OpenRouter (openrouter.rs): its fixed address, the entry's chain (each step's model on exactly its endpoint, the next
+        // while one fails before it answers: a stream is peeked at for an error as its first event), usage with the cost, the
+        // hub's referer and title; the switches go to the caller as x-vr-openrouter-switch, one line each (T-381)
+        let (sent, lines) = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = crate::openrouter::send_chain(&**hub, p, path, &body, &headers, stream) => x };
+        if !lines.is_empty() { eprintln!("[vr-hub] openrouter for {user}: {}", lines.join(" | ")); }
+        let c = match sent { Ok(c) => c, Err(e) => return Err(err_resp(f, 502, &format!("OpenRouter could not be reached: {e}"))) };
+        let st = c.resp.status().as_u16();
         // a person's own key that OpenRouter refused: say so plainly, never retry with the team's
-        if let Some(m) = crate::openrouter::refused(p, resp.status().as_u16()) { return Err(err_resp(f, 502, &m)); }
+        if let Some(m) = crate::openrouter::refused(p, st) { return Err(err_resp(f, 502, &m)); }
+        let mut hs: Vec<(String, String)> = c.resp.headers().iter().filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string()))).collect();
+        for l in &lines { hs.push(("x-vr-openrouter-switch".into(), l.chars().map(|ch| if ch.is_ascii() && !ch.is_control() { ch } else { '?' }).collect())); }
+        Ok((st, hs, if c.head.is_empty() { Up::Http(c.resp) } else { Up::Pre(Some(c.head), c.resp) }))
+    } else if s(p, "kind") == "openai" {
+        let mut rb = openai::self_http(&**hub).post(format!("{}{path}", s(p, "baseUrl").trim_end_matches('/'))).body(body);
+        for (k, v) in &headers { rb = rb.header(k.as_str(), v.as_str()); }
+        if !s(p, "apiKey").is_empty() { rb = rb.header("authorization", format!("Bearer {}", s(p, "apiKey"))); }
+        let sent = tokio::select! { _ = cancel.woke() => return Err(err_resp(f, 499, "cancelled")), x = rb.send() => x };
+        let resp = match sent { Ok(x) => x, Err(e) => return Err(err_resp(f, 502, &format!("The endpoint could not be reached: {e}"))) };
         let hs: Vec<(String, String)> = resp.headers().iter().filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string()))).collect();
         Ok((resp.status().as_u16(), hs, Up::Http(resp)))
     } else {
@@ -422,21 +437,9 @@ pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, pr
     if !model.is_empty() { body["model"] = json!(model); }
     if added { if !body["stream_options"].is_object() { body["stream_options"] = json!({}); } body["stream_options"]["include_usage"] = json!(true); }
     let cancel = run.cancel.clone();
-    // T-381: an OpenRouter entry with a chain: model 1, then each fallback while a step fails before any answer came
-    let chain = if p["kind"] == json!(crate::openrouter::KIND) { crate::openrouter::pair(&p, &s(&body, "model")).map(|pr| crate::openrouter::steps_of(&pr)).filter(|st| st.len() > 1).unwrap_or_default() } else { vec![] };
-    let mut step = 0usize; let mut switched: Vec<String> = vec![];
+    // an OpenRouter entry's chain is walked inside oa_upstream (T-381), for every way in
     let (status, rheaders, up) = loop {
-        if !chain.is_empty() { body["_vr_step"] = json!(step); }
-        let sent = oa_upstream(hub, user, &p, CHAT, serde_json::to_vec(&body).unwrap_or_default(), stream, &cancel, Fmt::Oa).await;
-        if step + 1 < chain.len() {
-            let failed = match &sent { Ok((st, _, _)) => (!(200..300).contains(st) && crate::openrouter::may_switch(*st)).then_some(*st), Err(_) => Some(0) };
-            if let Some(st) = failed {
-                let why = match sent { Ok((_, _, up)) => { let b = read_all(up, &cancel).await.unwrap_or_default(); crate::openrouter::why_of(st, &b) } Err(_) => crate::openrouter::why_of(0, b"") };
-                switched.push(crate::openrouter::switch_line(step, &chain[step], &why, &chain[step + 1]));
-                step += 1; continue;
-            }
-        }
-        let (st, hs, up) = match sent { Ok(x) => x, Err(e) => return e };
+        let (st, hs, up) = match oa_upstream(hub, user, &p, CHAT, serde_json::to_vec(&body).unwrap_or_default(), stream, &cancel, Fmt::Oa).await { Ok(x) => x, Err(e) => return e };
         if added && (st == 400 || st == 422) {
             let Some(bytes) = read_all(up, &cancel).await else { return err_resp(Fmt::Oa, 499, "cancelled") };
             let t = String::from_utf8_lossy(&bytes).to_lowercase();
@@ -445,9 +448,7 @@ pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, pr
         }
         break (st, hs, up);
     };
-    let ct = ct_of(&rheaders); let mut out_h = oa_response_headers(&rheaders);
-    // the switches, for the caller to show (a Work run's relay puts them in the transcript); one header line each, ASCII-safe
-    for l in &switched { out_h.push(("x-vr-openrouter-switch".into(), l.chars().map(|c| if c.is_ascii() && !c.is_control() { c } else { '?' }).collect())); }
+    let ct = ct_of(&rheaders); let out_h = oa_response_headers(&rheaders); // with the chain's switches (a Work run's relay puts them in the transcript)
     if !(200..300).contains(&status) {
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(Fmt::Oa, 499, "cancelled") };
         return raw(status, &ct, &out_h, pgm_net_internal::http::full(bytes)); // the provider's own error, as it came
@@ -530,7 +531,7 @@ pub async fn messages_via_openai(hub: &Arc<dyn AiHub>, user: &str, key: &openai:
         let Ok(j) = serde_json::from_slice::<Value>(&bytes) else { return err_resp(f, 502, "The endpoint's answer was not JSON.") };
         let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &t, &ur.model, &ur.native);
         drop(run);
-        return openai::cors(pgm_net_internal::http::json(200, &crate::xlate::oa_to_ant_whole(&j, &mid, model)));
+        return with_switch(openai::cors(pgm_net_internal::http::json(200, &crate::xlate::oa_to_ant_whole(&j, &mid, model))), &out_h);
     }
     let up = if ct_of(&rheaders).to_ascii_lowercase().contains("text/event-stream") { up } else { // an endpoint that answers JSON to a streaming request
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
@@ -648,7 +649,7 @@ async fn responses_via_chat(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyC
         let Ok(j) = serde_json::from_slice::<Value>(&bytes) else { return err_resp(f, 502, "The endpoint's answer was not JSON.") };
         let ur = OaUsage::from_json(&bytes); note_native(hub, user, key, &t, &ur.model, &ur.native);
         drop(run);
-        return openai::cors(pgm_net_internal::http::json(200, &crate::xlate::chat_to_response_whole(&j, em)));
+        return with_switch(openai::cors(pgm_net_internal::http::json(200, &crate::xlate::chat_to_response_whole(&j, em))), &out_h);
     }
     let up = if ct_of(&rheaders).to_ascii_lowercase().contains("text/event-stream") { up } else { // an endpoint that answers JSON to a streaming request
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(f, 499, "cancelled") };
