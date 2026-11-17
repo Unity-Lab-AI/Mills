@@ -43,12 +43,13 @@ const AIADMIN = (() => {
     if (d.hubClaude === false) box.append(mk('div', 'status', 'This hub has no Claude of its own: the default is always an AI host.'));
   }
 
-  // ── OpenRouter keys (T-381, T-383): every key has a name (it shows in the AI dropdown under it), is someone's own or put
-  // into the team's keys, and may carry limits for everyone on it together (5 h and 7 d rolling, the calendar month; empty =
-  // no limit) and a management key (for the account's credits). Its entries are named fallback chains: model 1 and its
-  // fallbacks, each a model on one exact provider endpoint, picked from OpenRouter's catalogue with its price, speed and data
-  // policy. Global → Team OpenRouter keys shows the team's (Manage AI edits them, with everyone's month); Yours → My
-  // OpenRouter keys shows the person's own (index.html calls myKeys). The hub hosts these entries: Work's picker shows them.
+  // ── OpenRouter keys (T-381, T-383, T-387): every key has a name (it shows in the AI dropdown under it), is someone's own or
+  // put into the team's keys, and may carry limits for everyone on it together (5 h and 7 d rolling, the calendar month;
+  // empty = no limit) and a management key (for the account's credits). It carries the models it may be used for, each on
+  // the providers its owner ticked, in their order, picked from OpenRouter's catalogue by searching and filtering. Only the
+  // person who added a key changes any of that (an admin too only for a key they added). Global → Team OpenRouter keys shows
+  // the team's (with everyone's month, Manage AI); Yours → My OpenRouter keys shows the person's own (index.html calls
+  // myKeys). The hub hosts these models: Work's picker, the API and jcode's viberoller provider show them by name.
   const money = (n) => (n == null || !isFinite(n) ? '–' : '$' + Number(n).toFixed(2));
   const perM = (n) => (n == null ? '–' : n === 0 ? '$0' : '$' + (n >= 10 ? n.toFixed(1) : n >= 0.1 ? n.toFixed(2) : n.toFixed(3)));
   const DATA_WORDS = { zdr: 'No retention', safety: 'Retains, no training', train: 'Retains, may train' };
@@ -115,7 +116,7 @@ const AIADMIN = (() => {
     box.append(f);
     return true;
   }
-  /** One key: its name, whose it is, what is left, its limits, its management key, its entries. */
+  /** One key: its name, who added it, what is left, its limits, its management key, its models (only who added it changes them). */
   function keyCard(x, again) {
     const { st, prov } = x; const edit = st.mayEdit !== false;
     const card = mk('div', 'orKey');
@@ -129,10 +130,11 @@ const AIADMIN = (() => {
       const t = mk('button', 'ghost', 'Test'); t.type = 'button'; t.title = 'Ask OpenRouter whether the key works'; t.onclick = () => { note.textContent = 'Asking OpenRouter…'; json('/api/openrouter/mykey/test', { method: 'POST', body: JSON.stringify({ key: st.id }) }).then((r) => { note.textContent = r.ok ? 'OpenRouter accepts the key.' : r.error; }).catch((e) => { note.textContent = e.message; }); }; head.append(t);
       head.append(confirmButton('Remove key', () => json('/api/providers/remove', { method: 'POST', body: JSON.stringify({ id: st.id }) }).then(() => { refreshProviders(); again(); }).catch((e) => { note.textContent = e.message; })));
     }
-    head.append(mk('small', 'status', (st.shared ? 'team key' : 'yours alone') + ' · ' + (st.owner === me.username ? 'yours' : (st.ownerName || st.owner) + '\'s') + (st.last4 ? ' · key ' + st.last4 : '')));
+    const adder = st.owner === me.username ? 'you' : (st.ownerName || st.owner || 'someone');
+    head.append(mk('small', 'status', (st.shared ? 'team key' : 'yours alone') + ' · added by ' + adder + (st.last4 ? ' · key ' + st.last4 : '')));
     card.append(head, statusCard(st));
-    if (edit) card.append(limitsForm(st, again), mgmtForm(st, again), entriesBox(prov, again));
-    else if ((prov.pairs || []).length) card.append(mk('div', 'status', 'Entries: ' + prov.pairs.map((p) => p.label || p.id).join(', ')));
+    if (edit) card.append(limitsForm(st, again), mgmtForm(st, again));
+    card.append(modelsBox(prov, again, edit, adder));
     card.append(note);
     return card;
   }
@@ -199,82 +201,144 @@ const AIADMIN = (() => {
     det.append(name, key, lab, mk('p', 'setHint', 'Limits for everyone on it together (optional):'), lims, r);
     return det;
   }
-  // ── the entries: named fallback chains ──
-  const slug = (t) => t.toLowerCase().replace(/[^a-z0-9._:@/-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  // ── the key's models (T-387): each an OpenRouter model the key may be used for, on the providers its owner ticked, in their
+  // order (the next one when a provider is unavailable; none ticked = any provider, OpenRouter's choice). People pick each by
+  // its name. It is saved as the hub's entry (id = the model's id, its providers the steps of one chain), so the hub, the API
+  // and the Jcode PGM Server route it as before. An older entry made of several models is still shown, and may be removed.
   const stepsOf = (e) => (Array.isArray(e.steps) && e.steps.length ? e.steps : [{ model: e.model, provider: (e.providers || [])[0] || '', label: '' }]);
-  const stepName = (st) => st.label || (st.provider ? st.model + ' via ' + st.provider : st.model);
-  function entriesBox(team, again) {
-    const f = mk('div', 'orEntries'); f.append(mk('h4', '', 'Entries'));
-    f.append(mk('p', 'setHint', 'Each entry is what people pick in Work, the API and jcode\'s viberoller provider (by its name), hosted by this hub: model 1, and when its provider is unavailable the next fallback, in order. A switch is said in the session: "model 1: … unavailable, switching to model 2: …".'));
-    const entries = (team.pairs || []).map((e) => ({ id: e.id, label: e.label || e.id, steps: stepsOf(e).map((s) => ({ model: s.model, provider: s.provider || '', label: s.label || '' })) }));
+  /** An entry as the key's models show it: its model, its providers in order (empty = any), whether it is an older chain. */
+  function entryView(e) {
+    const steps = stepsOf(e).map((s) => ({ model: s.model || e.model, provider: s.provider || '', label: s.label || '' }));
+    const older = steps.some((s) => s.model !== steps[0].model);
+    const any = !older && steps.every((s) => !s.provider);
+    return { id: e.id, name: e.label || e.id, model: steps[0].model, providers: any ? [] : steps.filter((s) => s.provider).map((s) => ({ route: s.provider, label: s.label })), any, older, steps };
+  }
+  /** What the key saves for a model and the providers ticked for it, in their order (none: any provider). */
+  function entryFor(model, name, picks) {
+    const ps = (picks || []).filter((x) => x && x.route);
+    const label = (name || '').trim() || model;
+    return ps.length ? { id: model, label, model, steps: ps.map((x) => ({ model, provider: x.route, label: x.label || '' })) } : { id: model, label, model, providers: [], allowFallbacks: true };
+  }
+  /** One allowed model in words: "DeepSeek V4 Flash: Relace, then DeepInfra (fp8)" or "…: any provider (OpenRouter chooses)". */
+  function entryLine(e) {
+    const v = entryView(e);
+    if (v.older) return v.name + ' (an older chain): ' + v.steps.map((s) => s.label || s.model + (s.provider ? ' via ' + s.provider : '')).join(', then ');
+    return v.name + ': ' + (v.any ? 'any provider (OpenRouter chooses)' : v.providers.map((x) => x.label || x.route).join(', then '));
+  }
+  function modelsBox(prov, again, edit, adder) {
+    const f = mk('div', 'orEntries'); f.append(mk('h4', '', 'Models on this key'));
+    f.append(mk('p', 'setHint', edit ? 'People pick each model by its name, in Work, the API and jcode\'s viberoller provider. A request goes to the model\'s providers in the order here: when one is unavailable, the next one is tried, and the session says so. With no provider ticked, OpenRouter chooses any.'
+      : 'Only ' + adder + ', who added this key, changes its models and providers.'));
+    const entries = (prov.pairs || []).map((e) => ({ ...e }));
     const note = mk('div', 'status');
-    const save = async (list, said) => { try { await json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: team.id, pairs: list.map((e) => ({ id: e.id, label: e.label, steps: e.steps })) }) }); note.textContent = said || 'Saved.'; refreshProviders(); (again || renderTeamOr)(); } catch (e) { note.textContent = e.message; } };
-    if (!entries.length) f.append(mk('div', 'status', 'No entries yet: add one below.'));
+    const save = async (list, said) => { try { await json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: prov.id, pairs: list }) }); note.textContent = said || 'Saved.'; refreshProviders(); (again || renderTeamOr)(); } catch (e) { note.textContent = e.message; } };
+    if (!entries.length) f.append(mk('div', 'status', edit ? 'No models yet: add some below.' : 'No models yet.'));
     entries.forEach((e, ei) => {
+      const v = entryView(e);
       const card = mk('div', 'orEntry');
-      const head = mk('div', 'row'); const name = mk('input'); name.value = e.label; name.maxLength = 60; name.setAttribute('aria-label', 'The entry\'s name');
+      if (!edit) { card.append(mk('div', '', entryLine(e))); f.append(card); return; }
+      const put = (picks, said) => { const list = entries.slice(); list[ei] = entryFor(v.model, v.name, picks); save(list, said); };
+      const head = mk('div', 'row'); const name = mk('input'); name.value = v.name; name.maxLength = 60; name.setAttribute('aria-label', 'The model\'s name in the dropdown');
       const rn = mk('button', 'ghost', 'Rename'); rn.type = 'button'; rn.onclick = () => { const n = name.value.trim(); if (!n) return; const list = entries.slice(); list[ei] = { ...e, label: n }; save(list, 'Renamed.'); };
-      const del = confirmButton('Remove entry', () => save(entries.filter((_, i) => i !== ei), 'Removed.'));
-      head.append(name, rn, del, mk('small', 'status', 'picked as ' + e.id)); card.append(head);
-      const ol = mk('ol', 'orSteps');
-      e.steps.forEach((s, si) => {
-        const li = mk('li'); li.append(mk('span', '', (si === 0 ? 'Model 1: ' : 'Fallback ' + si + ': ') + stepName(s)));
-        const acts = mk('span', 'orStepActs');
-        if (si > 0) { const up = mk('button', 'ghost', '↑'); up.type = 'button'; up.title = 'Try it earlier'; up.onclick = () => { const st2 = e.steps.slice(); [st2[si - 1], st2[si]] = [st2[si], st2[si - 1]]; const list = entries.slice(); list[ei] = { ...e, steps: st2 }; save(list); }; acts.append(up); }
-        if (e.steps.length > 1) { const x = mk('button', 'ghost', 'Remove'); x.type = 'button'; x.onclick = () => { const list = entries.slice(); list[ei] = { ...e, steps: e.steps.filter((_, i) => i !== si) }; save(list); }; acts.append(x); }
-        li.append(acts); ol.append(li);
-      });
-      card.append(ol);
-      const more = mk('button', 'ghost', 'Add another fallback'); more.type = 'button';
-      more.onclick = () => openPicker(card, (step) => { const list = entries.slice(); list[ei] = { ...e, steps: e.steps.concat([step]) }; save(list, 'Fallback added.'); });
-      card.append(more); f.append(card);
+      head.append(name, rn, confirmButton('Remove model', () => save(entries.filter((_, i) => i !== ei), 'Removed.')), mk('small', 'status', v.model));
+      card.append(head);
+      if (v.older || v.any) card.append(mk('div', 'status', v.older ? entryLine(e) : 'Any provider (OpenRouter chooses).'));
+      else {
+        const ol = mk('ol', 'orSteps');
+        v.providers.forEach((pv, pi) => {
+          const li = mk('li'); li.append(mk('span', '', pv.label || pv.route));
+          const acts = mk('span', 'orStepActs');
+          const move = (dir, sym, words) => { const b = mk('button', 'ghost', sym); b.type = 'button'; b.title = words; b.setAttribute('aria-label', words + ': ' + (pv.label || pv.route)); b.onclick = () => { const ps = v.providers.slice(); [ps[pi + dir], ps[pi]] = [ps[pi], ps[pi + dir]]; put(ps); }; acts.append(b); };
+          if (pi > 0) move(-1, '↑', 'Try it earlier');
+          if (pi < v.providers.length - 1) move(1, '↓', 'Try it later');
+          if (v.providers.length > 1) { const x = mk('button', 'ghost', 'Remove'); x.type = 'button'; x.onclick = () => put(v.providers.filter((_, i) => i !== pi), 'Provider removed.'); acts.append(x); }
+          li.append(acts); ol.append(li);
+        });
+        card.append(ol);
+      }
+      if (!v.older) { const ch = mk('button', 'ghost', 'Change providers'); ch.type = 'button'; ch.onclick = () => openPicker(card, (model, nm, picks) => put(picks, 'Providers saved.'), { model: { id: v.model, name: v.name }, picks: v.providers }); card.append(ch); }
+      f.append(card);
     });
-    const add = mk('button', '', 'Add a fallback'); add.type = 'button';
-    add.onclick = () => openPicker(f, (step, name) => {
-      const n = (name || step.label || step.model).trim(); let id = slug(n) || 'entry'; let k = 2; while (entries.some((x) => x.id === id)) id = slug(n) + '-' + k++;
-      save(entries.concat([{ id, label: n, steps: [step] }]), 'Added "' + n + '".');
-    }, true);
-    f.append(add, note);
+    if (edit) {
+      const add = mk('button', '', 'Add models'); add.type = 'button';
+      add.onclick = () => openPicker(f, (model, nm, picks) => {
+        const list = entries.slice(), i = list.findIndex((x) => x.id === model), e = entryFor(model, nm, picks);
+        if (i >= 0) list[i] = e; else list.push(e);
+        save(list, (i >= 0 ? 'Changed "' : 'Added "') + e.label + '".');
+      }, { on: entries.map((x) => x.id) });
+      f.append(add);
+    }
+    f.append(note);
     return f;
   }
-  // ── the picker: search a model, then pick one of its providers (OpenRouter's catalogue, the same data jcode reads) ──
-  function openPicker(host, done, askName) {
+  // ── the picker: search OpenRouter's models (words and filters, four orders), open one, search and filter its providers, tick
+  // the ones to allow in the order they are to be tried (OpenRouter's catalogue, the same data jcode reads). The last search
+  // is kept for the next time the picker opens. opts: { model, picks } opens one model's providers with those ticked;
+  // { on } marks the models the key already has.
+  const SEARCH = { q: '', deals: false, free: false, zdr: false, tools: false, reasoning: false, image: false, maxIn: '', minContext: '', sort: 'newest' };
+  /** The model search's query string from its words, filters and order (only what is set). */
+  function searchQuery(s) {
+    const q = ['q=' + encodeURIComponent((s.q || '').trim())];
+    for (const k of ['deals', 'free', 'zdr', 'tools', 'reasoning', 'image']) if (s[k]) q.push(k + '=1');
+    if (s.maxIn !== '' && s.maxIn != null && isFinite(Number(s.maxIn))) q.push('maxIn=' + Number(s.maxIn));
+    if (s.minContext) q.push('minContext=' + Number(s.minContext));
+    if (s.sort && s.sort !== 'newest') q.push('sort=' + s.sort);
+    return q.join('&');
+  }
+  function openPicker(host, done, opts) {
+    opts = opts || {};
     const old = host.querySelector(':scope > .orPicker'); if (old) { old.remove(); return; }
     const p = mk('div', 'orPicker');
-    const q = mk('input'); q.type = 'search'; q.placeholder = 'Search OpenRouter\'s models, e.g. deepseek, qwen coder, claude'; q.setAttribute('aria-label', 'Search models');
+    const q = mk('input'); q.type = 'search'; q.placeholder = 'Search OpenRouter\'s models: names, makers, words from their description (e.g. deepseek, qwen coder, vision)'; q.setAttribute('aria-label', 'Search models'); q.value = SEARCH.q;
     const close = mk('button', 'ghost', 'Close'); close.type = 'button'; close.onclick = () => p.remove();
     const top = mk('div', 'row'); top.append(q, close); p.append(top);
-    const chk = (label) => { const l = mk('label', 'chk'), c = mk('input'); c.type = 'checkbox'; l.append(c, ' ' + label); top.insertBefore(l, close); return c; };
-    const onlyDeals = chk('Deals only'), onlyFree = chk('Free only'), onlyZdr = chk('Zero data retention only');
+    // the filters: what a model must be, cost and hold, and the order
+    const fl = mk('div', 'row orFilters'); p.append(fl);
+    const chk = (k, label) => { const l = mk('label', 'chk'), c = mk('input'); c.type = 'checkbox'; c.checked = !!SEARCH[k]; c.onchange = () => { SEARCH[k] = c.checked; search(); }; l.append(c, ' ' + label); fl.append(l); return c; };
+    chk('deals', 'Deals'); chk('free', 'Free'); chk('zdr', 'Zero data retention'); chk('tools', 'Takes tools'); chk('reasoning', 'Reasons'); chk('image', 'Reads images');
+    const maxIn = mk('input'); maxIn.type = 'number'; maxIn.min = '0'; maxIn.step = '0.05'; maxIn.placeholder = 'Max in $/M'; maxIn.value = SEARCH.maxIn; maxIn.setAttribute('aria-label', 'At most this input price, dollars per million tokens'); maxIn.className = 'orNum';
+    const ctx = mk('select'); ctx.setAttribute('aria-label', 'At least this much context');
+    for (const [v, l] of [['', 'Any context'], ['32000', '32k+ context'], ['128000', '128k+ context'], ['200000', '200k+ context'], ['1000000', '1M+ context']]) { const o = mk('option', '', l); o.value = v; ctx.append(o); }
+    ctx.value = SEARCH.minContext;
+    const ord = mk('select'); ord.setAttribute('aria-label', 'Order the models');
+    for (const [v, l] of [['newest', 'Newest first'], ['price', 'Cheapest first'], ['context', 'Most context first'], ['deal', 'Biggest deal first']]) { const o = mk('option', '', l); o.value = v; ord.append(o); }
+    ord.value = SEARCH.sort;
+    fl.append(maxIn, ctx, ord);
+    maxIn.oninput = () => { SEARCH.maxIn = maxIn.value; clearTimeout(timer); timer = setTimeout(search, 300); };
+    ctx.onchange = () => { SEARCH.minContext = ctx.value; search(); }; ord.onchange = () => { SEARCH.sort = ord.value; search(); };
     const list = mk('div', 'orModels'), prov = mk('div', 'orProviders'), info = mk('div', 'status', 'Type to search; the newest models come first.');
     p.append(info, list, prov);
     let timer = 0, seq = 0, again = 0;
     const search = async () => {
       const my = ++seq; clearTimeout(again); info.textContent = 'Searching…';
-      let d; try { d = await json('/api/openrouter/catalog/models?q=' + encodeURIComponent(q.value.trim()) + (onlyDeals.checked ? '&deals=1' : '') + (onlyFree.checked ? '&free=1' : '') + (onlyZdr.checked ? '&zdr=1' : '')); } catch (e) { info.textContent = e.message; return; }
+      let d; try { d = await json('/api/openrouter/catalog/models?' + searchQuery(SEARCH)); } catch (e) { info.textContent = e.message; return; }
       if (my !== seq || !p.isConnected) return;
-      list.textContent = ''; prov.textContent = '';
+      list.textContent = '';
       const dl = d.deals || {};
-      const pending = onlyDeals.checked && !dl.ready; // the hub is still asking every model's providers for their deals
+      const pending = (SEARCH.deals || SEARCH.sort === 'deal') && !dl.ready; // the hub is still asking every model's providers for their deals
       info.textContent = (pending ? 'Looking up every provider\'s deals (a minute or two the first time); the list fills in by itself. ' : '')
         + (d.total ? d.total + ' model' + (d.total === 1 ? '' : 's') + (d.total > d.models.length ? ' (the first ' + d.models.length + ' shown)' : '') : pending ? '' : 'No model matches that.')
-        + (onlyDeals.checked && dl.ready ? ' · deals as of ' + (dl.ageMin ? dl.ageMin + ' min ago' : 'just now') : '');
-      if (pending || (dl.building && onlyDeals.checked)) again = setTimeout(search, 5000);
-      for (const m of d.models.slice(0, 60)) {
+        + (SEARCH.deals && dl.ready ? ' · deals as of ' + (dl.ageMin ? dl.ageMin + ' min ago' : 'just now') : '');
+      if (pending || (dl.building && (SEARCH.deals || SEARCH.sort === 'deal'))) again = setTimeout(search, 5000);
+      for (const m of d.models.slice(0, 80)) {
         const b = mk('button', 'ghost orModel'); b.type = 'button';
-        const nm = mk('b', '', m.name); if (m.bestDeal) nm.append(' ', mk('span', 'orDeal', 'up to ' + Math.round(m.bestDeal * 100) + '% off')); if (m.free) nm.append(' ', mk('span', 'orDeal', 'free'));
-        b.append(nm, mk('small', '', modelLine(m)));
+        const nm = mk('b', '', m.name);
+        if ((opts.on || []).includes(m.id)) nm.append(' ', mk('span', 'orTier', 'on this key'));
+        if (m.bestDeal) nm.append(' ', mk('span', 'orDeal', 'up to ' + Math.round(m.bestDeal * 100) + '% off'));
+        if (m.free) nm.append(' ', mk('span', 'orDeal', 'free'));
+        b.append(nm, mk('small', '', modelLine(m) + (m.tools ? ' · tools' : '') + (m.reasoning ? ' · reasoning' : '') + ((m.input || []).includes('image') ? ' · reads images' : '')));
         b.onclick = () => showProviders(m);
         list.append(b);
       }
     };
-    q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
-    onlyDeals.onchange = search; onlyFree.onchange = search; onlyZdr.onchange = search;
-    const showProviders = async (m) => {
+    q.addEventListener('input', () => { SEARCH.q = q.value; clearTimeout(timer); timer = setTimeout(search, 250); });
+    const showProviders = async (m, preset) => {
       prov.textContent = 'Loading ' + m.name + '\'s providers…';
       let d; try { d = await json('/api/openrouter/catalog/endpoints?model=' + encodeURIComponent(m.id)); } catch (e) { prov.textContent = e.message; return; }
       prov.textContent = '';
-      prov.append(mk('h4', '', m.name + ': pick a provider'));
+      prov.append(mk('h4', '', m.name + ': tick the providers to allow, in the order to try them'));
+      // the ticked providers, in the order ticked (the first is tried first)
+      const picks = (preset || []).map((x) => ({ route: x.route, label: x.label || x.route }));
       const filt = mk('select'); filt.setAttribute('aria-label', 'Data policy');
       for (const [v, l] of [['', 'Any data policy'], ['zdr', 'Green only: no retention (ZDR)'], ['nott', 'No training (green or yellow)']]) { const o = mk('option', '', l); o.value = v; filt.append(o); }
       const sort = mk('select'); sort.setAttribute('aria-label', 'Sort by');
@@ -283,14 +347,21 @@ const AIADMIN = (() => {
       const tierSel = mk('select'); tierSel.setAttribute('aria-label', 'Service tier'); tierSel.hidden = tiers.length < 2;
       for (const v of ['*'].concat(tiers)) { const o = mk('option', '', v === '*' ? 'Any service tier' : v || 'Standard tier'); o.value = v; tierSel.append(o); }
       const dealsBox = mk('label', 'chk'), dealsOnly = mk('input'); dealsOnly.type = 'checkbox'; dealsBox.append(dealsOnly, ' Deals only'); dealsBox.hidden = !(d.endpoints || []).some((e) => e.discount);
-      const pq = mk('input'); pq.type = 'search'; pq.placeholder = 'Filter providers (name, country, quantization)'; pq.setAttribute('aria-label', 'Filter providers');
-      const name = mk('input'); name.placeholder = 'Name it, e.g. deepseek'; name.maxLength = 60; name.setAttribute('aria-label', 'The entry\'s name'); name.hidden = !askName;
-      const ctl = mk('div', 'row'); ctl.append(pq, filt, tierSel, dealsBox, sort, name); prov.append(ctl);
+      const pq = mk('input'); pq.type = 'search'; pq.placeholder = 'Search providers (name, country, quantization, tier)'; pq.setAttribute('aria-label', 'Search providers');
+      const ctl = mk('div', 'row'); ctl.append(pq, filt, tierSel, dealsBox, sort); prov.append(ctl);
       const t = mk('table', 'orProvTable'); prov.append(t);
-      const COLS = 11;
+      const name = mk('input'); name.placeholder = 'Its name in the dropdown'; name.value = m.name; name.maxLength = 60; name.setAttribute('aria-label', 'The model\'s name in the dropdown');
+      const allow = mk('button', '', ''); allow.type = 'button';
+      const anyB = mk('button', 'ghost', 'Allow any provider'); anyB.type = 'button'; anyB.title = 'OpenRouter chooses among all of this model\'s providers';
+      const finish = (ps) => { done(d.model.id || m.id, name.value.trim() || m.name, ps); p.remove(); };
+      allow.onclick = () => { if (picks.length) finish(picks); };
+      anyB.onclick = () => finish([]);
+      const acts = mk('div', 'row'); acts.append(name, allow, anyB); prov.append(acts);
+      const COLS = 12;
       const paint = () => {
+        allow.textContent = picks.length ? 'Allow the ' + picks.length + ' ticked provider' + (picks.length === 1 ? '' : 's') : 'Tick providers to allow'; allow.disabled = !picks.length;
         t.textContent = '';
-        const hr = mk('tr'); for (const h of ['Provider', 'In $/M', 'Out $/M', 'Cache $/M', 'Speed', 'First token', 'Uptime', 'Context', 'Data policy', '', '']) hr.append(mk('th', '', h)); t.append(hr);
+        const hr = mk('tr'); for (const h of ['Allow', 'Provider', 'In $/M', 'Out $/M', 'Cache $/M', 'Speed', 'First token', 'Uptime', 'Context', 'Data policy', '', '']) hr.append(mk('th', '', h)); t.append(hr);
         const words = pq.value.toLowerCase().split(/\s+/).filter(Boolean);
         const hay = (e) => [e.provider, e.route, e.quantization, e.serviceTier, ...((e.providerInfo || {}).datacenters || []), (e.providerInfo || {}).headquarters].filter(Boolean).join(' ').toLowerCase();
         let eps = (d.endpoints || []).filter((e) => (!filt.value || (filt.value === 'zdr' ? e.data === 'zdr' : e.data !== 'train')) && (tierSel.value === '*' || (e.serviceTier || '') === tierSel.value)
@@ -303,16 +374,17 @@ const AIADMIN = (() => {
         for (const e of eps) {
           const f = endpointFacts(e);
           const tr = mk('tr');
+          const at = picks.findIndex((x) => x.route === e.route);
+          const tick = mk('td', 'orTick'); const cb = mk('input'); cb.type = 'checkbox'; cb.checked = at >= 0; cb.setAttribute('aria-label', 'Allow ' + e.provider + (e.quantization ? ' ' + e.quantization : '') + (e.serviceTier ? ' ' + e.serviceTier : ''));
+          cb.onchange = () => { const i = picks.findIndex((x) => x.route === e.route); if (cb.checked && i < 0) picks.push({ route: e.route, label: e.provider + (e.quantization ? ' (' + e.quantization + ')' : '') + (e.serviceTier ? ' ' + e.serviceTier : '') }); if (!cb.checked && i >= 0) picks.splice(i, 1); paint(); };
+          tick.append(cb); if (at >= 0) tick.append(mk('small', 'orOrder', String(at + 1)));
           const pn = mk('td'); pn.append(mk('b', '', e.provider)); if (e.quantization) pn.append(mk('small', '', ' ' + e.quantization)); if (f.tier) pn.append(' ', mk('span', 'orTier', f.tier)); pn.title = e.route + (e.detail ? ' · ' + e.detail : '');
           const price = (now, before) => { const td = mk('td'); if (before) td.append(mk('s', 'orBefore', before), ' '); td.append(perM(now)); if (before) td.append(' ', mk('span', 'orDeal', f.deal)); return td; };
           const up = mk('td', '', e.uptime30m != null ? Math.round(e.uptime30m) + '%' : '–'); up.title = f.uptime;
           const dp = mk('td'); dp.append(mk('span', 'orMark ' + f.level, DATA_WORDS[e.data] || e.dataLabel)); dp.title = [f.policy, f.where].filter(Boolean).join('\n');
           const more = mk('td'); const mb = mk('button', 'ghost', 'More'); mb.type = 'button'; mb.setAttribute('aria-expanded', 'false'); more.append(mb);
-          const use = mk('td'); const b = mk('button', '', 'Use'); b.type = 'button';
-          b.onclick = () => { const label = m.name.replace(/^[^:]+:\s*/, '') + ' via ' + e.provider + (e.quantization ? ' (' + e.quantization + ')' : '') + (e.serviceTier ? ' ' + e.serviceTier : ''); done({ model: d.model.id || m.id, provider: e.route, label }, name.value.trim()); p.remove(); };
-          use.append(b);
-          tr.append(pn, price(e.inPerM, f.inBefore), price(e.outPerM, f.outBefore), mk('td', '', f.cache), mk('td', '', e.tpsP50 != null ? Math.round(e.tpsP50) + ' t/s' : '–'), mk('td', '', e.latencyP50Ms != null ? (e.latencyP50Ms / 1000).toFixed(2) + ' s' : '–'),
-            up, mk('td', '', e.context ? kTok(e.context) : '–'), dp, more, use);
+          tr.append(tick, pn, price(e.inPerM, f.inBefore), price(e.outPerM, f.outBefore), mk('td', '', f.cache), mk('td', '', e.tpsP50 != null ? Math.round(e.tpsP50) + ' t/s' : '–'), mk('td', '', e.latencyP50Ms != null ? (e.latencyP50Ms / 1000).toFixed(2) + ' s' : '–'),
+            up, mk('td', '', e.context ? kTok(e.context) : '–'), dp, more, mk('td'));
           // the rest, a row under it: tiered and other prices, uptime over time, limits, parameters, who runs it and their policies
           const xr = mk('tr', 'orMoreRow'); xr.hidden = true; const xd = mk('td'); xd.colSpan = COLS; xr.append(xd);
           const line = (label, text) => { if (text) { const r = mk('div'); r.append(mk('b', '', label + ': '), text); xd.append(r); } };
@@ -327,7 +399,8 @@ const AIADMIN = (() => {
       };
       for (const el of [filt, sort, tierSel, dealsOnly]) el.onchange = paint; pq.oninput = paint; paint();
     };
-    host.append(p); q.focus(); search();
+    host.append(p);
+    if (opts.model) { top.hidden = true; fl.hidden = true; info.hidden = true; showProviders(opts.model, opts.picks); } else { q.focus(); search(); }
   }
   // everyone's month on the team's keys, and each person's cap (Manage AI)
   async function everyonesMonth(box) {
@@ -380,5 +453,5 @@ const AIADMIN = (() => {
     }
     box.append(t, note);
   }
-  return { open, myKeys, endpointFacts, modelLine };
+  return { open, myKeys, endpointFacts, modelLine, entryView, entryFor, entryLine, searchQuery };
 })();

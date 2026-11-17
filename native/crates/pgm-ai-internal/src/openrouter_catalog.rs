@@ -132,6 +132,16 @@ pub struct ModelInfo {
     pub created: Option<u64>,
     #[serde(default)]
     pub architecture: Option<Value>,
+    /// The request parameters the model takes (tools, reasoning, structured_outputs …; T-387's search filters).
+    #[serde(default)]
+    pub supported_parameters: Option<Vec<Value>>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+impl ModelInfo {
+    pub fn takes(&self, param: &str) -> bool { self.supported_parameters.iter().flatten().any(|p| p.as_str() == Some(param)) }
+    pub fn inputs(&self) -> Vec<Value> { self.architecture.as_ref().and_then(|a| a["input_modalities"].as_array().cloned()).unwrap_or_default() }
+    pub fn reads(&self, kind: &str) -> bool { self.inputs().iter().any(|i| i.as_str() == Some(kind)) }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -239,27 +249,40 @@ pub fn provider_info(providers: &Value, ep: &EndpointInfo) -> Value {
 }
 
 /// The search's filters beyond its words: only models with a deal (from the deals index), only free ones, only those with
-/// an endpoint on the ZDR list (as OpenRouter's own `GET /models?zdr=true`).
+/// an endpoint on the ZDR list (as OpenRouter's own `GET /models?zdr=true`); T-387: only those that take tools, that
+/// reason, that read images, at most this input price ($/M), at least this context (tokens); and the order.
 #[derive(Default, Clone, Copy)]
-pub struct ModelFilter { pub deals: bool, pub free: bool, pub zdr: bool }
+pub struct ModelFilter { pub deals: bool, pub free: bool, pub zdr: bool, pub tools: bool, pub reasoning: bool, pub image: bool, pub max_in: Option<f64>, pub min_context: Option<u64>, pub sort: Sort }
+/// How the search orders its models: newest (OpenRouter's `created`), cheapest input, the most context, the biggest deal.
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+pub enum Sort { #[default] Newest, Cheapest, Context, Deal }
+impl Sort { pub fn named(t: &str) -> Sort { match t { "price" | "cheapest" => Sort::Cheapest, "context" => Sort::Context, "deal" => Sort::Deal, _ => Sort::Newest } } }
 
-/// The models as the page lists them, those matching every word of `q` (id or name, any case) and the filter, newest
-/// first; at most [`MAX_MODELS`]. `deals` is the deals index (model id → its biggest deal) when it has been built.
+/// The models as the page lists them, those matching every word of `q` (id, name or description, any case) and the filter,
+/// in the filter's order (newest first by default); at most [`MAX_MODELS`]. `deals` is the deals index (model id → its biggest deal) when it has been built.
 pub fn models_view(raw: &Value, q: &str, deals: Option<&HashMap<String, f64>>, zdr: &Value, f: ModelFilter) -> Value {
     let zc = zdr_counts(zdr);
     let zn = |m: &ModelInfo| zc.get(&m.id).copied().unwrap_or(0);
     let models: Vec<ModelInfo> = raw["data"].as_array().into_iter().flatten().filter_map(|m| serde_json::from_value(m.clone()).ok()).collect();
     let words: Vec<String> = q.to_lowercase().split_whitespace().map(String::from).collect();
     let deal = |m: &ModelInfo| deals.and_then(|d| d.get(&m.id)).copied(); // a variant (…:free) is its own model: no deal of the paid one
-    let mut hit: Vec<&ModelInfo> = models.iter().filter(|m| { let hay = format!("{} {}", m.id, m.name).to_lowercase(); words.iter().all(|w| hay.contains(w.as_str())) })
-        .filter(|m| !f.deals || deal(m).is_some()).filter(|m| !f.free || m.pricing.free()).filter(|m| !f.zdr || zn(m) > 0).collect();
+    let mut hit: Vec<&ModelInfo> = models.iter().filter(|m| { let hay = format!("{} {} {}", m.id, m.name, m.description.as_deref().unwrap_or_default()).to_lowercase(); words.iter().all(|w| hay.contains(w.as_str())) })
+        .filter(|m| !f.deals || deal(m).is_some()).filter(|m| !f.free || m.pricing.free()).filter(|m| !f.zdr || zn(m) > 0)
+        .filter(|m| !f.tools || m.takes("tools")).filter(|m| !f.reasoning || m.takes("reasoning")).filter(|m| !f.image || m.reads("image"))
+        .filter(|m| f.max_in.is_none_or(|x| m.pricing.in_per_m().is_some_and(|p| p <= x))).filter(|m| f.min_context.is_none_or(|x| m.context_length.unwrap_or(0) >= x)).collect();
     hit.sort_by(|a, b| b.created.unwrap_or(0).cmp(&a.created.unwrap_or(0)));
+    match f.sort { // stable: equal ones stay newest first
+        Sort::Newest => {}
+        Sort::Cheapest => hit.sort_by(|a, b| a.pricing.in_per_m().unwrap_or(f64::MAX).total_cmp(&b.pricing.in_per_m().unwrap_or(f64::MAX))),
+        Sort::Context => hit.sort_by(|a, b| b.context_length.unwrap_or(0).cmp(&a.context_length.unwrap_or(0))),
+        Sort::Deal => hit.sort_by(|a, b| deal(b).unwrap_or(0.0).total_cmp(&deal(a).unwrap_or(0.0))),
+    }
     let total = hit.len();
     let list: Vec<Value> = hit.into_iter().take(MAX_MODELS).map(|m| json!({
         "id": m.id, "name": if m.name.is_empty() { m.id.clone() } else { m.name.clone() }, "context": m.context_length,
         "inPerM": m.pricing.in_per_m(), "outPerM": m.pricing.out_per_m(), "cacheReadPerM": m.pricing.cache_read_per_m(), "cacheWritePerM": m.pricing.cache_write_per_m(),
         "more": m.pricing.more(), "tiers": m.pricing.tiers(), "free": m.pricing.free(), "bestDeal": deal(m), "zdrEndpoints": zn(m),
-        "input": m.architecture.as_ref().and_then(|a| a["input_modalities"].as_array().cloned()).unwrap_or_default(),
+        "input": m.inputs(), "tools": m.takes("tools"), "reasoning": m.takes("reasoning"),
     })).collect();
     json!({ "models": list, "total": total })
 }
@@ -377,14 +400,16 @@ fn start_deals(hub: Arc<dyn AiHub>) {
     });
 }
 
-/// `GET /api/openrouter/catalog/models?q=&deals=1&free=1&zdr=1` and `GET /api/openrouter/catalog/endpoints?model=<author/slug>`:
+/// `GET /api/openrouter/catalog/models?q=&deals=1&free=1&zdr=1&tools=1&reasoning=1&image=1&maxIn=&minContext=&sort=` and `GET /api/openrouter/catalog/endpoints?model=<author/slug>`:
 /// AI Admin's model and provider picker (everyone signed in since T-383: anyone may add a key of their own and pick its
 /// entries; the catalogue is OpenRouter's public one).
 pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, _a: &Account) -> Option<Resp> {
     if r.method != hyper::Method::GET || !r.path.starts_with("/api/openrouter/catalog/") { return None; }
     let on = |k: &str| r.param(k).is_some_and(|v| v == "1" || v == "true");
     let got = match r.path.as_str() {
-        "/api/openrouter/catalog/models" => models(hub, &r.param("q").unwrap_or_default().chars().take(100).collect::<String>(), ModelFilter { deals: on("deals"), free: on("free"), zdr: on("zdr") }).await,
+        "/api/openrouter/catalog/models" => models(hub, &r.param("q").unwrap_or_default().chars().take(100).collect::<String>(), ModelFilter { deals: on("deals"), free: on("free"), zdr: on("zdr"), tools: on("tools"), reasoning: on("reasoning"), image: on("image"),
+            max_in: r.param("maxIn").and_then(|v| v.trim().parse::<f64>().ok()).filter(|x| x.is_finite() && *x >= 0.0), min_context: r.param("minContext").and_then(|v| v.trim().parse::<u64>().ok()),
+            sort: Sort::named(&r.param("sort").unwrap_or_default()) }).await,
         "/api/openrouter/catalog/endpoints" => endpoints(&**hub, r.param("model").unwrap_or_default().trim()).await,
         _ => return Some(answer(404, json!({ "error": "Not found" }))),
     };
@@ -480,6 +505,27 @@ mod tests {
         let only = models_view(&models, "", None, &zdr, ModelFilter { zdr: true, ..Default::default() });
         assert_eq!(only["models"].as_array().unwrap().iter().map(|m| format!("{} {}", s(m, "id"), m["zdrEndpoints"])).collect::<Vec<_>>(), ["a/b 2", "c/d 1"]);
         assert_eq!(models_view(&models, "", None, &zdr, ModelFilter::default())["total"], 3);
+    }
+    #[test]
+    fn the_model_search_filters_by_what_a_model_takes_reads_costs_and_holds_and_sorts_four_ways() {
+        let raw = json!({ "data": [
+            { "id": "a/coder", "name": "Coder", "created": 4, "context_length": 32000, "pricing": { "prompt": "0.0000003", "completion": "0.000001" }, "supported_parameters": ["tools"], "architecture": { "input_modalities": ["text"] } },
+            { "id": "b/thinker", "name": "Thinker", "created": 3, "context_length": 200000, "pricing": { "prompt": "0.000002", "completion": "0.000008" }, "supported_parameters": ["tools", "reasoning"], "architecture": { "input_modalities": ["text", "image"] }, "description": "Reads charts" },
+            { "id": "c/cheap", "name": "Cheap", "created": 2, "context_length": 128000, "pricing": { "prompt": "0.0000001", "completion": "0.0000002" }, "supported_parameters": [] },
+            { "id": "d/free", "name": "Free", "created": 1, "pricing": { "prompt": "0", "completion": "0" } }] });
+        let ids = |f: ModelFilter, q: &str| models_view(&raw, q, Some(&[("c/cheap".to_string(), 0.3), ("a/coder".to_string(), 0.1)].into()), &Value::Null, f)["models"].as_array().unwrap().iter().map(|m| s(m, "id")).collect::<Vec<_>>().join(",");
+        assert_eq!(ids(ModelFilter { tools: true, ..Default::default() }, ""), "a/coder,b/thinker");
+        assert_eq!(ids(ModelFilter { reasoning: true, ..Default::default() }, ""), "b/thinker");
+        assert_eq!(ids(ModelFilter { image: true, ..Default::default() }, ""), "b/thinker");
+        assert_eq!(ids(ModelFilter::default(), "charts"), "b/thinker", "the words find the description too");
+        assert_eq!(ids(ModelFilter { max_in: Some(0.3), ..Default::default() }, ""), "a/coder,c/cheap,d/free", "at most $0.30/M in");
+        assert_eq!(ids(ModelFilter { min_context: Some(100_000), ..Default::default() }, ""), "b/thinker,c/cheap");
+        assert_eq!(ids(ModelFilter { sort: Sort::Cheapest, ..Default::default() }, ""), "d/free,c/cheap,a/coder,b/thinker");
+        assert_eq!(ids(ModelFilter { sort: Sort::Context, ..Default::default() }, ""), "b/thinker,c/cheap,a/coder,d/free");
+        assert_eq!(ids(ModelFilter { sort: Sort::Deal, ..Default::default() }, ""), "c/cheap,a/coder,b/thinker,d/free");
+        assert_eq!((Sort::named("price"), Sort::named("context"), Sort::named("deal"), Sort::named("anything")), (Sort::Cheapest, Sort::Context, Sort::Deal, Sort::Newest));
+        let v = models_view(&raw, "thinker", None, &Value::Null, ModelFilter::default());
+        assert_eq!((v["models"][0]["tools"].clone(), v["models"][0]["reasoning"].clone(), v["models"][0]["input"].clone()), (json!(true), json!(true), json!(["text", "image"])));
     }
     #[test]
     fn only_a_real_model_id_reaches_openrouters_path() {

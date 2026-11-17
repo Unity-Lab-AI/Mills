@@ -125,6 +125,8 @@ fn key_view(k: &Value, id: &str, label: &str) -> Value {
 fn clamp_days(d: &Value) -> u64 { let n = d.as_f64().or_else(|| d.as_str().and_then(|x| x.parse().ok())).unwrap_or(0.0).round() as i64; if [0, 1, 7, 30, 90].contains(&n) { n as u64 } else { 0 } }
 
 // ---------- providers (AI Admin → My AIs): bridge/providers.json ----------
+/// What a person who did not add an OpenRouter key they can see is told when they try to change it (403; T-387).
+pub const NOT_ADDER: &str = "Only the person who added this key may change it.";
 fn providers_file(hub: &dyn AiHub) -> PathBuf { hub.root().join("providers.json") }
 fn providers_db(hub: &dyn AiHub) -> Vec<Value> { read_json(&providers_file(hub)).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default() }
 fn save_providers(hub: &dyn AiHub, list: Vec<Value>) { write_json(&providers_file(hub), &json!({ "providers": list })); }
@@ -240,7 +242,8 @@ fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String>
 fn update_provider(hub: &dyn AiHub, user: &str, id: &str, b: &Value) -> Result<Value, String> {
     let _one = PROVIDERS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut list = providers_db(hub);
-    // a team OpenRouter key: its owner, and anyone holding Manage AI (T-383)
+    // an OpenRouter key: only the person who added it (T-387)
+    if let Some(x) = list.iter().find(|x| x["id"] == json!(id) && x["kind"] == json!(crate::openrouter::KIND) && x["owner"] != json!(user) && x["shared"] == json!(true)) { if !crate::openrouter_team::may_edit(hub, user, x) { return Err(NOT_ADDER.into()); } }
     let Some(p) = list.iter_mut().find(|x| x["id"] == json!(id)).filter(|x| x["owner"] == json!(user) || (x["kind"] == json!(crate::openrouter::KIND) && crate::openrouter_team::may_edit(hub, user, x))) else { return Err("Not your provider.".into()) };
     if p["kind"] == json!(crate::openrouter::KIND) {
         if b.get("limits").is_some() { p["limits"] = crate::openrouter_team::clean_limits(&b["limits"], None)?; }
@@ -265,6 +268,7 @@ fn update_provider(hub: &dyn AiHub, user: &str, id: &str, b: &Value) -> Result<V
 pub(crate) fn remove_provider(hub: &dyn AiHub, user: &str, id: &str) -> Result<(), String> {
     { let _one = PROVIDERS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut list = providers_db(hub);
+    if let Some(x) = list.iter().find(|x| x["id"] == json!(id) && x["kind"] == json!(crate::openrouter::KIND) && x["owner"] != json!(user) && x["shared"] == json!(true)) { if !crate::openrouter_team::may_edit(hub, user, x) { return Err(NOT_ADDER.into()); } }
     let Some(i) = list.iter().position(|x| x["id"] == json!(id)).filter(|i| list[*i]["owner"] == json!(user) || (list[*i]["kind"] == json!(crate::openrouter::KIND) && crate::openrouter_team::may_edit(hub, user, &list[*i]))) else { return Err("Not your provider.".into()) };
     list.remove(i); save_providers(hub, list); }
     // nobody keeps pointing at it
@@ -1040,8 +1044,8 @@ pub fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         }
         "/api/providers" if get => { let p = s(&w.state(a), "provider"); answer(200, json!({ "providers": list(), "provider": if p.is_empty() { "host".to_string() } else { p } })) }
         "/api/providers/add" if post => match add_provider(&**hub, u, &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
-        "/api/providers/update" if post => match update_provider(&**hub, u, &s(&b, "id"), &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
-        "/api/providers/remove" if post => match remove_provider(&**hub, u, &s(&b, "id")) { Ok(()) => answer(200, json!({ "providers": list() })), Err(e) => answer(400, json!({ "error": e })) },
+        "/api/providers/update" if post => match update_provider(&**hub, u, &s(&b, "id"), &b) { Ok(p) => answer(200, json!({ "provider": p, "providers": list() })), Err(e) => answer(if e == NOT_ADDER { 403 } else { 400 }, json!({ "error": e })) },
+        "/api/providers/remove" if post => match remove_provider(&**hub, u, &s(&b, "id")) { Ok(()) => answer(200, json!({ "providers": list() })), Err(e) => answer(if e == NOT_ADDER { 403 } else { 400 }, json!({ "error": e })) },
         // AI Admin → My AI hosts' list (+ the default provider, which this module knows)
         "/api/hosts" if get => {
             let ai = hub.ai();

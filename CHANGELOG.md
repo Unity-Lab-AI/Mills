@@ -7,6 +7,44 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.75.0 — 2026-11-17
+
+MINOR: **an OpenRouter key carries its models, each on the providers its owner ticked, in their order; only the person
+who added a key changes it; the model search has filters and orders** (T-387; Sponge: "setup the key and then configure
+what models and providers of the models can be used per key and re-configure things later … let only who added the key
+modify the models, providers, ext." and "type in and somewhat search for models, find a model … click on a model, search
+providers, and do some fancy search things inside viberoller").
+
+- **Models on this key** replaces a key's "Entries". "Add models" opens the search: words (name, maker, description),
+  filters (deals, free, zero data retention, takes tools, reasons, reads images, at most this input price per million, at
+  least this context) and an order (newest, cheapest, most context, biggest deal). The last search is kept for the next
+  time. Clicking a model opens its providers with their search, filters and sort (T-385/T-386). Tick the providers to
+  allow: the order they were ticked in is the order they are tried. Or "Allow any provider": OpenRouter chooses.
+- Each model on a key can be renamed, removed, have its providers moved up or down or removed, and "Change providers"
+  reopens its provider list with the ticks it has. People pick the model by its id in Work, the API and jcode's
+  viberoller provider, shown by its name.
+- Saved as the hub's entries, unchanged in shape: id = the model's id, the ticked providers are the steps of one chain
+  (the next is tried when one is unavailable, said in the session), any provider = `allowFallbacks` with no order. So the
+  hub, the API and the Jcode PGM Server route them as before, and an older entry made of several models still runs (shown
+  as "an older chain", and removable). A key may hold 100 models (was 30) and a model 24 providers (was 8); an entry id
+  may be 120 characters (model ids).
+- **Only the person who added a key changes it**: its models and providers, name, sharing, limits, management key, and
+  removing it. Manage AI no longer changes another person's team key (Sponge: "admins can change whatever whenever as long
+  as they added it"); they are told "Only the person who added this key may change it." (403). Only a key with no owner on
+  record is left to Manage AI, so none becomes unchangeable. Each key says who added it, and to everyone else its models
+  read "Only <name>, who added this key, changes its models and providers." Each person's monthly cap on the team's keys
+  stays with Manage AI.
+- `GET /api/openrouter/catalog/models` takes `tools=1`, `reasoning=1`, `image=1`, `maxIn=` ($/M), `minContext=`
+  (tokens) and `sort=price|context|deal`, finds words in the description too, and adds `tools` and `reasoning` per model.
+- Checks: **R654** (the page's own entry builder saves a model on two ticked providers and one on any provider; the
+  first provider down gives way to the second with the switch said; any provider leaves OpenRouter free; someone who did
+  not add the key gets 403 on changing and removing it; the search's filters and price order; the page's words);
+  **R611** now says an admin may not change, rename, re-model, limit or remove a teammate's key (seen failing on 5.74.0:
+  the admin could, and even removed it); R599 and R650 follow the page's new words; unit test
+  `the_model_search_filters_by_what_a_model_takes_reads_costs_and_holds_and_sorts_four_ways`.
+- Modules: web/aiadmin.js 1.5.0, web/polish.css 1.4.1; pgm-ai-internal's openrouter.rs, openrouter_team.rs,
+  openrouter_catalog.rs, openai.rs.
+
 ## 5.74.0 — 2026-11-17
 
 MINOR: **each provider of a model shows its data policy as a green, yellow or red marker, from OpenRouter's API only;

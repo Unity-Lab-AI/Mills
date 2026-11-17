@@ -151,8 +151,10 @@ pub fn keys_for(hub: &dyn AiHub, u: &str) -> Vec<Value> {
     let w = hub.work();
     crate::work::providers_list(hub, u).into_iter().filter(|p| p["kind"] == json!(crate::openrouter::KIND)).filter_map(|p| w.provider_get(hub.ai(), &s(&p, "id"), u)).collect()
 }
-/// Who may change a key: its owner, and for a team key anyone holding Manage AI.
-pub fn may_edit(hub: &dyn AiHub, u: &str, p: &Value) -> bool { p["owner"] == json!(u) || (p["shared"] == json!(true) && crate::openrouter::manages_ai(hub, u)) }
+/// Who may change a key (its models and their providers, name, limits, management key, sharing, removal): the person who
+/// added it, and nobody else (T-387; Sponge: "admins can change whatever whenever as long as they added it"). Only a key
+/// with no owner on record (hand-made) is left to Manage AI, so it never becomes a key nobody can change.
+pub fn may_edit(hub: &dyn AiHub, u: &str, p: &Value) -> bool { p["owner"] == json!(u) || (s(p, "owner").is_empty() && crate::openrouter::manages_ai(hub, u)) }
 /// The key a request names (`key`), else the first team key; only one the person may see.
 fn key_named(hub: &dyn AiHub, u: &str, id: &str) -> Option<Value> {
     let ks = keys_for(hub, u);
@@ -221,7 +223,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         },
         ("POST", "/api/openrouter/team/caps") | ("POST", "/api/openrouter/team/management-key") => {
             let Some(p) = key_named(&**hub, u, &kid) else { return Some(answer(404, json!({ "error": "No such OpenRouter key." }))) };
-            if !may_edit(&**hub, u, &p) { return Some(answer(403, json!({ "error": "Only the key's owner (or, for a team key, someone with Manage AI) may change it." }))); }
+            if !may_edit(&**hub, u, &p) { return Some(answer(403, json!({ "error": "Only the person who added this key may change it." }))); }
             let id = s(&p, "id");
             let change = if r.path.ends_with("/caps") {
                 match clean_limits(&body, key_limit(&**hub, &p).await) { Ok(l) => { pgm_core_internal::audit::record(u, "openrouter.key.limits", &id, l.clone(), ""); crate::openai::edit_provider(&**hub, &id, |x| { x["limits"] = l; }) } Err(e) => return Some(answer(400, json!({ "error": e }))) }
