@@ -271,7 +271,7 @@ fn note_usage(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally,
 /// An answer's usage (the provider's own object, whichever shape) to the ledger (under the model the upstream named) and the
 /// key's counters and day roll-up (under the routed model).
 fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, model: &str, native: &Value) {
-    if t.kind == crate::openrouter::KIND { crate::openrouter::note_for(&**hub, user, t.personal, native); } // the month budget: OpenRouter's own cost of the answer
+    if t.kind == crate::openrouter::KIND { crate::openrouter::note_for_in(&**hub, user, t.personal, native, &key.session); } // the month budget and the team key's limits (T-381): OpenRouter's own cost of the answer
     if let Some(u) = openai::normalise(native) {
         hub.ai().usage.note_answer(user, &t.kind, model, &u);
         openai::count_tokens(&**hub, user, key, &t.prov, &t.model, u.total_input(), u.output);
@@ -422,8 +422,21 @@ pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, pr
     if !model.is_empty() { body["model"] = json!(model); }
     if added { if !body["stream_options"].is_object() { body["stream_options"] = json!({}); } body["stream_options"]["include_usage"] = json!(true); }
     let cancel = run.cancel.clone();
+    // T-381: an OpenRouter entry with a chain: model 1, then each fallback while a step fails before any answer came
+    let chain = if p["kind"] == json!(crate::openrouter::KIND) { crate::openrouter::pair(&p, &s(&body, "model")).map(|pr| crate::openrouter::steps_of(&pr)).filter(|st| st.len() > 1).unwrap_or_default() } else { vec![] };
+    let mut step = 0usize; let mut switched: Vec<String> = vec![];
     let (status, rheaders, up) = loop {
-        let (st, hs, up) = match oa_upstream(hub, user, &p, CHAT, serde_json::to_vec(&body).unwrap_or_default(), stream, &cancel, Fmt::Oa).await { Ok(x) => x, Err(e) => return e };
+        if !chain.is_empty() { body["_vr_step"] = json!(step); }
+        let sent = oa_upstream(hub, user, &p, CHAT, serde_json::to_vec(&body).unwrap_or_default(), stream, &cancel, Fmt::Oa).await;
+        if step + 1 < chain.len() {
+            let failed = match &sent { Ok((st, _, _)) => (!(200..300).contains(st) && crate::openrouter::may_switch(*st)).then_some(*st), Err(_) => Some(0) };
+            if let Some(st) = failed {
+                let why = match sent { Ok((_, _, up)) => { let b = read_all(up, &cancel).await.unwrap_or_default(); crate::openrouter::why_of(st, &b) } Err(_) => crate::openrouter::why_of(0, b"") };
+                switched.push(crate::openrouter::switch_line(step, &chain[step], &why, &chain[step + 1]));
+                step += 1; continue;
+            }
+        }
+        let (st, hs, up) = match sent { Ok(x) => x, Err(e) => return e };
         if added && (st == 400 || st == 422) {
             let Some(bytes) = read_all(up, &cancel).await else { return err_resp(Fmt::Oa, 499, "cancelled") };
             let t = String::from_utf8_lossy(&bytes).to_lowercase();
@@ -432,7 +445,9 @@ pub async fn chat_raw(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, pr
         }
         break (st, hs, up);
     };
-    let ct = ct_of(&rheaders); let out_h = oa_response_headers(&rheaders);
+    let ct = ct_of(&rheaders); let mut out_h = oa_response_headers(&rheaders);
+    // the switches, for the caller to show (a Work run's relay puts them in the transcript); one header line each, ASCII-safe
+    for l in &switched { out_h.push(("x-vr-openrouter-switch".into(), l.chars().map(|c| if c.is_ascii() && !c.is_control() { c } else { '?' }).collect())); }
     if !(200..300).contains(&status) {
         let Some(bytes) = read_all(up, &cancel).await else { return err_resp(Fmt::Oa, 499, "cancelled") };
         return raw(status, &ct, &out_h, pgm_net_internal::http::full(bytes)); // the provider's own error, as it came

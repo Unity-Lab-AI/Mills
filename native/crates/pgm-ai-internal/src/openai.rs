@@ -45,7 +45,7 @@ pub struct Answer { text: String, model: String, usage: Value, native: Value }
 /// Which key made a request and what it may do: the person's default key (the legacy fields of their record, `id`
 /// "default") or one of the named keys in `keys` (add-only: the frozen JS hub ignores them).
 #[derive(Clone, Debug, Default)]
-pub struct KeyCtx { pub id: String, pub label: String, pub providers: Vec<String>, pub models: Vec<String>, pub max: Option<u64>, pub named: bool }
+pub struct KeyCtx { pub id: String, pub label: String, pub providers: Vec<String>, pub models: Vec<String>, pub max: Option<u64>, pub named: bool, pub session: String }
 impl KeyCtx { pub fn default_key() -> KeyCtx { KeyCtx { id: "default".into(), label: "default".into(), ..Default::default() } } }
 /// The answers being made: slot → (person, key id, its cancel).
 type RunMap = HashMap<u64, (String, String, Arc<Cancel>)>;
@@ -99,7 +99,7 @@ impl Api {
                 if crate::work::same_secret(v["hash"].as_str().unwrap_or(""), &h) { return Some((u.clone(), v.clone(), KeyCtx::default_key())); }
                 v["keys"].as_array()?.iter().find(|x| crate::work::same_secret(x["hash"].as_str().unwrap_or(""), &h)).map(|x| (u.clone(), x.clone(), KeyCtx {
                     id: s(x, "id"), label: s(x, "label"), named: true, max: x["maxConcurrent"].as_u64().filter(|n| *n > 0).map(|n| n.min(64)),
-                    providers: str_list(&x["providers"]), models: str_list(&x["models"]) }))
+                    providers: str_list(&x["providers"]), models: str_list(&x["models"]), ..Default::default() }))
             }) };
         let Some((u, rec, ctx)) = found else { return Err("Unknown API key (rotated, revoked, or never issued).".into()) };
         if ctx.named && rec["enabled"] == json!(false) { return Err("This API key is switched off.".into()); }

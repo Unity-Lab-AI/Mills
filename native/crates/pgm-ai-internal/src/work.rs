@@ -336,6 +336,9 @@ impl Work {
             .filter(|p| { let o = p["owner"].as_str().unwrap_or(""); if p["kind"] == json!(crate::openrouter::KIND) { pgm_identity_internal::siteroles::has_perm(&self.root, &def, o, pgm_identity_internal::siteroles::MANAGE_AI) } else { !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, o) } }).collect()
     }
     /// The team's OpenRouter provider (the first shared one with pairs): the pairs a person's own key uses unless they list their own (T-372).
+    /// The team's OpenRouter key's provider, with entries or not yet (T-381: AI Admin reads the catalogue and the key's
+    /// limits with it before the first entry is made).
+    pub fn team_key_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !s(p, "apiKey").is_empty()) }
     pub fn team_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !crate::openrouter::pairs_of(p).is_empty()) }
     /// A person's own OpenRouter provider `or-me:<user>` (their key; None without a key, with personal keys off, or without pairs).
     pub fn personal_for(&self, user: &str) -> Option<Value> {
@@ -548,6 +551,8 @@ impl Work {
     pub(crate) fn emit_run(&self, run: &str, ev: Value) { let key = self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(_, r)| r.id == run).map(|(k, _)| k.clone()); if let Some(k) = key { self.emit(&k, ev); } }
     /// A wait of this session's run (an agent's answer) keeps it alive for the liveness check, as a question does.
     pub(crate) fn keep_alive_key(&self, key: &str) { self.keep_alive(key) }
+    /// One line of information in a running session's transcript (e.g. an OpenRouter chain switching models, T-381).
+    pub fn info_line(&self, key: &str, text: &str) { self.emit(key, json!({ "type": "bridge_info", "text": text })); }
     fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); journal(r, &ev); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     pub(crate) fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
@@ -1099,7 +1104,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let hprov = or_plan.as_ref().map(|p| p.prov.clone()).unwrap_or_else(|| prov.clone());
     let mut or_tok: Option<String> = None;
     if let Some(pl) = &or_plan {
-        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed);
+        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed, &sx.sid, &sx.key);
         relay_env = crate::openrouter::relay_env(hub.cfg().port, &tok); relay_env.extend(pl.env.iter().cloned());
         or_tok = Some(tok);
         if let Some(l) = &fb_line { w.emit(&sx.key, json!({ "type": "bridge_info", "text": l })); }

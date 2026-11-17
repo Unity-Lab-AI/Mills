@@ -7,6 +7,37 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.71.0 — 2026-11-17
+
+MINOR: **Team OpenRouter in AI Admin: model + provider picker, named fallback chains, the key's own limits, credits in
+Work** (T-381, from Sponge; team note plans/openrouter-team-admin.md). Jcode PGM 0.99.11 is the server and jcode side.
+
+- **The picker (jcode's model fetching, shared):** search OpenRouter's models, then pick one of a model's providers. Each provider shows:
+  - input and output price per million tokens;
+  - speed (tokens per second) and time to the first token;
+  - uptime, quantization and context;
+  - its **data policy**: *No retention* (ZDR), *Retains, no training* (safety retention) or *Retains, may train*, from OpenRouter's ZDR list; an endpoint not on the list counts as retains and may train, as OpenRouter itself rules.
+
+  The list can be filtered by data policy, sorted by speed, price, uptime or first token, and searched. The types and detail line are jcode's (`jcode-provider-openrouter`), now in the library `pgm-ai-internal::openrouter_catalog`. Speed and latency are asked for with the team key, since OpenRouter gives them only to a key. Routes `GET /api/openrouter/catalog/models?q=` and `/endpoints?model=` (Manage AI).
+- **Entries are named fallback chains** hosted by this hub:
+  - They start empty. **Add a fallback** picks a model and a provider and names the entry (e.g. "deepseek"); **Add another fallback** adds model 2, 3, …, any model on any provider. Steps can be moved up, removed and renamed.
+  - Each step goes to exactly its endpoint (`provider.order: [<endpoint tag>]`, no fallback of OpenRouter's own).
+  - When a step fails **before it answers** (404, 408, 429, 5xx, not reached), the next one is tried, and the switch is said in words: *"model 1: deepseek via stepfun unavailable (503: …), switching to model 2: deepseek via cloudflare"*. In a Work run this is a line in the transcript; on the API it is the header `x-vr-openrouter-switch`; through the Jcode PGM Server it is a status line in jcode.
+  - Credits, budgets, a refused key or a bad request (400, 401, 402, 403) never switch.
+  - Data: a pair's `steps: [{model, provider, label}]` (add-only; step 1 stays the pair's `model` / `providers`, so older code runs it). `/__pgm/route` gives the chain (`steps`, `switchOn`, add-only).
+- **The team key's own limits, for everyone together:**
+  - Windows: 5 hours and 7 days rolling, the calendar month (UTC); defaults **$10 / $20 / $20**, set in AI Admin (Manage AI).
+  - Spend reaching one is refused for every team-key path before OpenRouter is asked: the API, Work's relay and the Jcode PGM Server. The refusal is in the caller's API shape and names the window and when it frees up.
+  - A limit above the key's own limit on OpenRouter is refused. With an unlimited key the limits may be higher than the credits on the account (no top-up happens by itself).
+  - The ledger `openrouter-team-ledger.jsonl` and the settings `openrouter-team.json` are Rust-only data. A person's own key is never counted.
+- **What is left:** the account's credits (OpenRouter tells them to a **management key**, set optionally next to the team key), the key's own limit and spend, the three windows.
+  - In Work, a line under the usage bar shows, while the session on screen runs on the team's OpenRouter, *This hub · OpenRouter · 5h $x / $10 · 7d … · month … · credits $y left · this session $z*. A Work run's spend is kept per session.
+  - Routes `GET /api/openrouter/team[?session=]`, `POST …/team/caps`, `POST …/team/management-key`.
+- **This hub is the host:** Work's picker group is "This hub · OpenRouter"; a person's own key is "OpenRouter · my key".
+- **Fixed on the way:** a model id like `../x` reached OpenRouter's path, and two keys ending in the same 4 characters shared OpenRouter's answer for a minute.
+- **Versions:** web/aiadmin.js 1.1.0, web/index.html 1.55.0, web/polish.css 1.2.0.
+- **Checks:** R647–R650 are new (the catalogue, the chains, the limits and credits, the page). R591 now accepts a team key with no entries.
+
 ## 5.70.5 — 2026-11-17
 
 PATCH: **No more console windows popping up and stealing focus on Windows**, and the regression suite runs clean on Windows (from
@@ -33,6 +64,7 @@ test that u ran if it is out dated").
 
 ### Added
 - Regression check R643: nothing native starts a program with DETACHED_PROCESS again.
+
 ## 5.70.4 — 2026-11-17
 
 PATCH: **the release summary: everything on dev since live 5.57.4** (no code change; the detail of each item is in its own

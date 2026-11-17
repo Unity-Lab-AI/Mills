@@ -1686,6 +1686,9 @@
         <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--d --h --m</span></div>
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
+      <!-- T-381: while the session on screen runs on the team's OpenRouter (hosted by this hub): the key's limits for everyone
+           together (5 h, 7 d, month), the credits left on the account and this session's spend -->
+      <div id="orUseBar" class="orUseBar" hidden role="status"></div>
       <div id="useBar" hidden role="status"></div><!-- what this run uses on your computer: web/machines.js (T-314) -->
       <div id="logRow"><!-- the conversation, and the queue panel next to it (web/queue.js, T-188) -->
         <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
@@ -2721,7 +2724,7 @@ function showModels(d) {
     // two kinds of engine: Claude (Claude Code, through an AI host's login or a key) and OpenRouter (Jcode PGM on the server, T-370)
     const orp = p.kind === 'openrouter', pairLabel = Object.fromEntries((p.pairs || []).map((x) => [x.id, x.label || x.id]));
     const g = document.createElement('optgroup');
-    g.label = orp ? 'OpenRouter' + (provs.filter((x) => x.kind === 'openrouter').length > 1 || p.personal ? ' · ' + p.label : '') + (p.workOff ? ' · not set up on this server' : '')
+    g.label = orp ? (p.personal ? 'OpenRouter · my key' : 'This hub · OpenRouter' + (provs.filter((x) => x.kind === 'openrouter' && !x.personal).length > 1 ? ' · ' + p.label : '')) + (p.workOff ? ' · not set up on this server' : '') // T-381: the team's entries are hosted by this hub
       : (p.kind === 'host-claude' ? 'Claude (' + (p.nickname || p.label) + ')' + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '') : provName(p)) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
     for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = orp ? (pairLabel[m] || m) : modelName(m); o.disabled = p.online === false || !!p.workOff; if (p.workOff) o.title = p.workOff; g.append(o); }
     sel.append(g);
@@ -3714,6 +3717,28 @@ let usageData = null, usageSkew = 0;
 async function refreshUsage() {
   if (!me) return;
   try { usageData = await json('/api/usage'); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
+  refreshOrUse();
+}
+// T-381: the team OpenRouter line in Work, for a session whose AI is the team's OpenRouter (an older hub has no
+// /api/openrouter/team: the line stays hidden)
+function teamOrSession() {
+  const sid = typeof SESSIONS !== 'undefined' ? SESSIONS.onScreen() : '', s = sid && SESSIONS.byId ? SESSIONS.byId(sid) : null;
+  const pid = (s && s.provider) || (me && me.provider) || '';
+  const p = ((me && me.providers) || []).find((x) => x.id === pid);
+  return p && p.kind === 'openrouter' && !p.personal ? sid || '' : null;
+}
+async function refreshOrUse() {
+  const bar = $('orUseBar'); if (!bar) return;
+  const sid = teamOrSession(); if (sid === null) { bar.hidden = true; return; }
+  let st; try { st = await json('/api/openrouter/team' + (sid ? '?session=' + encodeURIComponent(sid) : '')); } catch { bar.hidden = true; return; }
+  const m = (n) => '$' + Number(n || 0).toFixed(2), w = st.windows || {}, parts = [];
+  for (const [k, l] of [['fiveHour', '5h'], ['week', '7d'], ['month', 'month']]) if (w[k]) parts.push(l + ' ' + m(w[k].spentUsd) + ' / ' + m(w[k].capUsd) + (w[k].over ? ' (limit reached)' : ''));
+  if (st.credits) parts.push('credits ' + m(st.credits.leftUsd) + ' left');
+  if (st.session) parts.push('this session ' + m(st.session.spentUsd));
+  bar.textContent = 'This hub · OpenRouter · ' + parts.join(' · ');
+  bar.classList.toggle('over', !!st.over);
+  bar.title = 'The team key\'s limits for everyone together (5 hours and 7 days rolling, the calendar month), what is left on the account and what this session has spent.' + (st.over ? ' A limit is reached: OpenRouter answers wait until it frees up.' : '');
+  bar.hidden = false;
 }
 let usageSoon = null;
 function refreshUsageSoon() { if (!usageSoon) usageSoon = setTimeout(() => { usageSoon = null; refreshUsage(); }, 1500); } // at most one fetch per 1.5 s during a reply

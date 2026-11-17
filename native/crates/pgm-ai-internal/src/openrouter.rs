@@ -68,6 +68,7 @@ pub const REFUSED: &str = "Your own OpenRouter key was refused by OpenRouter (re
 pub const PERSONAL_OFF: &str = "Personal OpenRouter keys are switched off on this hub: an admin can allow them in AI Admin → Team OpenRouter.";
 const PERSONAL: &str = "or-me:";
 const MAX_PAIRS: usize = 30;
+const MAX_STEPS: usize = 8;
 
 /// Where OpenRouter is: `https://openrouter.ai/api/v1`, or config `openrouter.baseUrl` (the regression runner's fake).
 pub fn base_url(hub: &dyn AiHub) -> String {
@@ -83,7 +84,6 @@ fn list_of(v: &Value) -> Vec<String> {
 /// The allow-list as an admin typed it, checked: `[{ id, label, model, providers, allowFallbacks }]`.
 pub fn clean_pairs(v: &Value) -> Result<Vec<Value>, String> {
     let Some(a) = v.as_array() else { return Err("pairs must be a list of { id, label, model, providers, allowFallbacks }.".into()) };
-    if a.is_empty() { return Err("List at least one model + provider pair (id, model, providers).".into()); }
     if a.len() > MAX_PAIRS { return Err(format!("At most {MAX_PAIRS} pairs.")); }
     let id_ok = |t: &str| !t.is_empty() && t.len() <= 60 && t.chars().all(|c| c.is_ascii_alphanumeric() || "-._/:@".contains(c));
     let mut out: Vec<Value> = vec![];
@@ -91,27 +91,67 @@ pub fn clean_pairs(v: &Value) -> Result<Vec<Value>, String> {
         let id = s(x, "id").trim().to_string();
         if !id_ok(&id) { return Err(format!("A pair's id is what people pick (e.g. or/sonnet): 1 to 60 letters, digits and - . _ / : @ (got \"{}\").", id.chars().take(60).collect::<String>())); }
         if out.iter().any(|p| p["id"] == json!(id)) { return Err(format!("The pair id \"{id}\" is there twice.")); }
-        let model = s(x, "model").trim().to_string();
+        let model = { let m = s(x, "model").trim().to_string(); if m.is_empty() { s(&x["steps"][0], "model").trim().to_string() } else { m } }; // an entry given as its chain: step 1 is its model
         if model.is_empty() || model.len() > 120 || model.chars().any(|c| c.is_whitespace() || c.is_control()) { return Err(format!("The pair \"{id}\" needs its OpenRouter model id (e.g. anthropic/claude-sonnet-4.5).")); }
         let label: String = { let l = s(x, "label").trim().chars().take(60).collect::<String>(); if l.is_empty() { id.clone() } else { l } };
         let providers = list_of(&x["providers"]);
         if providers.len() > 10 || providers.iter().any(|p| p.len() > 60 || !p.chars().all(|c| c.is_ascii_alphanumeric() || "-._/ ".contains(c))) { return Err(format!("The pair \"{id}\": providers are OpenRouter provider names (at most 10, e.g. anthropic, amazon-bedrock).")); }
-        out.push(json!({ "id": id, "label": label, "model": model, "providers": providers, "allowFallbacks": x["allowFallbacks"] == json!(true) }));
+        let mut e = json!({ "id": id, "label": label, "model": model, "providers": providers, "allowFallbacks": x["allowFallbacks"] == json!(true) });
+        // T-381: an entry's chain (model 1, its fallbacks): each step a model and the one endpoint to use (its tag, e.g.
+        // deepinfra/fp4; empty = any); step 1 is the entry's model and first provider, so older code still runs it
+        if let Some(st) = x["steps"].as_array().filter(|a| !a.is_empty()) {
+            if st.len() > MAX_STEPS { return Err(format!("The entry \"{id}\": at most {MAX_STEPS} models in its chain.")); }
+            let mut steps = vec![];
+            for (i, t) in st.iter().enumerate() {
+                let m = s(t, "model").trim().to_string(); let pv = s(t, "provider").trim().to_string();
+                if m.is_empty() || m.len() > 120 || m.chars().any(|c| c.is_whitespace() || c.is_control()) { return Err(format!("The entry \"{id}\": model {} needs its OpenRouter model id.", i + 1)); }
+                if pv.len() > 80 || !pv.chars().all(|c| c.is_ascii_alphanumeric() || "-._/".contains(c)) { return Err(format!("The entry \"{id}\": model {}'s provider is an OpenRouter endpoint (e.g. deepinfra/fp4).", i + 1)); }
+                let lab: String = s(t, "label").trim().chars().take(80).collect();
+                steps.push(json!({ "model": m, "provider": pv, "label": lab }));
+            }
+            e["model"] = steps[0]["model"].clone(); e["providers"] = if s(&steps[0], "provider").is_empty() { json!([]) } else { json!([steps[0]["provider"]]) }; e["allowFallbacks"] = json!(false);
+            e["steps"] = json!(steps);
+        }
+        out.push(e);
     }
     Ok(out)
 }
 pub fn pairs_of(p: &Value) -> Vec<Value> { p["pairs"].as_array().cloned().unwrap_or_default() }
+/// An entry's chain: its steps, else the one step its model and providers make.
+pub fn steps_of(pr: &Value) -> Vec<Value> {
+    if let Some(a) = pr["steps"].as_array().filter(|a| !a.is_empty()) { return a.clone(); }
+    vec![json!({ "model": pr["model"], "provider": list_of(&pr["providers"]).first().cloned().unwrap_or_default(), "label": "" })]
+}
+/// How a step is named in a switch notice: its label, else "<model> via <provider>".
+pub fn step_name(st: &Value) -> String { let l = s(st, "label"); if !l.is_empty() { return l; } let (m, p) = (s(st, "model"), s(st, "provider")); if p.is_empty() { m } else { format!("{m} via {p}") } }
+/// Whether a step that failed this way may give way to the next one: the endpoint is missing, busy or down (404, 408,
+/// 429, 5xx) or could not be reached (0). Never for credits or budgets (402, 403: every step is on the same account), a
+/// refused key (401) or a bad request (400): another model would fail the same way.
+pub fn may_switch(status: u16) -> bool { matches!(status, 0 | 404 | 408 | 429 | 500 | 502 | 503 | 504 | 520..=529) }
+/// The words of a switch: "model 1: deepseek via stepfun unavailable (503: …), switching to model 2: deepseek via cloudflare".
+pub fn switch_line(from: usize, a: &Value, why: &str, b: &Value) -> String { format!("model {}: {} unavailable ({why}), switching to model {}: {}", from + 1, step_name(a), from + 2, step_name(b)) }
+/// A failed step's reason in a few words: OpenRouter's error message, else the status.
+pub fn why_of(status: u16, body: &[u8]) -> String {
+    let j: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let m: String = j["error"]["message"].as_str().unwrap_or("").chars().take(120).collect();
+    if status == 0 { return "could not be reached".into(); }
+    if m.is_empty() { format!("{status}") } else { format!("{status}: {m}") }
+}
 /// The pair with this id (exactly).
 pub fn pair(p: &Value, id: &str) -> Option<Value> { pairs_of(p).into_iter().find(|x| x["id"] == json!(id)) }
 /// A request body as OpenRouter gets it: the pair's model (the one `model` names, else the first: nothing outside the
 /// allow-list ever goes), its provider routing, and the usage with the cost.
 pub fn shape(p: &Value, body: &mut Value) {
     if !body.is_object() { return; }
+    let step = body["_vr_step"].as_u64().unwrap_or(0) as usize; if let Some(o) = body.as_object_mut() { o.remove("_vr_step"); }
     let ps = pairs_of(p); let asked = s(body, "model");
     if let Some(pr) = ps.iter().find(|x| s(x, "id") == asked).or(ps.first()) {
-        body["model"] = pr["model"].clone();
-        let mut route = json!({ "allow_fallbacks": pr["allowFallbacks"] == json!(true) });
-        let order = list_of(&pr["providers"]);
+        let st = steps_of(pr); let one = st.get(step).or(st.first()).cloned().unwrap_or_else(|| json!({}));
+        // one step of the entry's chain: its model, and exactly its endpoint (no fallback of OpenRouter's own: the chain is ours)
+        body["model"] = if s(&one, "model").is_empty() { pr["model"].clone() } else { one["model"].clone() };
+        let chained = pr["steps"].is_array();
+        let mut route = json!({ "allow_fallbacks": !chained && pr["allowFallbacks"] == json!(true) });
+        let order: Vec<String> = if chained { list_of(&one["provider"]) } else { list_of(&pr["providers"]) };
         if !order.is_empty() { route["order"] = json!(order); }
         body["provider"] = route;
     }
@@ -207,7 +247,9 @@ pub async fn test_mykey(hub: &Arc<dyn AiHub>, u: &str) -> Resp {
 /// The plain refusal when the person is at or over the team cap, for a provider the team pays for; None for a person's own.
 pub fn guard(hub: &dyn AiHub, u: &str, p: &Value) -> Option<String> { if is_personal(p) { None } else { refusal(hub, u) } }
 /// An answer's cost: the team key's counts against the month budget, a person's own in their `mine` counter.
-pub fn note_for(hub: &dyn AiHub, u: &str, personal: bool, usage: &Value) { if personal { note_mine(hub, u, usage) } else { note_cost(hub, u, usage) } }
+pub fn note_for(hub: &dyn AiHub, u: &str, personal: bool, usage: &Value) { note_for_in(hub, u, personal, usage, "") }
+/// The same, for an answer made in a Work session (the team key's ledger keeps the session, for its spend in Work; T-381).
+pub fn note_for_in(hub: &dyn AiHub, u: &str, personal: bool, usage: &Value, session: &str) { if personal { note_mine(hub, u, usage) } else { note_cost_in(hub, u, usage, session) } }
 fn cost_of(usage: &Value) -> f64 { usage["cost"].as_f64().or_else(|| usage["cost"].as_str().and_then(|t| t.trim().parse().ok())).filter(|c: &f64| c.is_finite() && *c > 0.0).unwrap_or(0.0) }
 /// Adds one answer of the person's own key to their month's `mine` counter (information only: no cap applies).
 pub fn note_mine(hub: &dyn AiHub, u: &str, usage: &Value) {
@@ -241,13 +283,17 @@ pub fn cap_of(hub: &dyn AiHub, u: &str) -> (f64, bool) { match rec(hub, u)["capU
 pub fn spent_of(hub: &dyn AiHub, u: &str) -> (f64, u64) { let r = rec(hub, u); let m = &r["months"][month()]; (m["usd"].as_f64().unwrap_or(0.0), m["calls"].as_u64().unwrap_or(0)) }
 /// The plain refusal when the person is at or over this month's cap (None = they may go on).
 pub fn refusal(hub: &dyn AiHub, u: &str) -> Option<String> {
+    if let Some(m) = crate::openrouter_team::refusal(hub) { return Some(m); } // the team key's own limits first: they stop everyone (T-381)
     let (spent, _) = spent_of(hub, u); let (cap, _) = cap_of(hub, u);
     (spent >= cap).then(|| format!("Your OpenRouter budget for {} is used up: {:.2} of {:.2} USD. It resets on {} (00:00 UTC); an admin can raise your cap in AI Admin → Team OpenRouter.", month_name(&month()), spent, cap, resets_on()))
 }
 /// Adds one answer's cost (`usage.cost`, OpenRouter's own number in USD) to the person's month.
-pub fn note_cost(hub: &dyn AiHub, u: &str, usage: &Value) {
+pub fn note_cost(hub: &dyn AiHub, u: &str, usage: &Value) { note_cost_in(hub, u, usage, "") }
+/// The same, and the team key's ledger (its 5 h / 7 d / month limits and a session's spend; openrouter_team.rs).
+pub fn note_cost_in(hub: &dyn AiHub, u: &str, usage: &Value, session: &str) {
     if !pgm_identity_internal::valid_username(u) || !usage.is_object() { return; }
     let cost = usage["cost"].as_f64().or_else(|| usage["cost"].as_str().and_then(|t| t.trim().parse().ok())).filter(|c: &f64| c.is_finite() && *c > 0.0).unwrap_or(0.0);
+    crate::openrouter_team::record(hub, u, cost, session);
     let m = month();
     edit(hub, u, |r| {
         let e = &mut r["months"][m.as_str()];
@@ -343,20 +389,20 @@ pub fn work_plan(hub: &dyn AiHub, u: &str, p: &Value, state_model: &str) -> Resu
     let prov = json!({ "kind": crate::jcode::KIND, "label": label, "command": cmd, "args": args, "provider": "openrouter", "models": [model] });
     Ok(WorkPlan { prov, model, routed, env, label })
 }
-struct RelayEnt { user: String, prov: String, routed: String, exp: u64 }
+struct RelayEnt { user: String, prov: String, routed: String, session: String, run: String, exp: u64 }
 static RELAYS: LazyLock<Mutex<HashMap<String, RelayEnt>>> = LazyLock::new(Mutex::default);
 /// A run's own relay token (for its life; 12 hours at most).
-pub fn relay_token(user: &str, prov: &str, routed: &str) -> String {
+pub fn relay_token(user: &str, prov: &str, routed: &str, session: &str, run: &str) -> String {
     let t = pgm_core_internal::crypto::random_hex(24); let now = now_ms();
     let mut m = RELAYS.lock().unwrap_or_else(|e| e.into_inner());
     m.retain(|_, e| e.exp > now);
-    m.insert(t.clone(), RelayEnt { user: user.into(), prov: prov.into(), routed: routed.into(), exp: now + 12 * 3_600_000 });
+    m.insert(t.clone(), RelayEnt { user: user.into(), prov: prov.into(), routed: routed.into(), session: session.into(), run: run.into(), exp: now + 12 * 3_600_000 });
     t
 }
 pub fn relay_forget(t: &str) { RELAYS.lock().unwrap_or_else(|e| e.into_inner()).remove(t); }
 /// The run's jcode reaches OpenRouter (or the provider) through this hub: its API base.
 pub fn relay_env(port: u16, token: &str) -> Vec<(String, String)> { vec![("JCODE_OPENROUTER_API_BASE".into(), format!("http://127.0.0.1:{port}{RELAY}{token}"))] }
-fn work_key() -> crate::openai::KeyCtx { crate::openai::KeyCtx { id: "work-run".into(), label: "Work run".into(), named: true, ..Default::default() } }
+fn work_key(session: &str) -> crate::openai::KeyCtx { crate::openai::KeyCtx { id: "work-run".into(), label: "Work run".into(), named: true, session: session.into(), ..Default::default() } }
 /// `/or-relay/<token>/chat/completions` (and `/models`): a Work run's jcode reaching its provider, from this machine only.
 /// The call goes on through the gateway's raw chat passthrough as the run's person, to the run's provider and model
 /// (whatever model the call names), so the key, the routing, the budget and the usage are the hub's.
@@ -365,8 +411,8 @@ pub async fn relay(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
     let (tok, sub) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let behind = hub.cfg().get("behindProxy") == Some(&json!(true));
     let outside = r.header("cf-connecting-ip").is_some() || (behind && (r.header("x-forwarded-for").is_some() || r.header("x-real-ip").is_some()));
-    let ent = if tok.len() == 48 && r.peer.ip().is_loopback() && !outside { RELAYS.lock().unwrap_or_else(|e| e.into_inner()).get(tok).filter(|e| e.exp > now_ms()).map(|e| (e.user.clone(), e.prov.clone(), e.routed.clone())) } else { None };
-    let Some((user, pid, routed)) = ent else { return crate::openai::oa_error(401, "Unknown relay.", "authentication_error") };
+    let ent = if tok.len() == 48 && r.peer.ip().is_loopback() && !outside { RELAYS.lock().unwrap_or_else(|e| e.into_inner()).get(tok).filter(|e| e.exp > now_ms()).map(|e| (e.user.clone(), e.prov.clone(), e.routed.clone(), e.session.clone(), e.run.clone())) } else { None };
+    let Some((user, pid, routed, session, run)) = ent else { return crate::openai::oa_error(401, "Unknown relay.", "authentication_error") };
     let Some(p) = hub.work().provider_get(hub.ai(), &pid, &user) else { return crate::openai::oa_error(503, "The provider of this run is gone.", "service_unavailable") };
     let real = if p["kind"] == json!(KIND) { pair(&p, &routed).map(|x| s(&x, "model")).unwrap_or_else(|| routed.clone()) } else { routed.clone() };
     match (r.method.as_str(), sub) {
@@ -375,7 +421,10 @@ pub async fn relay(hub: &Arc<dyn AiHub>, r: &Req) -> Resp {
             let Ok(mut b) = serde_json::from_slice::<Value>(&r.body) else { return crate::openai::oa_error(400, "Body is not JSON.", "invalid_request_error") };
             if !b.is_object() { return crate::openai::oa_error(400, "Body is not a JSON object.", "invalid_request_error"); }
             b["model"] = json!(routed);
-            crate::gateway::chat_raw(hub, &user, &work_key(), &p, &routed, b).await
+            let resp = crate::gateway::chat_raw(hub, &user, &work_key(&session), &p, &routed, b).await;
+            // an entry's chain switched models (T-381): said in the run's transcript, in the words of the switch
+            for v in resp.headers().get_all("x-vr-openrouter-switch") { if let Ok(t) = v.to_str() { hub.work().info_line(&run, t); } }
+            resp
         }
         _ => crate::openai::oa_error(404, "This relay serves POST /chat/completions and GET /models.", "not_found_error"),
     }
@@ -432,7 +481,12 @@ pub fn pgm_route(hub: &dyn AiHub, u: &str, asked: &str) -> Result<Value, (u16, S
     let mut b = json!({ "model": pr["id"] });
     shape(&p, &mut b);
     Ok(json!({ "baseUrl": base_url(hub), "apiKey": s(&p, "apiKey"), "model": b["model"], "provider": b["provider"], "kind": if is_personal(&p) { "mine" } else { "team" }, "pair": pgm_id(&p, &pr),
-        "headers": { "HTTP-Referer": hub.public_url(), "X-Title": "VibeRoller" } }))
+        "headers": { "HTTP-Referer": hub.public_url(), "X-Title": "VibeRoller" },
+        // T-381 (add-only): the entry's chain, each step's model and provider routing exactly as above, with the words a
+        // switch is said in ("model N: … unavailable (…), switching to model N+1: …"); the server walks it while a step fails
+        // before any answer (may_switch); an older server reads model / provider (step 1) only
+        "steps": steps_of(&pr).iter().enumerate().map(|(i, st)| { let mut x = json!({ "model": pr["id"], "_vr_step": i }); shape(&p, &mut x); json!({ "model": x["model"], "provider": x["provider"], "name": step_name(st) }) }).collect::<Vec<_>>(),
+        "switchOn": [404, 408, 429, 500, 502, 503, 504] }))
 }
 /// The provider an answer the server made is charged to: the pair's (when it still resolves), else a stand-in of the
 /// right kind (a key removed between the request and its charge still counts).
@@ -497,9 +551,36 @@ mod tests {
         let ok = clean_pairs(&json!([{ "id": "or/sonnet", "label": "Sonnet", "model": "anthropic/claude-sonnet-4.5", "providers": "anthropic, amazon-bedrock" }, { "id": "or/qwen", "model": "qwen/qwen3-coder", "providers": ["cerebras"], "allowFallbacks": true }])).unwrap();
         assert_eq!(ok[0], json!({ "id": "or/sonnet", "label": "Sonnet", "model": "anthropic/claude-sonnet-4.5", "providers": ["anthropic", "amazon-bedrock"], "allowFallbacks": false }));
         assert_eq!(ok[1]["label"], "or/qwen"); assert_eq!(ok[1]["allowFallbacks"], true);
-        for bad in [json!([]), json!("x"), json!([{ "id": "", "model": "m" }]), json!([{ "id": "a b", "model": "m" }]), json!([{ "id": "a", "model": "" }]), json!([{ "id": "a", "model": "m" }, { "id": "a", "model": "n" }]), json!([{ "id": "a", "model": "m", "providers": ["x;y"] }])] {
+        assert_eq!(clean_pairs(&json!([])).unwrap(), Vec::<Value>::new()); // T-381: the team starts with no entries
+        for bad in [json!("x"), json!([{ "id": "", "model": "m" }]), json!([{ "id": "a b", "model": "m" }]), json!([{ "id": "a", "model": "" }]), json!([{ "id": "a", "model": "m" }, { "id": "a", "model": "n" }]), json!([{ "id": "a", "model": "m", "providers": ["x;y"] }])] {
             assert!(clean_pairs(&bad).is_err(), "{bad}");
         }
+    }
+    #[test]
+    fn an_entrys_chain_is_checked_and_each_step_goes_to_exactly_its_model_and_endpoint() {
+        let ok = clean_pairs(&json!([{ "id": "deepseek", "label": "deepseek", "steps": [{ "model": "deepseek/deepseek-chat-v3.1", "provider": "stepfun" }, { "model": "deepseek/deepseek-chat-v3.1", "provider": "cloudflare", "label": "deepseek via cloudflare" }, { "model": "qwen/qwen3-coder", "provider": "" }] }])).unwrap();
+        let e = &ok[0];
+        assert_eq!((s(e, "model"), e["providers"].clone(), e["allowFallbacks"].clone()), ("deepseek/deepseek-chat-v3.1".into(), json!(["stepfun"]), json!(false))); // step 1 for older code
+        assert_eq!(steps_of(e).len(), 3);
+        let p = json!({ "kind": "openrouter", "pairs": ok });
+        let at = |i: Option<u64>| { let mut b = json!({ "model": "deepseek" }); if let Some(i) = i { b["_vr_step"] = json!(i); } shape(&p, &mut b); b };
+        let (b0, b1, b2) = (at(None), at(Some(1)), at(Some(2)));
+        assert_eq!((s(&b0, "model"), b0["provider"].clone()), ("deepseek/deepseek-chat-v3.1".into(), json!({ "allow_fallbacks": false, "order": ["stepfun"] })));
+        assert_eq!((s(&b1, "model"), b1["provider"].clone()), ("deepseek/deepseek-chat-v3.1".into(), json!({ "allow_fallbacks": false, "order": ["cloudflare"] })));
+        assert_eq!((s(&b2, "model"), b2["provider"].clone()), ("qwen/qwen3-coder".into(), json!({ "allow_fallbacks": false })));
+        assert!(b1.get("_vr_step").is_none(), "the step marker never goes to OpenRouter");
+        assert_eq!(s(&at(Some(9)), "model"), "deepseek/deepseek-chat-v3.1"); // past the end: step 1
+        assert_eq!(switch_line(0, &steps_of(e)[0], "503: no capacity", &steps_of(e)[1]), "model 1: deepseek/deepseek-chat-v3.1 via stepfun unavailable (503: no capacity), switching to model 2: deepseek via cloudflare");
+        for bad in [json!([{ "id": "x", "steps": [{ "model": "", "provider": "a" }] }]), json!([{ "id": "x", "steps": [{ "model": "m/n", "provider": "a b" }] }]), json!([{ "id": "x", "steps": (0..9).map(|_| json!({ "model": "m/n" })).collect::<Vec<_>>() }])] {
+            assert!(clean_pairs(&bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn a_step_gives_way_only_when_its_endpoint_is_missing_busy_or_down() {
+        for st in [0u16, 404, 408, 429, 500, 502, 503, 504, 524] { assert!(may_switch(st), "{st}"); }
+        for st in [200u16, 400, 401, 402, 403, 413, 422] { assert!(!may_switch(st), "{st}: credits, budgets, the key and a bad request stay as they are on every step"); }
+        assert_eq!(why_of(503, br#"{"error":{"code":503,"message":"No instances available"}}"#), "503: No instances available");
+        assert_eq!(why_of(502, b"<html>"), "502"); assert_eq!(why_of(0, b""), "could not be reached");
     }
     #[test]
     fn a_request_gets_the_pairs_model_routing_and_usage_and_nothing_outside_the_list() {
