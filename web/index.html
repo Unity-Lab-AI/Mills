@@ -3732,7 +3732,7 @@ async function refreshOrUse() {
   const sid = teamOrSession(); if (sid === null) { bar.hidden = true; return; }
   let st; try { st = await json('/api/openrouter/team' + (sid ? '?session=' + encodeURIComponent(sid) : '')); } catch { bar.hidden = true; return; }
   const m = (n) => '$' + Number(n || 0).toFixed(2), w = st.windows || {}, parts = [];
-  for (const [k, l] of [['fiveHour', '5h'], ['week', '7d'], ['month', 'month']]) if (w[k]) parts.push((w[k].over ? '⚠ ' : '') + l + ' ' + m(w[k].spentUsd) + ' / ' + m(w[k].capUsd));
+  for (const [k, l] of [['fiveHour', '5h'], ['week', '7d'], ['month', 'month']]) if (w[k]) parts.push(l + ' ' + m(w[k].spentUsd) + ' / ' + m(w[k].capUsd) + (w[k].over ? ' (limit reached)' : ''));
   if (st.credits) parts.push('credits ' + m(st.credits.leftUsd) + ' left');
   if (st.session) parts.push('this session ' + m(st.session.spentUsd));
   bar.textContent = 'This hub · OpenRouter · ' + parts.join(' · ');

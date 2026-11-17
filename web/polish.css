@@ -164,7 +164,7 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .orStatus { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .6rem; }
 .orCredits { font-weight: 600; }
 .orWin { display: grid; grid-template-columns: 7.5rem 1fr auto; gap: .6rem; align-items: center; font-size: .85rem; }
-.orWin.over .orWinNum { color: var(--bad, #e5484d); font-weight: 600; }
+.orWin.over .orWinNum { color: var(--bad); font-weight: 600; }
 .orLimits, .orKeys, .orEntries { display: flex; flex-direction: column; gap: .5rem; margin: .6rem 0; }
 .orLimits { flex-direction: row; flex-wrap: wrap; align-items: flex-end; }
 .orLimits > h4, .orLimits > p { flex-basis: 100%; margin: 0; }
@@ -182,12 +182,12 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .orProviders h4 { margin: .3rem 0; }
 .orProvTable td small { color: var(--muted); }
 .orData { font-size: .75rem; padding: .1rem .45rem; border-radius: 999px; white-space: nowrap; border: 1px solid var(--hairline); }
-.orData.zdr { background: color-mix(in srgb, #2ecc71 18%, transparent); }
-.orData.safety { background: color-mix(in srgb, #f1c40f 18%, transparent); }
-.orData.train { background: color-mix(in srgb, #e5484d 18%, transparent); }
+.orData.zdr { background: color-mix(in srgb, var(--good) 18%, transparent); }
+.orData.safety { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.orData.train { background: color-mix(in srgb, var(--bad) 18%, transparent); }
 .orUseBar { font-size: .78rem; color: var(--muted); padding: .2rem .8rem; border-bottom: 1px solid var(--hairline); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orUseBar[hidden] { display: none; }
-.orUseBar.over { color: var(--bad, #e5484d); }
+.orUseBar.over { color: var(--bad); }
 .orWhich { display: flex; flex-direction: column; gap: .4rem; margin: .4rem 0; }
 .orWhich label.chk { display: grid; grid-template-columns: auto 1fr; gap: .5rem; align-items: start; }
 .orWhich small { display: block; color: var(--muted); font-size: .78rem; }
