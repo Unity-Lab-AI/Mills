@@ -67,8 +67,8 @@ const RELAY: &str = "/or-relay/";
 /// What a person gets when OpenRouter refused their own key (revoked, wrong, out of credit): never the team's key instead.
 pub const REFUSED: &str = "Your own OpenRouter key was refused by OpenRouter (revoked, or out of credit?). Nothing was sent with the team's key instead: replace your key in AI Admin → Yours → My OpenRouter keys, or pick one of the team's models.";
 const PERSONAL: &str = "or-me:";
-const MAX_PAIRS: usize = 30;
-const MAX_STEPS: usize = 8;
+const MAX_PAIRS: usize = 100;
+const MAX_STEPS: usize = 24;
 
 /// Where OpenRouter is: `https://openrouter.ai/api/v1`, or config `openrouter.baseUrl` (the regression runner's fake).
 pub fn base_url(hub: &dyn AiHub) -> String {
@@ -85,11 +85,11 @@ fn list_of(v: &Value) -> Vec<String> {
 pub fn clean_pairs(v: &Value) -> Result<Vec<Value>, String> {
     let Some(a) = v.as_array() else { return Err("pairs must be a list of { id, label, model, providers, allowFallbacks }.".into()) };
     if a.len() > MAX_PAIRS { return Err(format!("At most {MAX_PAIRS} pairs.")); }
-    let id_ok = |t: &str| !t.is_empty() && t.len() <= 60 && t.chars().all(|c| c.is_ascii_alphanumeric() || "-._/:@".contains(c));
+    let id_ok = |t: &str| !t.is_empty() && t.len() <= 120 && t.chars().all(|c| c.is_ascii_alphanumeric() || "-._/:@".contains(c));
     let mut out: Vec<Value> = vec![];
     for x in a {
         let id = s(x, "id").trim().to_string();
-        if !id_ok(&id) { return Err(format!("A pair's id is what people pick (e.g. or/sonnet): 1 to 60 letters, digits and - . _ / : @ (got \"{}\").", id.chars().take(60).collect::<String>())); }
+        if !id_ok(&id) { return Err(format!("A pair's id is what people pick (e.g. or/sonnet): 1 to 120 letters, digits and - . _ / : @ (got \"{}\").", id.chars().take(60).collect::<String>())); }
         if out.iter().any(|p| p["id"] == json!(id)) { return Err(format!("The pair id \"{id}\" is there twice.")); }
         let model = { let m = s(x, "model").trim().to_string(); if m.is_empty() { s(&x["steps"][0], "model").trim().to_string() } else { m } }; // an entry given as its chain: step 1 is its model
         if model.is_empty() || model.len() > 120 || model.chars().any(|c| c.is_whitespace() || c.is_control()) { return Err(format!("The pair \"{id}\" needs its OpenRouter model id (e.g. anthropic/claude-sonnet-4.5).")); }
@@ -634,7 +634,7 @@ mod tests {
         assert!(b1.get("_vr_step").is_none(), "the step marker never goes to OpenRouter");
         assert_eq!(s(&at(Some(9)), "model"), "deepseek/deepseek-chat-v3.1"); // past the end: step 1
         assert_eq!(switch_line(0, &steps_of(e)[0], "503: no capacity", &steps_of(e)[1]), "model 1: deepseek/deepseek-chat-v3.1 via stepfun unavailable (503: no capacity), switching to model 2: deepseek via cloudflare");
-        for bad in [json!([{ "id": "x", "steps": [{ "model": "", "provider": "a" }] }]), json!([{ "id": "x", "steps": [{ "model": "m/n", "provider": "a b" }] }]), json!([{ "id": "x", "steps": (0..9).map(|_| json!({ "model": "m/n" })).collect::<Vec<_>>() }])] {
+        for bad in [json!([{ "id": "x", "steps": [{ "model": "", "provider": "a" }] }]), json!([{ "id": "x", "steps": [{ "model": "m/n", "provider": "a b" }] }]), json!([{ "id": "x", "steps": (0..25).map(|_| json!({ "model": "m/n" })).collect::<Vec<_>>() }])] {
             assert!(clean_pairs(&bad).is_err(), "{bad}");
         }
     }
