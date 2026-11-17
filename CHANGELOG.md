@@ -7,6 +7,86 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.70.4 — 2026-11-17
+
+PATCH: **the release summary: everything on dev since live 5.57.4** (no code change; the detail of each item is in its own
+section below). Live runs 5.57.5 (5.57.4 plus the Windows Tools hotfix); dev runs this.
+
+### Hotfix
+- **The Tools window opens on Windows** (5.57.5 on main, 5.70.2 on develop): the desktop app's Tools window came up pure
+  white and the app froze, because WebView2 was built inside the click's own handler. It now opens off that handler, and
+  the tray's "Desktop Unity" entry lands on its tab. Linux was never affected.
+
+### The API gateway (T-369, 5.58.0–5.60.0)
+- **Several named API keys per person**, each narrowable to providers and models, with an expiry and its own limit on
+  simultaneous requests; create, revoke and first daily use go into the security log.
+- **Model routing:** a `model` finds the right provider among everything you may use (your own and what others share);
+  `/v1/models` lists them all.
+- **All three API formats to every provider:** Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` pass through
+  untouched to the provider that speaks them; the Responses API `/v1/responses` (Codex) works too; mixed formats are
+  translated both ways, tools and streaming included. What cannot be translated faithfully is refused with the reason.
+  A Claude subscription login is never disguised as Claude Code for other tools (a plain 403 instead).
+- **Settings → API access:** the keys list, usage per key (per day, per model) and **Connect a tool** (copy-ready setups
+  for Claude Code, Codex, jcode, opencode, Cursor / Continue and curl).
+- **Fixed:** several Work sessions starting at once could fail with "Could not prepare your worktree" (one git worktree
+  cleanup could delete another session's half-made folder); worktree changes are now one at a time.
+
+### OpenRouter (T-370, T-372; 5.61.0–5.63.0)
+- **OpenRouter as a team provider:** an admin adds the team key and a list of model + provider pairs; only those are
+  offered.
+- **A monthly budget per person** (default $20, per-person caps): every answer's cost is counted; at the cap a clear
+  refusal names the cap and the reset date before OpenRouter is asked.
+- **Work on OpenRouter runs Jcode PGM on the server**, no PC involved; the key never enters the run (a private per-run
+  relay adds it and counts the cost).
+- **Opt-in fallback:** when your Claude host is offline or capped, your Work session can use an OpenRouter model, and the
+  transcript says so.
+- **Your own OpenRouter key:** paste, test, remove; stored owner-only and never shown back; "my OpenRouter" is offered only
+  to you; you pay OpenRouter directly (no hub budget, your spend still shown). An admin can switch personal keys off.
+
+### Jcode PGM and VibeRoller together (T-371, T-373/374, T-375, T-376; 5.64.0–5.67.0)
+- **Sign in to Jcode PGM from the browser:** jcode opens a VibeRoller page that asks "Link this device?"; Approve gives the
+  device its own token, listed and revocable under Signed-in devices (a one-time code with PKCE).
+- **Jcode PGM Desktop** holds the VibeRoller app in one program (a launcher with Jcode and VibeRoller, Exit to menu in
+  both); the hub page knows that window; Linux and Windows builds; it is in the Downloads.
+- **`/transfer` in Work:** a handoff (goal, done, state, decisions, next steps, the important files) from the session and
+  its worktree, then a fresh "(continued)" session in the same worktree that starts from it; the two are linked both
+  ways and board claims move over.
+- **Jcode PGM Server** next to the hub (dev: port 7783): every Jcode PGM gets the team's OpenRouter models, VibeRoller login
+  required, encrypted between jcode and the server, the same budgets and security log. **One session across the
+  website and jcode:** Work on OpenRouter runs through the server; a website message goes to your open jcode;
+  `/onserver` hands unfinished work to the server (commit + push first); jcode's sessions show in the website's list.
+
+### The menu, Settings, Downloads (T-377, T-378, T-380; 5.68.0, 5.69.0, 5.70.3)
+- **The main menu** in sections (Productivity two to a row, Utility, AI, Administration); "Also here" as rounded buttons;
+  an empty section hides itself; Settings and **Downloads** are small buttons under My status / Team now.
+- **Downloads is its own window** with a **Jcode PGM** section (Jcode PGM and Jcode PGM Desktop: newest first with your
+  platform's file, other platforms and older versions below).
+- **Settings** in five tabs: Profile, App, Work, Sound & voice, Connections, one Save bar for the ones that need it. From
+  the main menu it is **a page of its own**; from Work, chat or anywhere else it is the modal; one Settings moves between
+  the two, so the options are always the same.
+- **Desktop Unity is off by default** (website and desktop app); only Settings turns her on, never a chat order.
+
+### Site admin and AI Admin (T-379; 5.70.0, 5.70.1)
+- **Site roles on the chat servers' ladder:** Member, Moderator, Super Moderator, Admin, Super Admin, Co-owner, plus custom
+  roles in between, each a set of permissions (view / manage accounts, manage roles, manage the hub, view health, view the
+  security log, manage AI, view AI hosts, Administrator). Existing admins keep full permissions (Super Admin); the hub's
+  own account is Co-owner, above everyone. You change only people and roles below you and give only permissions you hold.
+  The hub checks every admin action and names the missing permission.
+- **Site admin** (was Admin): accounts with role pickers, the roles and permissions editor, **site-wide settings** (a
+  message on everyone's menu, the default theme, the role new accounts get), hub controls, health, the security log and
+  gateway products, each shown to the roles allowed it.
+- **AI Admin** (open to everyone): **Global** (Manage AI): the default AI for everyone (no restart needed), the team's
+  OpenRouter (key, models, the personal-keys switch, everyone's spend and caps), Unity's PC tools per person, and the AI
+  hosts on the hub (also View AI hosts). **Yours** under a line, moved out of Settings: AI source, My AIs, **My OpenRouter**
+  with **"Which key pays: the team's or my own"**, and My AI hosts.
+- Both admin pages scroll as a whole page, the scrollbar at the window edge.
+
+### Where it stands
+- Dev: VibeRoller 5.70.4; Jcode PGM 0.99.10 and Jcode PGM Desktop 0.8.3 published as pre-releases. Live: 5.57.5, until
+  Sponge has tried dev and says to go live.
+- Every step passed both suite modes with 0 failed and kept the JavaScript fallback hub working; about 80 new checks
+  (R560–R642).
+
 ## 5.70.3 — 2026-11-16
 
 PATCH: **Settings is a page of its own from the main menu** (T-380, from Sponge). The main menu's Settings opens a screen like the
