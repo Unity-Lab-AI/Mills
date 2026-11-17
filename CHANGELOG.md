@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.70.5 — 2026-11-17
+
+PATCH: **No more console windows popping up and stealing focus on Windows**, and the regression suite runs clean on Windows (from
+Gee: "it keeps opening cmd prompts or powershell or something, and when im in programs doing stuff it interrupts me and breaks
+what ever program im in"; "fix what failed and make sure its not old shit thats not suppose to work any more and fix the smoke
+test that u ran if it is out dated").
+
+### Fixed
+- The AI host started Ollama, the Python engines and its own background copy with no console at all (DETACHED_PROCESS), so every
+  console program those started (Ollama's llama-server / gpu-discover on each model load, nvidia-smi, Python helpers) opened a
+  console window of its own that flashed and took keyboard/mouse focus, in waves at start-up and on every model load/unload. They
+  now get a hidden console of their own (CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP), which their children share: no windows.
+  Native `proc::spawn_detached`, the hub's Ollama/engine starter and the desktop app's image-engine switch.
+- Tests that only worked on Linux now run on Windows too (Linux expectations unchanged): the linked-machines library tests
+  (Windows paths escaped in JSON, Linux-path tests say so), the Brain Modelfile test, the native host's update test (a local MSVC
+  build has no release to update to: said, not failed), its log (the host writes ai-node.log without a terminal), the control
+  app's private-file check (Windows has no Unix modes), the worktree renew (Git for Windows checks out CRLF), Files / attachments
+  (the stand-in passwd had a drive-letter colon; Windows refuses the execute bit by design). The Windows run of the
+  linked-machines tests is done (README).
+
+- A newly linked computer's folder is read with that computer's own path rules (the OS it names at linking), not the hub's: a
+  Windows computer's `C:\...` folder linked to the Linux hub (or a Linux one to a Windows hub) showed "nothing allowed" as its scope
+  summary. `pgm-identity-internal` devices.
+
+### Added
+- Regression check R643: nothing native starts a program with DETACHED_PROCESS again.
 ## 5.70.4 — 2026-11-17
 
 PATCH: **the release summary: everything on dev since live 5.57.4** (no code change; the detail of each item is in its own

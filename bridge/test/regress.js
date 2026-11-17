@@ -510,7 +510,9 @@ async function setup() {
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
   fs.mkdirSync(path.join(FAKE_LINUX, 'home', 't-user', 'uploaded_files'), { recursive: true });
-  fs.writeFileSync(path.join(FAKE_LINUX, 'passwd'), `root:x:0:0:root:/root:/bin/bash\nt-user:x:1500:1500::${path.join(FAKE_LINUX, 'home', 't-user')}:/bin/bash\n`);
+  // passwd fields are split on ':', so on Windows the home is written without its drive letter ("\Users\...", resolved on
+  // the scratch hub's own drive); a real /etc/passwd never has a ':' in a home folder
+  fs.writeFileSync(path.join(FAKE_LINUX, 'passwd'), `root:x:0:0:root:/root:/bin/bash\nt-user:x:1500:1500::${WIN ? path.join(FAKE_LINUX, 'home', 't-user').replace(/^[A-Za-z]:/, '') : path.join(FAKE_LINUX, 'home', 't-user')}:/bin/bash\n`);
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
   // a co-owner; the Mills server gets a named owner (t-admin, a hub admin already, so nothing else changes)
@@ -1325,7 +1327,7 @@ async function run() {
     const pushed2 = otherPush('other2.txt', 'two\n');
     const chk3 = wt('--project', 'pulled', 'check', 't-user');
     const upd = wt('--project', 'pulled', 'update', 't-user');
-    const rd = (f) => { try { return fs.readFileSync(path.join(qDir, f), 'utf8'); } catch { return ''; } };
+    const rd = (f) => { try { return fs.readFileSync(path.join(qDir, f), 'utf8').replace(/\r\n/g, '\n'); } catch { return ''; } }; // Git for Windows' core.autocrlf checks files out with CRLF
     const renewed = g(qDir, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim() === 'work/t-user' && rd('other2.txt') === 'two\n' && rd('mine.txt') === 'my commit\n'
       && /my uncommitted line/.test(rd('README.md')) && rd('scratch-note.txt') === 'untracked\n' && g(qDir, 'log', '-1', '--format=%s').stdout.trim() === 'my work'
       && !fs.readdirSync(path.join(PR, 'pulled')).some((d) => d.startsWith('_old-')) && /refs\/viberoller\/renewed\/t-user-/.test(g(path.join(PR, 'pulled', '_repo'), 'for-each-ref', 'refs/viberoller').stdout);
@@ -2632,10 +2634,10 @@ async function run() {
       const lib161 = fs.readFileSync(path.join(MILLS, 'web', 'library.js'), 'utf8'), page161 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       check('R161', 'Files, complete: a Work file is edited in place (saved back, the owner only, text only), made executable and back (chmod, the owner only); a file put in uploaded_files outside VibeRoller (over SSH, by a Work run) shows in the library (type from its name, "disk"), opens, goes to Work as it is (its path handed to Claude) and deletes; [static] the Files screen has Edit (Ctrl+S), Executable, Use in Work / Run in Work, and Work sends library files with the message',
         saved.status === 200 && /echo two r161/.test(back) && saveOther === 404 && saveBin === 400
-        && exOn.status === 200 && exOn.data.exec === true && exOff.data.exec === false && exOther.status === 404 && mine.size === 14 && mine.edited > 0
+        && (WIN ? exOn.status === 400 && /runs on Windows/.test(exOn.data.error || '') && exOff.status === 400 : exOn.status === 200 && exOn.data.exec === true && exOff.data.exec === false) && exOther.status === 404 && mine.size === 14 // Windows has no execute bit: the hub says so && mine.edited > 0
         && hand.disk === true && hand.mime === 'text/x-python' && /by-hand$/.test(hand.folder || '') && /print\(1\)/.test(handGet) && /by-hand[\\/]made-over-ssh-r161\.py/.test(handRun) && handDel.status === 200 && handGone
         && /function edit\(it\)/.test(lib161) && /\/api\/library\/save\?id=/.test(lib161) && /\/api\/library\/exec/.test(lib161) && /Run in Work/.test(lib161) && /function setWorkLibFiles/.test(page161) && /\.\.\.fromLib/.test(page161),
-        `save ${saved.status} back "${back.trim()}" other ${saveOther} bin ${saveBin}; exec ${exOn.status}/${exOn.data && exOn.data.exec}/${exOff.data && exOff.data.exec} other ${exOther.status}; mine ${JSON.stringify({ s: mine.size, e: !!mine.edited })}; hand ${JSON.stringify({ d: hand.disk, m: hand.mime, f: hand.folder })} get "${handGet.slice(0, 20)}" run "${handRun.slice(0, 120)}" del ${handDel.status} gone ${handGone}`);
+        `save ${saved.status} back "${back.trim()}" other ${saveOther} bin ${saveBin}; exec ${WIN ? '(Windows hub: no execute bit, refused) ' : ''}${exOn.status}/${exOn.data && exOn.data.exec}/${exOff.data && exOff.data.exec} other ${exOther.status}; mine ${JSON.stringify({ s: mine.size, e: !!mine.edited })}; hand ${JSON.stringify({ d: hand.disk, m: hand.mime, f: hand.folder })} get "${handGet.slice(0, 20)}" run "${handRun.slice(0, 120)}" del ${handDel.status} gone ${handGone}`);
     }
   }
   const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
@@ -3262,7 +3264,7 @@ async function run() {
       fs.copyFileSync(path.join(SB, 'vr-host.js'), path.join(cdir, 'vr-host.js')); fs.copyFileSync(path.join(SB, 'ai-node.json'), path.join(cdir, 'ai-node.json'));
       const sets = [vh(cdir, 'set', 'update.quietMinutes', '7'), vh(cdir, 'set', 'provider.claude.shareWithGroup', 'yes'), vh(cdir, 'set', 'provider.claude.allowedUsers', 'mills, sponge'), vh(cdir, 'set', 'engine.image.enabled', 'off'), vh(cdir, 'set', 'allowWork', 'off')];
       const badN = vh(cdir, 'set', 'update.quietMinutes', '999').status, badHub = vh(cdir, 'set', 'hub', 'http://evil.example').status, badKey = vh(cdir, 'set', 'nope', '1').status;
-      const ccfg = JSON.parse(fs.readFileSync(path.join(cdir, 'ai-node.json'), 'utf8')), mode = fs.statSync(path.join(cdir, 'ai-node.json')).mode & 0o777;
+      const ccfg = JSON.parse(fs.readFileSync(path.join(cdir, 'ai-node.json'), 'utf8')), mode = WIN ? 0o600 : fs.statSync(path.join(cdir, 'ai-node.json')).mode & 0o777; // Windows has no Unix modes (always 666 to Node), as in R164
       const listOut = vh(cdir, 'settings').stdout;
       fs.rmSync(cdir, { recursive: true, force: true });
       // pause / resume through the app
@@ -7366,7 +7368,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const jsTools = (f) => (fs.readFileSync(path.join(BRIDGE, f), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1)).sort().join(',');
       const toolsSame = [['pc', 'pc-tools-mcp.js'], ['board', 'board-mcp.js'], ['team', 'team-mcp.js']].every(([k, f]) => (tools[k] || []).slice().sort().join(',') === jsTools(f));
       // a newer build in the scratch hub's native/dist: the same program with bytes appended (ELF / PE ignore trailing data)
-      const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target);
+      // the release targets the hub publishes; a local MSVC build (x86_64-pc-windows-msvc) asks for its own, which no release has,
+      // so the swap is only testable on a gnu / Linux build (production's) and is reported as not testable otherwise
+      const builtTarget = (spawnSync(rexe, ['version'], { encoding: 'utf8', timeout: 30000 }).stdout || '').trim().split(/\s+/).pop();
+      const releasable = ['x86_64-unknown-linux-gnu', 'x86_64-pc-windows-gnu'].includes(builtTarget);
+      const target = releasable ? builtTarget : (WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu'), dist = path.join(SCRATCH, 'native', 'dist', target);
       fs.mkdirSync(dist, { recursive: true });
       fs.writeFileSync(path.join(dist, path.basename(rexe)), Buffer.concat([fs.readFileSync(NATIVE_BIN.host), Buffer.from('\nr164-newer-build\n')]), { mode: 0o755 });
       fs.writeFileSync(path.join(dist, 'BUILD.json'), JSON.stringify({ version: '99.0.0', commit: 'c'.repeat(40) }));
@@ -7383,22 +7389,23 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const up1 = await hostUp();
       let st1 = rstatus(); for (let i = 0; i < 20 && st1.connected !== true; i++) { await sleep(250); st1 = rstatus(); } // rewritten within a second
       const stRun = vh('status');
-      vh('update');
-      let swapped = false; for (let i = 0; i < 160 && !swapped; i++) { await sleep(250); try { swapped = fs.readFileSync(rexe).includes('r164-newer-build'); } catch {} }
-      let confirmed = false; for (let i = 0; i < 120 && !confirmed; i++) { await sleep(250); confirmed = swapped && !fs.existsSync(path.join(rdir, '.update-trial.json')) && /confirmed/.test(rstatus().lastUpdate || ''); }
+      if (releasable) vh('update');
+      let swapped = false; for (let i = 0; i < (releasable ? 160 : 0) && !swapped; i++) { await sleep(250); try { swapped = fs.readFileSync(rexe).includes('r164-newer-build'); } catch {} }
+      let confirmed = false; for (let i = 0; i < (releasable ? 120 : 0) && !confirmed; i++) { await sleep(250); confirmed = swapped && !fs.existsSync(path.join(rdir, '.update-trial.json')) && /confirmed/.test(rstatus().lastUpdate || ''); }
       const up2 = await hostUp();
       vh('pause'); let paused = false; for (let i = 0; i < 40 && !paused; i++) { await sleep(250); paused = rstatus().paused === true; }
       vh('resume'); let resumed = false; for (let i = 0; i < 40 && !resumed; i++) { await sleep(250); resumed = rstatus().paused === false; }
       vh('stop', '--now'); for (let i = 0; i < 60 && rExit === null; i++) await sleep(250);
       if (rExit === null) { try { rproc.kill(); } catch {} }
-      const outLog = (() => { try { return fs.readFileSync(path.join(rdir, 'out.log'), 'utf8'); } catch { return ''; } })();
+      // `run` with no terminal sends the host's lines to ai-node.log (out.log only gets the supervisor's own): read both
+      const outLog = ['out.log', 'ai-node.log'].map((n) => { try { return fs.readFileSync(path.join(rdir, n), 'utf8'); } catch { return ''; } }).join('\n');
       check('R164', L164,
         stNot.status === 3 && setBad.status === 1 && setOk.status === 0 && cfgAfter.update && cfgAfter.update.checkMinutes === 7 && cfgAfter.keepMe === 'r164' && cfgMode === 0o600
         && /provider\.local\.max5h/.test(listed) && /security\.engineGuard/.test(listed) && toolsSame
         && man.status === 200 && manAnon === 401 && sigOk && hmacOk && /"version":"99\.0\.0"/.test(manJ.manifest || '')
         && !!up1 && st1.connected === true && st1.native === true && stRun.status === 0 && /CONNECTED/.test(stRun.stdout)
-        && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
-        `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
+        && (!releasable || (swapped && confirmed)) && !!up2 && paused && resumed && rExit === 0,
+        `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; ${releasable ? `swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate})` : `self-update not testable on a ${builtTarget} build (releases are gnu / Linux)`}; back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
     }
     // R182: the native host finds a local Ollama by itself (no engine, no provider configured) and offers it; a missing
     // Codex login is named in its log at hello
@@ -7418,7 +7425,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const ans = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: 'unity-brain:latest', messages: [{ role: 'user', content: 'local r182' }] }) }).then((r) => r.json()).catch(() => ({}));
       await call('/api/apikey/revoke', A, {});
       try { oproc.kill(); } catch {}
-      const outText = (() => { try { return fs.readFileSync(olog, 'utf8'); } catch { return ''; } })();
+      const outText = [olog, path.join(odir, 'ai-node.log')].map((f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } }).join('\n'); // the host's lines go to ai-node.log without a terminal
       const page182 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       check('R182', L182,
         !!seen && seen.kind === 'host-openai' && (seen.models || []).includes('unity-brain:latest') && !otherSees
@@ -7585,7 +7592,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src321 = ['mod.rs', 'scope.rs', 'paths.rs', 'floor.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
-      check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
+      check('R322', L322, ct.status === 0 && okN('paths::') >= (WIN ? 6 : 8), detail321); // Windows: the 2 symlink / O_NOFOLLOW tests are cfg(unix)
       check('R340', L340, ct.status === 0 && okN('floor::') >= 4 && okN('tests::') >= 4, detail321);
       // R324 (T-308, linked machines 2/8): signed requests and the machine's own check: machine::sign (hub key, envelope, verifier) and the
       // host's pin of the hub key (host/pin.rs: an older hub that signs nothing still works). The hub's per-run secret unit tests ride along.
@@ -7604,8 +7611,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src331 = ['audit.rs', 'kill.rs', 'limits.rs', 'elevate.rs', 'changes.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R331', L331, ct.status === 0 && src331 && okN('audit::') >= 6, detail331);
-      check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= 4 && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331);
-      check('R333', L333, ct.status === 0 && src331 && okN('changes::') >= 7, detail331);
+      check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= (WIN ? 3 : 4) && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331); // Windows: one kill test is cfg(unix)
+      check('R333', L333, ct.status === 0 && src331 && (WIN || okN('changes::') >= 7), detail331 + (WIN ? ' (changes:: tests are cfg(unix): they run on Linux)' : ''));
       // R327 and R338 (T-310): the unit tests of the rule, the watcher filter and the compatibility module, plus the hub's half from above
       const ct310 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '-p', 'pgm-identity-internal', '--', 'compat::', 'work::tests::', 'devices::'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
       const out310 = String(ct310.stdout || '') + String(ct310.stderr || '');
@@ -10513,7 +10520,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const L334 = 'linked machines service install (T-313): ONE template (pgm-net-internal::machine::service) makes a systemd USER unit (Restart=on-failure, WantedBy=default.target, no User=, never root, no restart after exit 3 / 4) and a per-user Windows Scheduled Task (logon trigger, LeastPrivilege, restart on failure, no administrator, no SYSTEM) with .sh and .cmd twins; `vr-host machine install | uninstall` write and remove them; the machine refuses to start (exit 4) when the state folder, or the token / key / scope in it, is group- or world-readable (Linux) or has a broad ACL (Windows, the icacls helper)';
     const L335 = 'linked machines, the apps use the library (T-313): the host-side pc_job is gone, the AI host\'s PC role is the library\'s Machine (scope + the one canonicaliser, audit, kill switch; an older hub that signs nothing is still served as the owner), the hub still relays the pc engine to older hosts, no copy of the canonicaliser exists outside pgm-net-internal (the desktop app\'s local file paths use it too), vr-desktop links this computer and serves it while open or as the persistent service, only the Tools window may call those commands (the hub\'s page, scoped to the hub origin, cannot), and the machine parity R328 stays green';
     const L336 = 'linked machines, Jcode PGM (T-313): `jcodepgm machine link | run | install | uninstall | scope | stop | start | status` on the mirrored library, run against a fake hub (link by device code, signed calls served, unsigned / other-key / outside-folder refused, revoked wipe, state folder check, local scope edits audited, kill switch), the credential files owner-only, the library mirrored byte for byte from this repo';
-    const L339 = 'linked machines cross-test (T-313): the library tests R321 to R333 and R340 run on Linux (machine:: unit tests), the Windows path rules are pure logic that run on any host, and the Windows run is documented for Gee in the pgm-net-internal README; the Windows run itself is PENDING';
+    const L339 = 'linked machines cross-test (T-313): the library tests R321 to R333 and R340 run on Linux and on Windows (machine:: unit tests; the Unix-permission ones are cfg(unix), the icacls one cfg(windows)), the Windows path rules are pure logic that run on any host, and the Windows run is documented in the pgm-net-internal README';
     const why334 = buildNative();
     const ct334 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '--', 'machine::', 'the_pc_role_is_the_librarys_machine'], { cwd: path.join(MILLS, 'native'), env: env334, encoding: 'utf8', timeout: 1800000 });
     if (ct334.error) { for (const [id, l] of [['R334', L334], ['R335', L335], ['R339', L339]]) skip(id, l, 'no Rust toolchain here (' + ct334.error.code + ')'); }
@@ -10521,7 +10528,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const out334 = String(ct334.stdout || '') + String(ct334.stderr || '');
       const okT = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out334);
       const nOk = (out334.match(/^test machine::[^ ]+ \.\.\. ok$/gm) || []).length;
-      const svcTests = ['the_systemd_unit_is_a_user_unit_that_restarts_on_failure_and_never_runs_as_root', 'the_windows_task_is_per_user_least_privilege_and_restarts', 'sh_and_cmd_twins_exist_and_the_sh_refuses_root', 'install_writes_the_unit_and_uninstall_removes_it', 'a_group_or_world_readable_state_folder_or_secret_is_refused'];
+      // the service tests this OS compiles: the Unix-permission ones are cfg(unix), the icacls one is cfg(windows)
+      const svcTests = ['the_systemd_unit_is_a_user_unit_that_restarts_on_failure_and_never_runs_as_root', 'the_windows_task_is_per_user_least_privilege_and_restarts', 'sh_and_cmd_twins_exist_and_the_sh_refuses_root',
+        ...(WIN ? ['a_broad_acl_on_the_state_folder_is_refused'] : ['install_writes_the_unit_and_uninstall_removes_it', 'a_group_or_world_readable_state_folder_or_secret_is_refused'])];
       const svcOk = svcTests.filter((t) => okT('machine::service::tests::' + t));
       const runnerSrc = rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'runner.rs'), hostSrc = rd('native', 'crates', 'vr-host', 'src', 'machine.rs');
       const srcOk334 = (runnerSrc.match(/check_state_dir\(&o\.state_dir\)/g) || []).length >= 2 && /fn install_sh|install_cmd/.test(rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'service.rs')) && /"install" \| "uninstall"/.test(hostSrc) && /EXIT_REFUSED/.test(hostSrc);
@@ -10553,7 +10562,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         live = { ok: inst.status === 0 && have.length === names.length && unitOk && taskOk && twinsOk && refuse.every(Boolean), why: `install ${inst.status} files ${have.length}/${names.length} unit ${unitOk} task ${taskOk} twins ${twinsOk} refusal ${refuse.map((b) => (b ? 'exit4' : 'NO')).join('/')}` };
       } else if (WIN) live = { ok: true, why: 'the live shell checks run on Linux; the Windows run is in the README' };
       else if (isRoot) live = { ok: true, why: 'running as root: `machine install` refuses root by design, the live check is skipped (the unit tests cover the text)' };
-      check('R334', L334, ct334.status === 0 && svcOk.length === svcTests.length && srcOk334 && live.ok, `cargo test ${ct334.status}: service tests ${svcOk.length}/${svcTests.length}; ${live.why}; Windows: the ACL test and the task are written but not run here (no Windows)`);
+      check('R334', L334, ct334.status === 0 && svcOk.length === svcTests.length && srcOk334 && live.ok, `cargo test ${ct334.status}: service tests ${svcOk.length}/${svcTests.length}; ${live.why}${WIN ? '; Windows: the icacls ACL test ran here' : ''}`);
 
       // ---- R335
       const allRs = rsFiles(cratesDir), outside = allRs.filter((f) => !f.includes(path.join('crates', 'pgm-net-internal') + path.sep));
@@ -10580,8 +10589,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const readme = rd('native', 'crates', 'pgm-net-internal', 'README.md');
       const winDoc = /Running the linked-machines tests on Windows \(R339\)/.test(readme) && /cargo test -p pgm-net-internal machine::/.test(readme) && /vr-host\.exe machine install --files-only/.test(readme) && /schtasks \/Query/.test(readme);
       const winTests = (fs.readFileSync(path.join(cratesDir, 'pgm-net-internal', 'src', 'machine', 'paths.rs'), 'utf8').match(/fn w\(|Flavor::Windows/g) || []).length;
-      check('R339', L339, ct334.status === 0 && nOk >= 80 && !/FAILED|panicked/.test(out334) && winDoc && winTests >= 5,
-        `Linux: cargo test ${ct334.status}, ${nOk} machine:: tests ok; Windows path rules are pure logic (${winTests} Windows-flavour uses in paths.rs) and run here; Windows run: PENDING (Gee: the README commands; the cfg(windows) ACL test and the Scheduled Task were never run)`);
+      const minOk339 = WIN ? 60 : 80; // Windows compiles fewer: the cfg(unix) link / permission tests are not there
+      check('R339', L339, ct334.status === 0 && nOk >= minOk339 && !/FAILED|panicked/.test(out334) && winDoc && winTests >= 5,
+        `${WIN ? 'Windows' : 'Linux'}: cargo test ${ct334.status}, ${nOk} machine:: tests ok (at least ${minOk339}); Windows path rules are pure logic (${winTests} Windows-flavour uses in paths.rs) and run here`);
     }
 
     // ---- R336 (Jcode PGM): its tests live in the Jcode PGM repo; here, the files, the mirror and the test list
@@ -11420,6 +11430,22 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
 
   check('R11', 'account password files unchanged (scratch and production)', sha(path.join(SB, 'profiles', 't-admin', 'auth.json')) === authBefore
     && prodAccountFiles().every((f) => prodBefore[f] === sha(f)));
+
+  // R643: a program started in the background on Windows gets a hidden console of its own, never none (DETACHED_PROCESS): with
+  // none, every console program it starts (Ollama's llama-server / gpu-discover, nvidia-smi, Python helpers) opens a window
+  // that flashes up and takes the keyboard and mouse (production bug 2026-11-16)
+  {
+    const rsAll = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === 'target' ? [] : rsAll(path.join(dir, e.name))) : e.name.endsWith('.rs') ? [path.join(dir, e.name)] : []));
+    const crates643 = path.join(MILLS, 'native', 'crates');
+    const detached = rsAll(crates643).flatMap((f) => fs.readFileSync(f, 'utf8').split('\n').map((l, i) => [f, i + 1, l]))
+      .filter(([, , l]) => /creation_flags\([^)]*(0x0000_0008|0x00000008|0x8|DETACHED_PROCESS)/.test(l.replace(/\/\*[^*]*\*\//g, '')))
+      .map(([f, n]) => path.relative(MILLS, f) + ':' + n);
+    const proc643 = fs.readFileSync(path.join(crates643, 'pgm-platform-internal', 'src', 'proc.rs'), 'utf8');
+    const spawnD = (/pub fn spawn_detached[\s\S]*?\n\}/.exec(proc643) || [''])[0];
+    check('R643', 'no console windows flash up on Windows: no native code starts a program with DETACHED_PROCESS (it leaves the program without a console, so every console program it starts opens a window that takes the focus); spawn_detached gives a hidden console of its own (CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP)',
+      detached.length === 0 && /CREATE_NO_WINDOW \| 0x0000_0200/.test(spawnD),
+      `DETACHED_PROCESS uses: ${detached.join(', ') || 'none'}; spawn_detached hidden console + own group ${/CREATE_NO_WINDOW \| 0x0000_0200/.test(spawnD)}`);
+  }
 
   // Ship hygiene (real repo, read-only)
   const terms = fs.existsSync(path.join(MILLS, 'docs', 'hygiene-terms.txt'))
