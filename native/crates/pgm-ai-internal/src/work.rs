@@ -548,6 +548,8 @@ impl Work {
     pub(crate) fn emit_run(&self, run: &str, ev: Value) { let key = self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(_, r)| r.id == run).map(|(k, _)| k.clone()); if let Some(k) = key { self.emit(&k, ev); } }
     /// A wait of this session's run (an agent's answer) keeps it alive for the liveness check, as a question does.
     pub(crate) fn keep_alive_key(&self, key: &str) { self.keep_alive(key) }
+    /// One line of information in a running session's transcript (e.g. an OpenRouter chain switching models, T-381).
+    pub fn info_line(&self, key: &str, text: &str) { self.emit(key, json!({ "type": "bridge_info", "text": text })); }
     fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); journal(r, &ev); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     pub(crate) fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
@@ -1099,7 +1101,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let hprov = or_plan.as_ref().map(|p| p.prov.clone()).unwrap_or_else(|| prov.clone());
     let mut or_tok: Option<String> = None;
     if let Some(pl) = &or_plan {
-        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed, &sx.sid);
+        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed, &sx.sid, &sx.key);
         relay_env = crate::openrouter::relay_env(hub.cfg().port, &tok); relay_env.extend(pl.env.iter().cloned());
         or_tok = Some(tok);
         if let Some(l) = &fb_line { w.emit(&sx.key, json!({ "type": "bridge_info", "text": l })); }
