@@ -169,7 +169,7 @@ fn keep(key: &str, v: &Value) { CACHE.lock().unwrap_or_else(|e| e.into_inner()).
 /// GET `path` under OpenRouter's API base, with the team key when the hub has one; the JSON answer, or the plain reason.
 async fn get(hub: &dyn AiHub, path: &str) -> Result<Value, String> {
     let mut rq = crate::openai::self_http(hub).get(format!("{}{path}", crate::openrouter::base_url(hub))).header("HTTP-Referer", hub.public_url()).header("X-Title", "VibeRoller");
-    let key = hub.work().team_provider().map(|p| s(&p, "apiKey")).unwrap_or_default();
+    let key = hub.work().team_key_provider().map(|p| s(&p, "apiKey")).unwrap_or_default();
     if !key.is_empty() { rq = rq.header("authorization", format!("Bearer {key}")); }
     let r = tokio::time::timeout(Duration::from_secs(25), rq.send()).await.map_err(|_| "OpenRouter did not answer in time.".to_string())?.map_err(|e| format!("OpenRouter could not be reached: {}", e.to_string().replace(&key, "…")))?;
     let st = r.status().as_u16();

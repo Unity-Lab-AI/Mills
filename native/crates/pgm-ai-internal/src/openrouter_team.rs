@@ -110,7 +110,7 @@ pub fn refusal(hub: &dyn AiHub) -> Option<String> {
 // ---------- the key and the account, asked of OpenRouter at most once a minute ----------
 static ASKED: LazyLock<Mutex<std::collections::HashMap<String, (Instant, Value)>>> = LazyLock::new(|| Mutex::new(Default::default()));
 async fn ask(hub: &dyn AiHub, path: &str, key: &str) -> Result<Value, u16> {
-    let ck = format!("{path}:{}", crate::openrouter::last4(key));
+    let ck = format!("{path}:{}", pgm_core_internal::crypto::sha256_hex(key.as_bytes()));
     if let Some((at, v)) = ASKED.lock().unwrap_or_else(|e| e.into_inner()).get(&ck) { if at.elapsed() < ASK_EVERY { return Ok(v.clone()); } }
     let r = crate::openai::self_http(hub).get(format!("{}{path}", crate::openrouter::base_url(hub))).header("authorization", format!("Bearer {key}")).header("HTTP-Referer", hub.public_url()).header("X-Title", "VibeRoller").send();
     let r = tokio::time::timeout(Duration::from_secs(15), r).await.map_err(|_| 504u16)?.map_err(|_| 502u16)?;
@@ -119,7 +119,7 @@ async fn ask(hub: &dyn AiHub, path: &str, key: &str) -> Result<Value, u16> {
     ASKED.lock().unwrap_or_else(|e| e.into_inner()).insert(ck, (Instant::now(), v["data"].clone()));
     Ok(v["data"].clone())
 }
-fn team_key(hub: &dyn AiHub) -> String { hub.work().team_provider().map(|p| s(&p, "apiKey")).unwrap_or_default() }
+fn team_key(hub: &dyn AiHub) -> String { hub.work().team_key_provider().map(|p| s(&p, "apiKey")).unwrap_or_default() }
 /// The key's own limit on OpenRouter (None = unlimited or unknown).
 pub async fn key_limit(hub: &dyn AiHub) -> Option<f64> { let k = team_key(hub); if k.is_empty() { return None; } ask(hub, "/key", &k).await.ok().and_then(|d| d["limit"].as_f64()) }
 

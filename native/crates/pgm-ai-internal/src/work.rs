@@ -336,6 +336,9 @@ impl Work {
             .filter(|p| { let o = p["owner"].as_str().unwrap_or(""); if p["kind"] == json!(crate::openrouter::KIND) { pgm_identity_internal::siteroles::has_perm(&self.root, &def, o, pgm_identity_internal::siteroles::MANAGE_AI) } else { !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, o) } }).collect()
     }
     /// The team's OpenRouter provider (the first shared one with pairs): the pairs a person's own key uses unless they list their own (T-372).
+    /// The team's OpenRouter key's provider, with entries or not yet (T-381: AI Admin reads the catalogue and the key's
+    /// limits with it before the first entry is made).
+    pub fn team_key_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !s(p, "apiKey").is_empty()) }
     pub fn team_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !crate::openrouter::pairs_of(p).is_empty()) }
     /// A person's own OpenRouter provider `or-me:<user>` (their key; None without a key, with personal keys off, or without pairs).
     pub fn personal_for(&self, user: &str) -> Option<Value> {
