@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.70.4 — 2026-11-16
+
+PATCH: **No more console windows popping up and stealing focus on Windows** (from Gee: "it keeps opening cmd prompts or powershell
+or something, and when im in programs doing stuff it interrupts me and breaks what ever program im in").
+
+### Fixed
+- The AI host started Ollama, the Python engines and its own background copy with no console at all (DETACHED_PROCESS), so every
+  console program those started (Ollama's llama-server / gpu-discover on each model load, nvidia-smi, Python helpers) opened a
+  console window of its own that flashed and took keyboard/mouse focus, in waves at start-up and on every model load/unload. They
+  now get a hidden console of their own (CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP), which their children share: no windows.
+  Native `proc::spawn_detached`, the hub's Ollama/engine starter and the desktop app's image-engine switch.
+
 ## 5.70.3 — 2026-11-16
 
 PATCH: **Settings is a page of its own from the main menu** (T-380, from Sponge). The main menu's Settings opens a screen like the

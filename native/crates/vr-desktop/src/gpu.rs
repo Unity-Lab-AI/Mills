@@ -67,7 +67,7 @@ pub async fn image(dir: &str, on: bool) -> Result<String, String> {
     cmd.args(&args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     if let Some(d) = cwd { cmd.current_dir(d); }
     #[cfg(windows)]
-    { use std::os::windows::process::CommandExt; cmd.creation_flags(0x0800_0000 | 0x0000_0008); } // no window, detached
+    { use std::os::windows::process::CommandExt; cmd.creation_flags(0x0800_0000 | 0x0000_0200); } // hidden console + own process group (not DETACHED_PROCESS: that leaves its children to pop windows)
     cmd.spawn().map_err(|e| format!("could not start the image engine: {e}"))?;
     for _ in 0..30 { tokio::time::sleep(Duration::from_secs(1)).await; if c.get(format!("{image}/health")).send().await.map(|r| r.status().is_success()).unwrap_or(false) { return Ok("The image engine is on.".into()); } }
     Err("The image engine was started but does not answer yet.".into())
