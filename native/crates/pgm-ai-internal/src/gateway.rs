@@ -277,7 +277,7 @@ fn note_usage(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally,
 /// An answer's usage (the provider's own object, whichever shape) to the ledger (under the model the upstream named) and the
 /// key's counters and day roll-up (under the routed model).
 fn note_native(hub: &Arc<dyn AiHub>, user: &str, key: &openai::KeyCtx, t: &Tally, model: &str, native: &Value) {
-    if t.kind == crate::openrouter::KIND { crate::openrouter::note_for_in(&**hub, user, t.personal, native, &key.session); } // the month budget and the team key's limits (T-381): OpenRouter's own cost of the answer
+    if t.kind == crate::openrouter::KIND { crate::openrouter::note_for_in(&**hub, user, &t.prov, t.personal, native, &key.session); } // the month budget and the key's limits (T-381, T-383): OpenRouter's own cost of the answer
     if let Some(u) = openai::normalise(native) {
         hub.ai().usage.note_answer(user, &t.kind, model, &u);
         openai::count_tokens(&**hub, user, key, &t.prov, &t.model, u.total_input(), u.output);

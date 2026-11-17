@@ -7,6 +7,49 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.72.0 — 2026-11-17
+
+MINOR: **OpenRouter keys are named, anyone adds them, each a person's own or the team's, each with optional limits; and
+jcode's one `viberoller` provider** (T-383, from Sponge; team note plans/openrouter-keys-and-jcode-provider.md). Jcode PGM
+0.99.13 is the jcode side.
+
+- **Named keys, any number:** anyone may add an OpenRouter key under a name of their choosing. It shows in the AI dropdown under that name.
+  - **Kept to themselves**, only its owner uses it (they pay OpenRouter; no hub budget applies, their own counter shows what it spent).
+  - **Put into the team's keys**, the whole team may use it, each person within their month budget.
+  - The "allow personal keys" switch is gone: people may always use their own keys. An older page that still sends it is told so, and nothing changes.
+- **Optional limits per key, for everyone on it together:** 5 hours and 7 days rolling, the calendar month.
+  - Each is optional: empty means no limit, and a new key has none. Example: a key with $500 of credit, limited to $20 a month for the whole team.
+  - At a limit, every request on that key is refused before OpenRouter is asked, naming the key, the window and when it frees up. An answer already being written finishes (the only overflow).
+  - The owner sets the limits; for a team key, anyone holding Manage AI can set them too. A limit above the key's own limit on OpenRouter is refused.
+  - Each key may have its own management key, to show the account's credits.
+- **AI Admin:**
+  - *Yours → My OpenRouter* shows your month and **My OpenRouter keys**: add a key (name, key, "Put it into the team's keys", limits). Each key is a card with what is left, its limits, its management key, its entries (the same model and provider picker), Rename, Test and Remove.
+  - *Global → Team OpenRouter keys* lists every team key the same way, with "Add a team key" and everyone's month.
+  - "Which key pays" is gone: the dropdown names the key.
+- **Work's OpenRouter line** follows the session's key: a team key ("This hub · OpenRouter · <name>"), or your own ("OpenRouter · <name>").
+- **`GET /v1/models?usable=1`** (add-only) is what jcode's `viberoller` provider lists. It gives only what can answer a client that is not Claude Code right now:
+  - an AI host that is offline or at its cap drops out;
+  - a host's Claude subscription login is never listed (it serves Claude Code only);
+  - each model has its way, `route: "openrouter"` (an OpenRouter key's entry: jcode sends it through the Jcode PGM Server) or `"hub"` (this API).
+
+  The plain `/v1/models` keeps its shape.
+- **Moved over by itself, once:**
+  - The team key of before gets the team's old limits as its own (the defaults $10 / $20 / $20 when none were set), the hub-wide management key, and the old ledger lines.
+  - A person's key in `profiles/<user>/openrouter-key.json` becomes their key "my OpenRouter" (`or-me:<user>`): their own entries, else a copy of the team's. The old file is kept as `openrouter-key.json.migrated`.
+  - `providers.json` only gains fields (`limits`, `managementKey`); the JavaScript hub still reads it.
+- **Data:** the ledger lines name their key (`key`). Routes:
+  - new: `GET /api/openrouter/keys`;
+  - `GET /api/openrouter/team?key=`, and `POST …/team/caps` / `…/team/management-key` with `key` (null = no limit);
+  - `/api/openrouter/mykey` works on the key `or-me:<user>` for older pages;
+  - the catalogue is open to everyone signed in.
+- **Versions:** web/index.html 1.56.0, web/aiadmin.js 1.2.0, web/polish.css 1.3.0.
+- **Checks:**
+  - R611 now checks named keys (a teammate's own key, sharing it, its limit, who may change it, the old switch).
+  - R651 is new (`/v1/models?usable=1`).
+  - R591, R606, R612 and R647–R650 follow the new behaviour.
+  - R647–R650 now use their own team key. In the full run, R611 had already asked OpenRouter about the shared test key, and the hub asks about a key at most once a minute, so R649 saw "no limit of its own" instead of the fake's limit. It failed once in the full `--rust-hub` run and passes in suite order now.
+  - Unit tests cover the migration (once; old caps or defaults; personal keys) and the per-key ledger and limits.
+
 ## 5.71.1 — 2026-11-17
 
 PATCH: **the fallback chain on every way in, also for a stream that fails as its first event** (T-381 follow-up, from

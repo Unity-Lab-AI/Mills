@@ -170,6 +170,12 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .orLimits > h4, .orLimits > p { flex-basis: 100%; margin: 0; }
 .orLim { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; color: var(--muted); }
 .orLim input { width: 8rem; }
+/* T-383: named keys (a card each), the person's own under Yours, adding one */
+.orKey { border: 1px solid var(--line); border-radius: var(--r-m); padding: .7rem .8rem; margin: .6rem 0; display: flex; flex-direction: column; gap: .3rem; }
+.orKey > .row > input { flex: 1; min-width: 10rem; font-weight: 600; }
+.orMyKeys { margin-top: .9rem; display: flex; flex-direction: column; gap: .4rem; }
+.orAdd { margin: .4rem 0; } .orAdd > summary { cursor: pointer; font-weight: 600; }
+.orAdd[open] { display: flex; flex-direction: column; gap: .45rem; }
 .orEntry { border: 1px solid var(--hairline); border-radius: var(--r-s); padding: .6rem .7rem; display: flex; flex-direction: column; gap: .4rem; }
 .orSteps { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: .2rem; font-size: .88rem; }
 .orSteps li { display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
