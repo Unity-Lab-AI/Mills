@@ -50,8 +50,37 @@ const AIADMIN = (() => {
   // policy. Global → Team OpenRouter keys shows the team's (Manage AI edits them, with everyone's month); Yours → My
   // OpenRouter keys shows the person's own (index.html calls myKeys). The hub hosts these entries: Work's picker shows them.
   const money = (n) => (n == null || !isFinite(n) ? '–' : '$' + Number(n).toFixed(2));
-  const perM = (n) => (n == null ? '–' : '$' + (n >= 10 ? n.toFixed(1) : n.toFixed(2)));
+  const perM = (n) => (n == null ? '–' : n === 0 ? '$0' : '$' + (n >= 10 ? n.toFixed(1) : n >= 0.1 ? n.toFixed(2) : n.toFixed(3)));
   const DATA_WORDS = { zdr: 'No retention', safety: 'Retains, no training', train: 'Retains, may train' };
+  // T-385: everything OpenRouter says about a provider of a model, as the picker's texts. Pure (no page), so the suite reads
+  // exactly what the table shows. A deal is already taken off the price listed; the price before it is shown struck through.
+  const MORE_NAMES = { cacheWrite1hPerM: 'cache write (1 hour)', reasoningPerM: 'reasoning', audioPerM: 'audio in', audioCachePerM: 'audio cache', imageTokenPerM: 'image tokens', imageOutputPerM: 'image out', imageEach: 'per input image', webSearchEach: 'per web search', requestEach: 'per request' };
+  const each = (n) => '$' + (n >= 0.01 ? n.toFixed(2) : String(+n.toPrecision(3)));
+  const pct = (x) => (x == null ? '–' : (Math.round(x * 10) / 10) + '%');
+  const kTok = (n) => (n == null ? '' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
+  function endpointFacts(e) {
+    const pi = e.providerInfo || null;
+    return {
+      deal: e.discount ? Math.round(e.discount * 100) + '% off' : '',
+      inBefore: e.discount && e.inPerMBefore != null ? perM(e.inPerMBefore) : '',
+      outBefore: e.discount && e.outPerMBefore != null ? perM(e.outPerMBefore) : '',
+      tier: e.serviceTier || '',
+      cache: [e.cacheReadPerM != null ? 'read ' + perM(e.cacheReadPerM) : '', e.cacheWritePerM != null ? 'write ' + perM(e.cacheWritePerM) : ''].filter(Boolean).join(' · ') || '–',
+      uptime: 'Uptime: last 5 min ' + pct(e.uptime5m) + ', 30 min ' + pct(e.uptime30m) + ', a day ' + pct(e.uptime1d),
+      tiers: (e.tiers || []).map((t) => (t.minPromptTokens != null ? 'From ' + kTok(t.minPromptTokens) + ' prompt tokens' : t.fromUtc + '–' + t.toUtc + ' UTC') + ': in ' + perM(t.inPerM) + '/M, out ' + perM(t.outPerM) + '/M' + (t.cacheReadPerM != null ? ', cache read ' + perM(t.cacheReadPerM) + '/M' : '')),
+      more: Object.entries(e.more || {}).filter(([k]) => MORE_NAMES[k]).map(([k, v]) => MORE_NAMES[k] + ' ' + (k.endsWith('PerM') ? perM(v) + '/M' : each(v))),
+      limits: [e.context ? kTok(e.context) + ' context' : '', e.maxPrompt ? kTok(e.maxPrompt) + ' prompt at most' : '', e.maxOut ? kTok(e.maxOut) + ' out at most' : ''].filter(Boolean).join(' · '),
+      params: (e.params || []).join(', '),
+      where: pi ? [pi.headquarters ? 'Based in ' + pi.headquarters : '', (pi.datacenters || []).length ? 'runs in ' + pi.datacenters.join(', ') : ''].filter(Boolean).join(', ') : '',
+      links: pi ? [['Privacy policy', pi.privacyUrl], ['Terms', pi.termsUrl], ['Status', pi.statusUrl]].filter(([, u]) => /^https?:\/\//.test(u || '')) : [],
+    };
+  }
+  /** A model in the search list: its prices, a deal some provider gives on it, free, tiered prices. */
+  function modelLine(m) {
+    return m.id + ' · in ' + perM(m.inPerM) + '/M · out ' + perM(m.outPerM) + '/M' + (m.cacheReadPerM != null ? ' · cache read ' + perM(m.cacheReadPerM) + '/M' : '') + (m.context ? ' · ' + kTok(m.context) + ' context' : '')
+      + ((m.tiers || []).some((t) => t.minPromptTokens != null) ? ' · another price from ' + kTok(m.tiers.find((t) => t.minPromptTokens != null).minPromptTokens) + ' prompt tokens' : '')
+      + ((m.tiers || []).some((t) => t.fromUtc) ? ' · priced by time of day' : '') + (m.free ? ' · free' : '') + (m.bestDeal ? ' · a provider gives ' + Math.round(m.bestDeal * 100) + '% off' : '');
+  }
   /** The keys the person sees, each its status (GET /api/openrouter/keys) with its provider record (entries) beside it. */
   async function loadKeys() {
     const [k, p] = await Promise.all([json('/api/openrouter/keys'), json('/api/providers')]);
@@ -209,23 +238,32 @@ const AIADMIN = (() => {
     const q = mk('input'); q.type = 'search'; q.placeholder = 'Search OpenRouter\'s models, e.g. deepseek, qwen coder, claude'; q.setAttribute('aria-label', 'Search models');
     const close = mk('button', 'ghost', 'Close'); close.type = 'button'; close.onclick = () => p.remove();
     const top = mk('div', 'row'); top.append(q, close); p.append(top);
+    const chk = (label) => { const l = mk('label', 'chk'), c = mk('input'); c.type = 'checkbox'; l.append(c, ' ' + label); top.insertBefore(l, close); return c; };
+    const onlyDeals = chk('Deals only'), onlyFree = chk('Free only');
     const list = mk('div', 'orModels'), prov = mk('div', 'orProviders'), info = mk('div', 'status', 'Type to search; the newest models come first.');
     p.append(info, list, prov);
-    let timer = 0, seq = 0;
+    let timer = 0, seq = 0, again = 0;
     const search = async () => {
-      const my = ++seq; info.textContent = 'Searching…';
-      let d; try { d = await json('/api/openrouter/catalog/models?q=' + encodeURIComponent(q.value.trim())); } catch (e) { info.textContent = e.message; return; }
-      if (my !== seq) return;
+      const my = ++seq; clearTimeout(again); info.textContent = 'Searching…';
+      let d; try { d = await json('/api/openrouter/catalog/models?q=' + encodeURIComponent(q.value.trim()) + (onlyDeals.checked ? '&deals=1' : '') + (onlyFree.checked ? '&free=1' : '')); } catch (e) { info.textContent = e.message; return; }
+      if (my !== seq || !p.isConnected) return;
       list.textContent = ''; prov.textContent = '';
-      info.textContent = d.total ? d.total + ' model' + (d.total === 1 ? '' : 's') + (d.total > d.models.length ? ' (the first ' + d.models.length + ' shown)' : '') : 'No model matches that.';
+      const dl = d.deals || {};
+      const pending = onlyDeals.checked && !dl.ready; // the hub is still asking every model's providers for their deals
+      info.textContent = (pending ? 'Looking up every provider\'s deals (a minute or two the first time); the list fills in by itself. ' : '')
+        + (d.total ? d.total + ' model' + (d.total === 1 ? '' : 's') + (d.total > d.models.length ? ' (the first ' + d.models.length + ' shown)' : '') : pending ? '' : 'No model matches that.')
+        + (onlyDeals.checked && dl.ready ? ' · deals as of ' + (dl.ageMin ? dl.ageMin + ' min ago' : 'just now') : '');
+      if (pending || (dl.building && onlyDeals.checked)) again = setTimeout(search, 5000);
       for (const m of d.models.slice(0, 60)) {
         const b = mk('button', 'ghost orModel'); b.type = 'button';
-        b.append(mk('b', '', m.name), mk('small', '', m.id + ' · in ' + perM(m.inPerM) + '/M · out ' + perM(m.outPerM) + '/M' + (m.context ? ' · ' + Math.round(m.context / 1000) + 'k context' : '')));
+        const nm = mk('b', '', m.name); if (m.bestDeal) nm.append(' ', mk('span', 'orDeal', 'up to ' + Math.round(m.bestDeal * 100) + '% off')); if (m.free) nm.append(' ', mk('span', 'orDeal', 'free'));
+        b.append(nm, mk('small', '', modelLine(m)));
         b.onclick = () => showProviders(m);
         list.append(b);
       }
     };
     q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+    onlyDeals.onchange = search; onlyFree.onchange = search;
     const showProviders = async (m) => {
       prov.textContent = 'Loading ' + m.name + '\'s providers…';
       let d; try { d = await json('/api/openrouter/catalog/endpoints?model=' + encodeURIComponent(m.id)); } catch (e) { prov.textContent = e.message; return; }
@@ -234,33 +272,53 @@ const AIADMIN = (() => {
       const filt = mk('select'); filt.setAttribute('aria-label', 'Data policy');
       for (const [v, l] of [['', 'Any data policy'], ['zdr', 'No retention only'], ['nott', 'No training (no retention or safety retention)']]) { const o = mk('option', '', l); o.value = v; filt.append(o); }
       const sort = mk('select'); sort.setAttribute('aria-label', 'Sort by');
-      for (const [v, l] of [['tps', 'Fastest first'], ['in', 'Cheapest input first'], ['out', 'Cheapest output first'], ['uptime', 'Most reliable first'], ['latency', 'Quickest first token']]) { const o = mk('option', '', l); o.value = v; sort.append(o); }
-      const pq = mk('input'); pq.type = 'search'; pq.placeholder = 'Filter providers'; pq.setAttribute('aria-label', 'Filter providers');
+      for (const [v, l] of [['tps', 'Fastest first'], ['in', 'Cheapest input first'], ['out', 'Cheapest output first'], ['deal', 'Biggest deal first'], ['cache', 'Cheapest cache read first'], ['uptime', 'Most reliable first'], ['latency', 'Quickest first token']]) { const o = mk('option', '', l); o.value = v; sort.append(o); }
+      const tiers = [...new Set((d.endpoints || []).map((e) => e.serviceTier || ''))];
+      const tierSel = mk('select'); tierSel.setAttribute('aria-label', 'Service tier'); tierSel.hidden = tiers.length < 2;
+      for (const v of ['*'].concat(tiers)) { const o = mk('option', '', v === '*' ? 'Any service tier' : v || 'Standard tier'); o.value = v; tierSel.append(o); }
+      const dealsBox = mk('label', 'chk'), dealsOnly = mk('input'); dealsOnly.type = 'checkbox'; dealsBox.append(dealsOnly, ' Deals only'); dealsBox.hidden = !(d.endpoints || []).some((e) => e.discount);
+      const pq = mk('input'); pq.type = 'search'; pq.placeholder = 'Filter providers (name, country, quantization)'; pq.setAttribute('aria-label', 'Filter providers');
       const name = mk('input'); name.placeholder = 'Name it, e.g. deepseek'; name.maxLength = 60; name.setAttribute('aria-label', 'The entry\'s name'); name.hidden = !askName;
-      const ctl = mk('div', 'row'); ctl.append(pq, filt, sort, name); prov.append(ctl);
+      const ctl = mk('div', 'row'); ctl.append(pq, filt, tierSel, dealsBox, sort, name); prov.append(ctl);
       const t = mk('table', 'orProvTable'); prov.append(t);
+      const COLS = 11;
       const paint = () => {
         t.textContent = '';
-        const hr = mk('tr'); for (const h of ['Provider', 'In $/M', 'Out $/M', 'Speed', 'First token', 'Uptime', 'Context', 'Data policy', '']) hr.append(mk('th', '', h)); t.append(hr);
+        const hr = mk('tr'); for (const h of ['Provider', 'In $/M', 'Out $/M', 'Cache $/M', 'Speed', 'First token', 'Uptime', 'Context', 'Data policy', '', '']) hr.append(mk('th', '', h)); t.append(hr);
         const words = pq.value.toLowerCase().split(/\s+/).filter(Boolean);
-        let eps = (d.endpoints || []).filter((e) => (!filt.value || (filt.value === 'zdr' ? e.data === 'zdr' : e.data !== 'train')) && words.every((w) => (e.provider + ' ' + (e.route || '') + ' ' + (e.quantization || '')).toLowerCase().includes(w)));
+        const hay = (e) => [e.provider, e.route, e.quantization, e.serviceTier, ...((e.providerInfo || {}).datacenters || []), (e.providerInfo || {}).headquarters].filter(Boolean).join(' ').toLowerCase();
+        let eps = (d.endpoints || []).filter((e) => (!filt.value || (filt.value === 'zdr' ? e.data === 'zdr' : e.data !== 'train')) && (tierSel.value === '*' || (e.serviceTier || '') === tierSel.value)
+          && (!dealsOnly.checked || e.discount) && words.every((w) => hay(e).includes(w)));
         const num = (x, d0) => (x == null ? d0 : x);
-        const by = { tps: (a, b) => num(b.tpsP50, -1) - num(a.tpsP50, -1), in: (a, b) => num(a.inPerM, 1e9) - num(b.inPerM, 1e9), out: (a, b) => num(a.outPerM, 1e9) - num(b.outPerM, 1e9), uptime: (a, b) => num(b.uptime30m, -1) - num(a.uptime30m, -1), latency: (a, b) => num(a.latencyP50Ms, 1e9) - num(b.latencyP50Ms, 1e9) };
+        const by = { tps: (a, b) => num(b.tpsP50, -1) - num(a.tpsP50, -1), in: (a, b) => num(a.inPerM, 1e9) - num(b.inPerM, 1e9), out: (a, b) => num(a.outPerM, 1e9) - num(b.outPerM, 1e9), deal: (a, b) => num(b.discount, 0) - num(a.discount, 0),
+          cache: (a, b) => num(a.cacheReadPerM, 1e9) - num(b.cacheReadPerM, 1e9), uptime: (a, b) => num(b.uptime30m, -1) - num(a.uptime30m, -1), latency: (a, b) => num(a.latencyP50Ms, 1e9) - num(b.latencyP50Ms, 1e9) };
         eps = eps.slice().sort(by[sort.value]);
-        if (!eps.length) { const tr = mk('tr'), td = mk('td', 'status', 'No provider matches.'); td.colSpan = 9; tr.append(td); t.append(tr); }
+        if (!eps.length) { const tr = mk('tr'), td = mk('td', 'status', 'No provider matches.'); td.colSpan = COLS; tr.append(td); t.append(tr); }
         for (const e of eps) {
+          const f = endpointFacts(e);
           const tr = mk('tr');
-          const pn = mk('td'); pn.append(mk('b', '', e.provider)); if (e.quantization) pn.append(mk('small', '', ' ' + e.quantization)); pn.title = e.route + (e.detail ? ' · ' + e.detail : '');
-          const dp = mk('td'); dp.append(mk('span', 'orData ' + e.data, DATA_WORDS[e.data] || e.dataLabel));
+          const pn = mk('td'); pn.append(mk('b', '', e.provider)); if (e.quantization) pn.append(mk('small', '', ' ' + e.quantization)); if (f.tier) pn.append(' ', mk('span', 'orTier', f.tier)); pn.title = e.route + (e.detail ? ' · ' + e.detail : '');
+          const price = (now, before) => { const td = mk('td'); if (before) td.append(mk('s', 'orBefore', before), ' '); td.append(perM(now)); if (before) td.append(' ', mk('span', 'orDeal', f.deal)); return td; };
+          const up = mk('td', '', e.uptime30m != null ? Math.round(e.uptime30m) + '%' : '–'); up.title = f.uptime;
+          const dp = mk('td'); dp.append(mk('span', 'orData ' + e.data, DATA_WORDS[e.data] || e.dataLabel)); if (f.where) dp.title = f.where;
+          const more = mk('td'); const mb = mk('button', 'ghost', 'More'); mb.type = 'button'; mb.setAttribute('aria-expanded', 'false'); more.append(mb);
           const use = mk('td'); const b = mk('button', '', 'Use'); b.type = 'button';
-          b.onclick = () => { const label = m.name.replace(/^[^:]+:\s*/, '') + ' via ' + e.provider + (e.quantization ? ' (' + e.quantization + ')' : ''); done({ model: d.model.id || m.id, provider: e.route, label }, name.value.trim()); p.remove(); };
+          b.onclick = () => { const label = m.name.replace(/^[^:]+:\s*/, '') + ' via ' + e.provider + (e.quantization ? ' (' + e.quantization + ')' : '') + (e.serviceTier ? ' ' + e.serviceTier : ''); done({ model: d.model.id || m.id, provider: e.route, label }, name.value.trim()); p.remove(); };
           use.append(b);
-          tr.append(pn, mk('td', '', perM(e.inPerM)), mk('td', '', perM(e.outPerM)), mk('td', '', e.tpsP50 != null ? Math.round(e.tpsP50) + ' t/s' : '–'), mk('td', '', e.latencyP50Ms != null ? (e.latencyP50Ms / 1000).toFixed(2) + ' s' : '–'),
-            mk('td', '', e.uptime30m != null ? Math.round(e.uptime30m) + '%' : '–'), mk('td', '', e.context ? Math.round(e.context / 1000) + 'k' : '–'), dp, use);
-          t.append(tr);
+          tr.append(pn, price(e.inPerM, f.inBefore), price(e.outPerM, f.outBefore), mk('td', '', f.cache), mk('td', '', e.tpsP50 != null ? Math.round(e.tpsP50) + ' t/s' : '–'), mk('td', '', e.latencyP50Ms != null ? (e.latencyP50Ms / 1000).toFixed(2) + ' s' : '–'),
+            up, mk('td', '', e.context ? kTok(e.context) : '–'), dp, more, use);
+          // the rest, a row under it: tiered and other prices, uptime over time, limits, parameters, who runs it and their policies
+          const xr = mk('tr', 'orMoreRow'); xr.hidden = true; const xd = mk('td'); xd.colSpan = COLS; xr.append(xd);
+          const line = (label, text) => { if (text) { const r = mk('div'); r.append(mk('b', '', label + ': '), text); xd.append(r); } };
+          line('Deal', f.deal ? f.deal + ' (was in ' + f.inBefore + '/M, out ' + f.outBefore + '/M)' : '');
+          line('Tiered prices', f.tiers.join(' · ')); line('Other prices', f.more.join(' · ')); line('Uptime', f.uptime.replace(/^Uptime: /, '')); line('Limits', f.limits);
+          line('Service tier', f.tier); line('Runs on', f.where); line('Parameters', f.params);
+          if (f.links.length) { const r = mk('div'); r.append(mk('b', '', 'Provider: ')); f.links.forEach(([l, u], i) => { const a = mk('a', '', l); a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer'; r.append(i ? ' · ' : '', a); }); xd.append(r); }
+          mb.onclick = () => { xr.hidden = !xr.hidden; mb.setAttribute('aria-expanded', String(!xr.hidden)); mb.textContent = xr.hidden ? 'More' : 'Less'; };
+          t.append(tr, xr);
         }
       };
-      for (const el of [filt, sort]) el.onchange = paint; pq.oninput = paint; paint();
+      for (const el of [filt, sort, tierSel, dealsOnly]) el.onchange = paint; pq.oninput = paint; paint();
     };
     host.append(p); q.focus(); search();
   }
@@ -315,5 +373,5 @@ const AIADMIN = (() => {
     }
     box.append(t, note);
   }
-  return { open, myKeys };
+  return { open, myKeys, endpointFacts, modelLine };
 })();

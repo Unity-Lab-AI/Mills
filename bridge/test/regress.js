@@ -78,6 +78,7 @@ const L647 = { // T-381: AI Admin → Team OpenRouter (r647Check)
   R647: 'AI Admin\'s model picker reads OpenRouter\'s catalogue with the team key: the models matching every word typed (price per million in and out), one model\'s providers fastest first with price, speed, first-token time and their data policy (no retention, retains without training, retains and may train, from OpenRouter\'s ZDR list); everyone signed in may use it (anyone may add a key of their own and pick its entries, T-383), and an unknown or malformed model is a plain error',
   R648: 'a team entry is a named chain: when model 1\'s provider is down before answering, the hub sends the same request to model 2 (each step its own model on exactly its provider endpoint) and says so in words (model 1: … unavailable (503: …), switching to model 2: …), on every way in (OpenAI chat, the Anthropic-shaped /v1/messages) and also when a stream fails as its first event; a credits refusal (402) is never passed on to the next model',
   R649: 'a key has optional limits for everyone on it together (5 hours and 7 days rolling, the month; a new key has none) that only its owner or Manage AI changes and never above the key\'s own limit on OpenRouter; spend reaching one is refused in the caller\'s API shape naming the key, the window and when it frees up; everyone sees the windows, the key\'s limit and, with a management key set, the account\'s credits left',
+  R652: 'AI Admin\'s provider picker says everything OpenRouter does about each provider of a model (T-385): its deal with the price before it, its service tier, every other price and the tiered ones (above a prompt size, or by time of day), uptime over 5 minutes / 30 minutes / a day, limits and parameters, and who runs it (headquarters, datacenters, privacy policy); the model search can be only the models some provider gives a deal on, or only the free ones, and the page shows those facts as words',
   R650: 'the page: AI Admin searches models and picks a provider by price, speed and data policy to add a fallback or another fallback; Work\'s picker names the team\'s entries This hub · OpenRouter and a person\'s own key by its name, and Work shows the OpenRouter line (for that key) only while the session on screen runs on an OpenRouter key',
 };
 const L637 = { // T-379: Site admin and AI Admin (siteRolesCheck)
@@ -244,9 +245,19 @@ const fakeOr = { calls: [] };
 // R647-R650 (T-381): the catalogue the fake serves, and the management key it gives the credits to
 const R647_MGMT = 'sk-or-v1-r647-management-0123456789';
 const R647_MODELS = [{ id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek: V3.1', created: 20, context_length: 163840, pricing: { prompt: '0.00000025', completion: '0.00000095' }, architecture: { input_modalities: ['text'] } },
-  { id: 'qwen/qwen3-coder', name: 'Qwen: Qwen3 Coder', created: 30, context_length: 262144, pricing: { prompt: '0.0000002', completion: '0.0000008' } }];
+  { id: 'qwen/qwen3-coder', name: 'Qwen: Qwen3 Coder', created: 30, context_length: 262144, pricing: { prompt: '0.0000002', completion: '0.0000008' } },
+  { id: 'qwen/qwen3-coder:free', name: 'Qwen: Qwen3 Coder (free)', created: 10, context_length: 262144, pricing: { prompt: '0', completion: '0' } }]; // R652: a free variant
 const R647_EP = (provider, tag, inp, out, tps) => ({ provider_name: provider, tag, quantization: tag.split('/')[1] || null, pricing: { prompt: inp, completion: out }, context_length: 163840, uptime_last_30m: 99, throughput_last_30m: { p50: tps }, latency_last_30m: { p50: 400 }, status: 0 });
 const R647_ENDPOINTS = [R647_EP('SiliconFlow', 'siliconflow/fp8', '0.00000027', '0.000001', 30), R647_EP('DeepInfra', 'deepinfra/fp4', '0.00000025', '0.00000095', 80), R647_EP('Chutes', 'chutes', '0.0000002', '0.0000008', 50)];
+// R652 (T-385): what else OpenRouter says, as it says it (2026-11-17): Chutes 20 % off (the listed price already discounted), SiliconFlow
+// on the flex tier, DeepInfra tiered above 200k prompt tokens with a price per web search, uptime over 5 min and a day
+Object.assign(R647_ENDPOINTS[2].pricing, { discount: 0.2 });
+Object.assign(R647_ENDPOINTS[0], { service_tier: 'flex', uptime_last_5m: 100, uptime_last_1d: 97.5 });
+Object.assign(R647_ENDPOINTS[0].pricing, { overrides: [{ utc_start: 1600, utc_end: 0, prompt: '0.0000002', completion: '0.0000008' }] }); // an off-peak price (Tencent's shape)
+Object.assign(R647_ENDPOINTS[1], { max_prompt_tokens: 120000, supported_parameters: ['tools', 'reasoning'] });
+Object.assign(R647_ENDPOINTS[1].pricing, { discount: 0, web_search: '0.01', overrides: [{ min_prompt_tokens: 200000, prompt: '0.0000005', completion: '0.0000019' }] });
+const R652_PROVIDERS = [{ name: 'DeepInfra', slug: 'deepinfra', privacy_policy_url: 'https://deepinfra.example/privacy', terms_of_service_url: 'https://deepinfra.example/terms', status_page_url: null, headquarters: 'US', datacenters: ['US', 'DE'] },
+  { name: 'Chutes', slug: 'chutes', privacy_policy_url: 'javascript:alert(1)', terms_of_service_url: null, status_page_url: null, headquarters: 'US', datacenters: [] }];
 const R591_KEY = 'sk-or-v1-r591-secret-0123456789';
 // R647-R650's own team key: the hub asks OpenRouter about a key at most once a minute (per key), so a key the earlier checks
 // already asked about would still answer with what the fake said then (no limit of its own), not with fakeOr.keyLimit
@@ -417,6 +428,7 @@ function startFakeOllama() {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ data: { id, name: 'DeepSeek: V3.1', endpoints: R647_ENDPOINTS.map((e) => ({ ...e, throughput_last_30m: keyed ? e.throughput_last_30m : null, latency_last_30m: keyed ? e.latency_last_30m : null })) } }));
       }
+      if (req.url === '/orapi/providers') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: R652_PROVIDERS })); } // R652
       if (req.url === '/orapi/endpoints/zdr') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ model_id: 'deepseek/deepseek-chat-v3.1', provider_name: 'DeepInfra', tag: 'deepinfra/fp4', safety_retention: false }, { model_id: 'deepseek/deepseek-chat-v3.1', provider_name: 'SiliconFlow', tag: 'siliconflow/fp8', safety_retention: true }] })); }
       if (req.url === '/orapi/credits') { const ok = req.headers.authorization === 'Bearer ' + R647_MGMT; res.writeHead(ok ? 200 : 403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(ok ? { data: { total_credits: 30, total_usage: 5 } } : { error: { code: 403, message: 'Only management keys can fetch credits' } })); }
       if (req.url === '/orapi/key' && [R591_KEY, R647_KEY].some((k) => req.headers.authorization === 'Bearer ' + k)) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: { label: 'team r647', limit: fakeOr.keyLimit === undefined ? null : fakeOr.keyLimit, limit_remaining: fakeOr.keyLimit === undefined ? null : fakeOr.keyLimit - 1, usage: 1, usage_daily: 0.5, usage_weekly: 1, usage_monthly: 1 } })); }
@@ -8922,6 +8934,34 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const okCatalog = seen.models === 'deepseek/deepseek-chat-v3.1 0.25/0.95 total 1' && /^200 $/.test(seen.notManager)
         && seen.providers === 'DeepInfra deepinfra/fp4 0.25 0.95 80 400 zdr | Chutes chutes 0.2 0.8 50 400 train | SiliconFlow siliconflow/fp8 0.27 1 30 400 safety' && seen.withKey && seen.badModel === '502/502';
       check('R647', L647.R647, okCatalog, JSON.stringify(seen));
+      // R652 (T-385): everything else an endpoint says, the deals index behind "deals only", and the page's words for it
+      {
+        const by = (n) => e.find((x) => x.provider === n) || {};
+        const ch = by('Chutes'), di = by('DeepInfra'), sf = by('SiliconFlow'), s652 = {};
+        s652.deal = [ch.discount, ch.inPerM, ch.inPerMBefore, ch.outPerMBefore, di.discount, di.inPerMBefore].join(' ');
+        s652.tier = [sf.serviceTier, sf.uptime5m, sf.uptime30m, sf.uptime1d, ch.serviceTier].join(' ');
+        s652.prices = JSON.stringify([di.tiers, di.more, di.maxPrompt, di.params]);
+        s652.who = JSON.stringify([di.providerInfo, sf.providerInfo]);
+        let dl = null, free = null;
+        for (let i = 0; i < 40; i++) { dl = await call('/api/openrouter/catalog/models?deals=1', U); if (dl.data.deals && dl.data.deals.ready) break; await sleep(500); }
+        free = await call('/api/openrouter/catalog/models?free=1', U);
+        s652.deals = (dl.data.models || []).map((m) => m.id + ' ' + m.bestDeal).join(',') + ' ready ' + (dl.data.deals || {}).ready;
+        s652.free = (free.data.models || []).map((m) => m.id + ' ' + m.free).join(',');
+        // the page's words: aiadmin.js's own helpers, run on what the hub answered
+        try {
+          const AA = require('vm').runInNewContext(fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8') + '\nAIADMIN', {});
+          const fc = AA.endpointFacts(ch), fd = AA.endpointFacts(di), fs2 = AA.endpointFacts(sf);
+          s652.page = [fc.deal, fc.inBefore, fc.outBefore, fs2.tier, fs2.uptime, fs2.tiers.join(';'), fd.tiers.join(';'), fd.more.join(';'), fd.where, fd.links.map((l) => l.join('=')).join(';'), AA.endpointFacts(ch).links.length, fd.limits, fd.params].join(' | ');
+          s652.line = AA.modelLine((dl.data.models || [])[0] || {});
+        } catch (err) { s652.pageErr = err.message; }
+        const ok652 = s652.deal === '0.2 0.2 0.25 1  ' && s652.tier === 'flex 100 99 97.5 '
+          && s652.prices === JSON.stringify([[{ inPerM: 0.5, outPerM: 1.9, cacheReadPerM: null, cacheWritePerM: null, minPromptTokens: 200000 }], { webSearchEach: 0.01 }, 120000, ['tools', 'reasoning']])
+          && s652.who === JSON.stringify([{ slug: 'deepinfra', privacyUrl: 'https://deepinfra.example/privacy', termsUrl: 'https://deepinfra.example/terms', statusUrl: null, headquarters: 'US', datacenters: ['US', 'DE'] }, null])
+          && s652.deals === 'deepseek/deepseek-chat-v3.1 0.2 ready true' && s652.free === 'qwen/qwen3-coder:free true'
+          && s652.page === '20% off | $0.25 | $1.00 | flex | Uptime: last 5 min 100%, 30 min 99%, a day 97.5% | 16:00–00:00 UTC: in $0.20/M, out $0.80/M | From 200k prompt tokens: in $0.50/M, out $1.90/M | per web search $0.01 | Based in US, runs in US, DE | Privacy policy=https://deepinfra.example/privacy;Terms=https://deepinfra.example/terms | 0 | 164k context · 120k prompt at most | tools, reasoning'
+          && /a provider gives 20% off/.test(s652.line || '') && !s652.pageErr;
+        check('R652', L647.R652, ok652, JSON.stringify(s652));
+      }
       // R648: an entry is a named chain; model 1 down (503) gives way to model 2, said in words; credits (402) never switch
       const steps = [{ model: 'dead/r647', provider: 'stepfun' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4', label: 'deepseek via deepinfra' }];
       const up = await call('/api/providers/update', A, { id: tp.id, pairs: [{ id: 'deepseek', label: 'deepseek', steps }, { id: 'broke', label: 'broke', steps: [{ model: 'broke/r647', provider: 'x' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4' }] },
@@ -8966,7 +9006,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && near(w1('fiveHour').spentUsd, r2(base('fiveHour') + 0.06)) && w1('fiveHour').over === true && w1('week').over === false && w1('month').over === false
         && cr.totalUsd === 30 && cr.usedUsd === 5 && cr.leftUsd === 25 && cr.from === 'management key' && seen.key === 15 && seen.mgmtHidden,
         JSON.stringify(seen));
-    } catch (e) { if (e.stopAfter) throw e; for (const id of ['R647', 'R648', 'R649']) if (!seen[id]) check(id, L647[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen)); }
+    } catch (e) { if (e.stopAfter) throw e; for (const id of ['R647', 'R652', 'R648', 'R649']) if (!seen[id]) check(id, L647[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen)); }
     finally {
       // the team limits back to the defaults and no management key: the settings file goes (the hub reads it on every request;
       // setting wide limits through the route would be refused while the hub still holds the key's own limit of 15 for a minute)
