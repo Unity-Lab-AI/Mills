@@ -7,6 +7,32 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.74.0 — 2026-11-17
+
+MINOR: **each provider of a model shows its data policy as a green, yellow or red marker, from OpenRouter's API only;
+the model search can be only the models with a zero-data-retention endpoint** (T-386; Sponge: the ZDR list and the
+per-provider markers are separate things, and "I just need this direct from their API where it is possible … using their
+page directly can break at any point in time").
+
+- What OpenRouter's API gives (its docs, 2026-11-17): every endpoint's data policy as **three tiers**, through
+  `GET /endpoints/zdr` and its `safety_retention` flag: **zero data retention** (nothing stored, so nothing trained on),
+  **safety retention** (may be kept only to detect abuse, never trained on) and **retention and training** (may be kept
+  and trained on under the provider's policy; OpenRouter also puts an endpoint here when its policy is unclear). Also
+  documented: `GET /models?zdr=true` (models with a ZDR endpoint) and the request's `provider.data_collection: "deny"`.
+- What it does not give: the finer marks on OpenRouter's website (training apart from keeping prompts, how many days).
+  They are on the site only (no field in the endpoint schema, its changelog, `/model/{author}/{slug}` or `/providers`),
+  so the hub does not show them: reading the website could break at any time.
+- The picker's Data policy column is a marker per endpoint: **green** "No retention", **yellow** "Retains, no training",
+  **red** "Retains, may train", with what OpenRouter says each means (hover, and the "More" row). Filters: green only,
+  no training (green or yellow); sort: best data policy first. The model search's **Zero data retention only** lists the
+  models with an endpoint on the ZDR list, and each model says how many it has.
+- `GET /api/openrouter/catalog/endpoints` adds `dataLevel` (green / yellow / red) and `dataMeaning` per endpoint;
+  `…/models` takes `zdr=1` and adds `zdrEndpoints` per model. Add-only.
+- Checks: **R653** (the three tiers as markers with their meanings, the ZDR model filter, the page's words, and that the
+  hub never asks OpenRouter's website); unit test
+  `the_data_policy_is_openrouters_three_tiers_from_its_api_with_a_marker_each_and_a_zdr_model_filter`.
+- Modules: web/aiadmin.js 1.4.0, web/polish.css 1.4.0; pgm-ai-internal's openrouter_catalog.rs.
+
 ## 5.73.0 — 2026-11-17
 
 MINOR: **AI Admin's OpenRouter picker shows everything OpenRouter says about each provider of a model: its deals, every
