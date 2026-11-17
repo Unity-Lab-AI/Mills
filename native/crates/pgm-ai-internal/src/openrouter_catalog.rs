@@ -201,11 +201,28 @@ impl EndpointInfo {
 }
 
 /// An endpoint's data policy tier and its words: no retention (ZDR), retains without training (safety retention), retains
-/// and may train (not in the ZDR list).
+/// and may train (not in the ZDR list). These are OpenRouter's own three tiers, the data policy its API gives per endpoint
+/// (docs guides/privacy/zdr, "OpenRouter describes every endpoint's data policy with three tiers"); finer marks (training
+/// apart from keeping prompts, how many days) are on its website only, and the hub reads its API only (T-386).
 pub fn data_tier(zdr: &Value, model: &str, ep: &EndpointInfo) -> (&'static str, &'static str) {
     let same = |z: &Value| match ep.tag.as_deref().filter(|t| !t.is_empty()) { Some(t) => s(z, "tag") == t, None => s(z, "provider_name") == ep.provider_name };
     let hit = zdr.as_array().into_iter().flatten().find(|z| s(z, "model_id") == model && same(z));
     match hit { Some(z) if z["safety_retention"] == json!(true) => ("safety", "Retains, no training"), Some(_) => ("zdr", "No retention"), None => ("train", "Retains, may train") }
+}
+
+/// A tier's marker (green, yellow, red) and what OpenRouter's docs say it means.
+pub fn tier_marker(tier: &str) -> (&'static str, &'static str) {
+    match tier {
+        "zdr" => ("green", "Zero data retention: nothing is stored after the answer, so nothing is trained on."),
+        "safety" => ("yellow", "Safety retention: prompts and answers may be kept, only to detect and prevent abuse; never trained on."),
+        _ => ("red", "Retention and training: may be kept and trained on under the provider's policy (OpenRouter also puts an endpoint here when its policy is unclear)."),
+    }
+}
+/// How many of each model's endpoints are on the ZDR list (OpenRouter's `GET /endpoints/zdr`), by model id.
+pub fn zdr_counts(zdr: &Value) -> HashMap<String, u64> {
+    let mut m = HashMap::new();
+    for z in zdr.as_array().into_iter().flatten() { *m.entry(s(z, "model_id")).or_insert(0) += 1; }
+    m
 }
 
 /// Who runs an endpoint, from OpenRouter's provider list (`GET /providers`): matched on the endpoint's tag ("deepinfra/fp4"
@@ -221,67 +238,27 @@ pub fn provider_info(providers: &Value, ep: &EndpointInfo) -> Value {
     }
 }
 
-// ---------- each provider's own data policy (T-386) ----------
-/// What each provider of a model does with the prompts, as OpenRouter's model page shows it with its green, yellow and red
-/// markers: whether it trains on them (or may publish them), whether and how long it keeps them (or keeps them for safety
-/// checks), whether OpenRouter itself may train on them. Per endpoint, and a different thing from the ZDR list (a provider
-/// may keep nothing without being on it). OpenRouter's API does not give it: the page carries it as `data_policy` beside each
-/// endpoint's `provider_slug` (the API's `tag`, tier included: "deepinfra/fp8/flex") and `variant` ("standard", "free"), as
-/// JSON inside a script string. Keyed "tag|variant"; empty when the page has another shape (the picker then says unknown).
-pub fn page_policies(html: &str) -> serde_json::Map<String, Value> {
-    let t = html.replace("\\\"", "\"");
-    let mut out = serde_json::Map::new();
-    const KEY: &str = "\"data_policy\":{";
-    for (at, _) in t.match_indices(KEY) {
-        let open = at + KEY.len() - 1;
-        let Some(len) = t[open..].find('}') else { continue };
-        let Ok(obj @ Value::Object(_)) = serde_json::from_str::<Value>(&t[open..=open + len]) else { continue };
-        let head = &t[..at];
-        let Some(sp) = head.rfind("\"provider_slug\":\"").filter(|sp| at - sp < 8000) else { continue }; // its own endpoint's, not one far above
-        let field = |name: &str| -> Option<String> { let k = format!("\"{name}\":\""); let i = head[sp..].find(&k)? + sp + k.len(); let j = head[i..].find('"')? + i; Some(head[i..j].to_string()) };
-        let Some(slug) = field("provider_slug") else { continue };
-        out.insert(format!("{slug}|{}", field("variant").unwrap_or_else(|| "standard".into())), obj);
-    }
-    out
-}
-/// One endpoint's data policy as the picker shows it: a marker each for training (green: no training; red: trains on the
-/// prompts or may publish them) and for keeping them (green: keeps nothing; yellow: keeps them, for how many days when
-/// said, or keeps them for safety checks), the endpoint's overall marker (the worst of them; red too when OpenRouter itself
-/// may train on them), and the provider's policy links.
-pub fn policy_view(p: &Value) -> Value {
-    let b = |k: &str| p[k].as_bool().unwrap_or(false);
-    let days = p["retentionDays"].as_u64();
-    let (tl, tw) = if b("canPublish") { ("red", "May publish your prompts") } else if b("training") { ("red", "Trains on your prompts") } else { ("green", "No training") };
-    let (rl, rw) = if b("retainsPrompts") { ("yellow", days.map_or("Keeps prompts".to_string(), |d| format!("Keeps prompts {d} days"))) }
-        else if b("safetyRetention") { ("yellow", "Keeps prompts for safety checks".to_string()) } else { ("green", "Keeps nothing".to_string()) };
-    let level = if tl == "red" || b("trainingOpenRouter") { "red" } else if rl == "yellow" { "yellow" } else { "green" };
-    json!({ "level": level, "training": { "level": tl, "words": tw }, "retention": { "level": rl, "words": rw, "days": days },
-        "openRouterTrains": b("trainingOpenRouter"), "requiresUserIds": b("requiresUserIDs"), "termsUrl": p["termsOfServiceURL"], "privacyUrl": p["privacyPolicyURL"] })
-}
-/// An endpoint's policy from the page's: its tag and the model's variant ("x:free" → "free"), else its tag on any variant.
-fn policy_for<'a>(pol: &'a serde_json::Map<String, Value>, ep: &EndpointInfo, variant: &str) -> Option<&'a Value> {
-    let tag = ep.route_name();
-    pol.get(&format!("{tag}|{variant}")).or_else(|| pol.iter().find(|(k, _)| k.rsplit_once('|').map(|x| x.0) == Some(tag.as_str())).map(|x| x.1))
-}
-
-/// The search's filters beyond its words: only models with a deal (from the deals index), only free ones.
+/// The search's filters beyond its words: only models with a deal (from the deals index), only free ones, only those with
+/// an endpoint on the ZDR list (as OpenRouter's own `GET /models?zdr=true`).
 #[derive(Default, Clone, Copy)]
-pub struct ModelFilter { pub deals: bool, pub free: bool }
+pub struct ModelFilter { pub deals: bool, pub free: bool, pub zdr: bool }
 
 /// The models as the page lists them, those matching every word of `q` (id or name, any case) and the filter, newest
 /// first; at most [`MAX_MODELS`]. `deals` is the deals index (model id → its biggest deal) when it has been built.
-pub fn models_view(raw: &Value, q: &str, deals: Option<&HashMap<String, f64>>, f: ModelFilter) -> Value {
+pub fn models_view(raw: &Value, q: &str, deals: Option<&HashMap<String, f64>>, zdr: &Value, f: ModelFilter) -> Value {
+    let zc = zdr_counts(zdr);
+    let zn = |m: &ModelInfo| zc.get(&m.id).copied().unwrap_or(0);
     let models: Vec<ModelInfo> = raw["data"].as_array().into_iter().flatten().filter_map(|m| serde_json::from_value(m.clone()).ok()).collect();
     let words: Vec<String> = q.to_lowercase().split_whitespace().map(String::from).collect();
     let deal = |m: &ModelInfo| deals.and_then(|d| d.get(&m.id)).copied(); // a variant (…:free) is its own model: no deal of the paid one
     let mut hit: Vec<&ModelInfo> = models.iter().filter(|m| { let hay = format!("{} {}", m.id, m.name).to_lowercase(); words.iter().all(|w| hay.contains(w.as_str())) })
-        .filter(|m| !f.deals || deal(m).is_some()).filter(|m| !f.free || m.pricing.free()).collect();
+        .filter(|m| !f.deals || deal(m).is_some()).filter(|m| !f.free || m.pricing.free()).filter(|m| !f.zdr || zn(m) > 0).collect();
     hit.sort_by(|a, b| b.created.unwrap_or(0).cmp(&a.created.unwrap_or(0)));
     let total = hit.len();
     let list: Vec<Value> = hit.into_iter().take(MAX_MODELS).map(|m| json!({
         "id": m.id, "name": if m.name.is_empty() { m.id.clone() } else { m.name.clone() }, "context": m.context_length,
         "inPerM": m.pricing.in_per_m(), "outPerM": m.pricing.out_per_m(), "cacheReadPerM": m.pricing.cache_read_per_m(), "cacheWritePerM": m.pricing.cache_write_per_m(),
-        "more": m.pricing.more(), "tiers": m.pricing.tiers(), "free": m.pricing.free(), "bestDeal": deal(m),
+        "more": m.pricing.more(), "tiers": m.pricing.tiers(), "free": m.pricing.free(), "bestDeal": deal(m), "zdrEndpoints": zn(m),
         "input": m.architecture.as_ref().and_then(|a| a["input_modalities"].as_array().cloned()).unwrap_or_default(),
     })).collect();
     json!({ "models": list, "total": total })
@@ -289,12 +266,10 @@ pub fn models_view(raw: &Value, q: &str, deals: Option<&HashMap<String, f64>>, f
 
 /// One model's providers as the page lists them, fastest first (then the cheapest), each with everything OpenRouter says
 /// about it: prices (all of them, the deal and what it was before, tiered prices), speed, first token, uptime (5 min, 30 min,
-/// a day), limits, parameters, who runs it, whether it is on the ZDR list (`data`) and its own data policy (`policy`, from
-/// the model page's `pol`; null when unknown).
-pub fn endpoints_view(raw: &Value, zdr: &Value, providers: &Value, pol: &serde_json::Map<String, Value>) -> Value {
+/// a day), limits, parameters, its data policy and who runs it.
+pub fn endpoints_view(raw: &Value, zdr: &Value, providers: &Value) -> Value {
     let d = &raw["data"];
     let model = s(d, "id");
-    let variant = model.split_once(':').map_or("standard", |x| x.1).to_string();
     let mut eps: Vec<EndpointInfo> = d["endpoints"].as_array().into_iter().flatten().filter_map(|e| serde_json::from_value(e.clone()).ok()).collect();
     eps.sort_by(|a, b| b.tps_p50().unwrap_or(0.0).total_cmp(&a.tps_p50().unwrap_or(0.0)).then(a.pricing.in_per_m().unwrap_or(f64::MAX).total_cmp(&b.pricing.in_per_m().unwrap_or(f64::MAX))));
     let list: Vec<Value> = eps.iter().map(|e| {
@@ -310,8 +285,7 @@ pub fn endpoints_view(raw: &Value, zdr: &Value, providers: &Value, pol: &serde_j
             "latencyP50Ms": e.latency_p50_ms().map(|x| x.round()), "tpsP50": e.tps_p50().map(|x| (x * 10.0).round() / 10.0),
             "latency": e.latency_last_30m, "throughput": e.throughput_last_30m, "status": e.status,
             "implicitCaching": e.supports_implicit_caching, "params": e.supported_parameters.clone().unwrap_or_default(), "toolChoice": e.supports_tool_choice,
-            "data": tier, "dataLabel": words, "policy": policy_for(pol, e, &variant).map_or(Value::Null, policy_view),
-            "providerInfo": provider_info(providers, e), "detail": e.detail_string(),
+            "data": tier, "dataLabel": words, "dataLevel": tier_marker(tier).0, "dataMeaning": tier_marker(tier).1, "providerInfo": provider_info(providers, e), "detail": e.detail_string(),
         })
     }).collect();
     json!({ "model": { "id": model, "name": s(d, "name") }, "endpoints": list })
@@ -346,7 +320,8 @@ pub async fn models(hub: &Arc<dyn AiHub>, q: &str, f: ModelFilter) -> Result<Val
     let (map, at, _) = deals_state();
     if map.is_none() || at.is_some_and(|t| t.elapsed() >= DEALS_TTL) { start_deals(hub.clone()); }
     let (map, at, building) = deals_state();
-    let mut v = models_view(&raw, q, map.as_ref(), f);
+    let z = zdr(&**hub).await;
+    let mut v = models_view(&raw, q, map.as_ref(), &z, f);
     v["deals"] = json!({ "ready": map.is_some(), "building": building, "ageMin": at.map(|t| t.elapsed().as_secs() / 60), "models": map.as_ref().map(|m| m.len()) });
     Ok(v)
 }
@@ -366,27 +341,8 @@ async fn endpoints_raw(hub: &dyn AiHub, model: &str) -> Result<Value, String> {
 pub async fn endpoints(hub: &dyn AiHub, model: &str) -> Result<Value, String> {
     if !model_ok(model) { return Err("A model is its OpenRouter id, author/slug (e.g. deepseek/deepseek-chat-v3.1).".into()); }
     let raw = endpoints_raw(hub, model).await?;
-    let (z, p, pol) = tokio::join!(zdr(hub), providers(hub), policies(hub, model));
-    Ok(endpoints_view(&raw, &z, &p, &pol))
-}
-/// Each provider's own data policy from the model's page on OpenRouter's site (`{site}/{author}/{slug}`, the API's base
-/// without /api/v1), an hour in the cache. Never with a key: the page is public. A page that could not be had or read is
-/// asked again after 10 minutes, not on every open.
-async fn policies(hub: &dyn AiHub, model: &str) -> serde_json::Map<String, Value> {
-    let k = format!("pol:{model}");
-    let held = |v: Value| v.as_object().cloned().unwrap_or_default();
-    if let Some(v) = cached(&k, ENDPOINTS_TTL) { let m = held(v); if !m.is_empty() || cached(&k, Duration::from_secs(600)).is_some() { return m; } }
-    let base = crate::openrouter::base_url(hub);
-    let url = format!("{}/{model}", base.strip_suffix("/api/v1").unwrap_or(&base));
-    let page = async {
-        let r = tokio::time::timeout(Duration::from_secs(25), crate::openai::self_http(hub).get(&url).header("user-agent", "VibeRoller").send()).await.ok()?.ok()?;
-        if !r.status().is_success() { return None; }
-        r.text().await.ok()
-    }.await;
-    let m = page.as_deref().map(page_policies).unwrap_or_default();
-    if m.is_empty() { eprintln!("[openrouter] no data policies on OpenRouter's page for {model}: the picker shows them as unknown"); }
-    keep(&k, &Value::Object(m.clone()));
-    m
+    let (z, p) = tokio::join!(zdr(hub), providers(hub));
+    Ok(endpoints_view(&raw, &z, &p))
 }
 
 // ---------- the deals index (T-385) ----------
@@ -421,14 +377,14 @@ fn start_deals(hub: Arc<dyn AiHub>) {
     });
 }
 
-/// `GET /api/openrouter/catalog/models?q=&deals=1&free=1` and `GET /api/openrouter/catalog/endpoints?model=<author/slug>`:
+/// `GET /api/openrouter/catalog/models?q=&deals=1&free=1&zdr=1` and `GET /api/openrouter/catalog/endpoints?model=<author/slug>`:
 /// AI Admin's model and provider picker (everyone signed in since T-383: anyone may add a key of their own and pick its
 /// entries; the catalogue is OpenRouter's public one).
 pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, _a: &Account) -> Option<Resp> {
     if r.method != hyper::Method::GET || !r.path.starts_with("/api/openrouter/catalog/") { return None; }
     let on = |k: &str| r.param(k).is_some_and(|v| v == "1" || v == "true");
     let got = match r.path.as_str() {
-        "/api/openrouter/catalog/models" => models(hub, &r.param("q").unwrap_or_default().chars().take(100).collect::<String>(), ModelFilter { deals: on("deals"), free: on("free") }).await,
+        "/api/openrouter/catalog/models" => models(hub, &r.param("q").unwrap_or_default().chars().take(100).collect::<String>(), ModelFilter { deals: on("deals"), free: on("free"), zdr: on("zdr") }).await,
         "/api/openrouter/catalog/endpoints" => endpoints(&**hub, r.param("model").unwrap_or_default().trim()).await,
         _ => return Some(answer(404, json!({ "error": "Not found" }))),
     };
@@ -449,7 +405,7 @@ mod tests {
         let zdr = json!([{ "model_id": "deepseek/deepseek-chat-v3.1", "provider_name": "DeepInfra", "tag": "deepinfra/fp4", "safety_retention": false },
             { "model_id": "deepseek/deepseek-chat-v3.1", "provider_name": "SiliconFlow", "tag": "siliconflow/fp8", "safety_retention": true },
             { "model_id": "other/model", "provider_name": "Chutes", "tag": "chutes" }]);
-        let v = endpoints_view(&raw, &zdr, &Value::Null, &Default::default()); let e = v["endpoints"].as_array().unwrap();
+        let v = endpoints_view(&raw, &zdr, &Value::Null); let e = v["endpoints"].as_array().unwrap();
         assert_eq!(v["model"], json!({ "id": "deepseek/deepseek-chat-v3.1", "name": "DeepSeek V3.1" }));
         assert_eq!(e.iter().map(|x| s(x, "provider")).collect::<Vec<_>>(), ["DeepInfra", "SiliconFlow", "Chutes"]);
         assert_eq!(e[0]["inPerM"], json!(0.25)); assert_eq!(e[0]["outPerM"], json!(0.95)); assert_eq!(e[0]["cacheReadPerM"], json!(0.13));
@@ -463,10 +419,10 @@ mod tests {
         let raw = json!({ "data": [{ "id": "deepseek/deepseek-chat-v3.1", "name": "DeepSeek: V3.1", "created": 2, "pricing": { "prompt": "0.0000002", "completion": "0.0000008" }, "context_length": 163840, "architecture": { "input_modalities": ["text"] } },
             { "id": "deepseek/deepseek-r1", "name": "DeepSeek: R1", "created": 1, "pricing": { "prompt": "-1", "completion": 0.000002 } },
             { "id": "qwen/qwen3-coder", "name": "Qwen3 Coder", "created": 3 }] });
-        let v = models_view(&raw, "DeepSeek ", None, ModelFilter::default());
+        let v = models_view(&raw, "DeepSeek ", None, &Value::Null, ModelFilter::default());
         assert_eq!(v["total"], 2); assert_eq!(v["models"][0]["id"], "deepseek/deepseek-chat-v3.1"); assert_eq!(v["models"][0]["inPerM"], json!(0.2)); assert_eq!(v["models"][0]["input"], json!(["text"]));
         assert!(v["models"][1]["inPerM"].is_null(), "a varying price (-1) is no price"); assert_eq!(v["models"][1]["outPerM"], json!(2.0));
-        assert_eq!(models_view(&raw, "deepseek r1", None, ModelFilter::default())["total"], 1); assert_eq!(models_view(&raw, "", None, ModelFilter::default())["models"][0]["id"], "qwen/qwen3-coder");
+        assert_eq!(models_view(&raw, "deepseek r1", None, &Value::Null, ModelFilter::default())["total"], 1); assert_eq!(models_view(&raw, "", None, &Value::Null, ModelFilter::default())["models"][0]["id"], "qwen/qwen3-coder");
     }
     #[test]
     fn a_deal_shows_with_the_price_before_it_and_every_other_fact_an_endpoint_has() {
@@ -482,7 +438,7 @@ mod tests {
                 { "utc_start": 1600, "utc_end": 0, "prompt": "0.0000000825", "completion": "0.00000033" }, { "utc_start": 0, "utc_end": 1600, "prompt": "0.000000132", "completion": "0.000000528" }, { "utc_start": 2500, "utc_end": 0, "prompt": "0" } ] } } ] } });
         let providers = json!([{ "name": "StreamLake", "slug": "streamlake", "privacy_policy_url": "https://streamlake.example/privacy", "terms_of_service_url": "https://streamlake.example/terms", "status_page_url": null, "headquarters": "CN", "datacenters": ["CN", "SG"] },
             { "name": "Mancer 2", "slug": "mancer-other", "privacy_policy_url": null, "headquarters": "US", "datacenters": ["US"] }]);
-        let v = endpoints_view(&raw, &Value::Null, &providers, &Default::default()); let e = v["endpoints"].as_array().unwrap();
+        let v = endpoints_view(&raw, &Value::Null, &providers); let e = v["endpoints"].as_array().unwrap();
         let by = |n: &str| e.iter().find(|x| s(x, "provider") == n).unwrap().clone();
         let (sl, di, mc) = (by("StreamLake"), by("DeepInfra"), by("Mancer 2"));
         assert_eq!((sl["discount"].clone(), sl["inPerM"].clone(), sl["inPerMBefore"].clone(), sl["outPerMBefore"].clone()), (json!(0.41), json!(0.0826), json!(0.14), json!(0.28)));
@@ -506,53 +462,24 @@ mod tests {
             { "id": "qwen/qwen3-coder:free", "name": "Qwen3 Coder (free)", "created": 1, "pricing": { "prompt": "0", "completion": "0" } }] });
         let deals: HashMap<String, f64> = [("deepseek/deepseek-v4-flash".to_string(), 0.41), ("qwen/qwen3-coder".to_string(), 0.1)].into();
         let ids = |v: Value| v["models"].as_array().unwrap().iter().map(|m| format!("{} {}", s(m, "id"), m["bestDeal"])).collect::<Vec<_>>().join(", ");
-        assert_eq!(ids(models_view(&raw, "", Some(&deals), ModelFilter { deals: true, free: false })), "deepseek/deepseek-v4-flash 0.41, qwen/qwen3-coder 0.1");
-        assert_eq!(ids(models_view(&raw, "", Some(&deals), ModelFilter { deals: false, free: true })), "qwen/qwen3-coder:free null");
-        assert_eq!(ids(models_view(&raw, "qwen", None, ModelFilter { deals: true, free: false })), "", "no index yet: no model is known to have a deal");
-        assert_eq!(models_view(&raw, "", None, ModelFilter::default())["models"][2]["free"], json!(true));
-    }
-    /// The shape OpenRouter's model page has (2026-11-17): each endpoint's JSON inside a script string, quotes escaped.
-    fn page(eps: &[(&str, &str, &str)]) -> String {
-        let body: Vec<String> = eps.iter().map(|(slug, variant, pol)| format!(r#"{{"provider_display_name":"X","provider_slug":"{slug}","derived_service_tier":null,"provider_model_id":"m","quantization":"fp8","variant":"{variant}","is_free":false,"supported_parameters":["tools"],"data_policy":{pol},"pricing":{{"prompt":"0.0000001","discount":0}}}}"#)).collect();
-        format!(r#"<html><script>self.__next_f.push([1,"{}"])</script></html>"#, format!("[{}]", body.join(",")).replace('"', "\\\""))
+        assert_eq!(ids(models_view(&raw, "", Some(&deals), &Value::Null, ModelFilter { deals: true, ..Default::default() })), "deepseek/deepseek-v4-flash 0.41, qwen/qwen3-coder 0.1");
+        assert_eq!(ids(models_view(&raw, "", Some(&deals), &Value::Null, ModelFilter { free: true, ..Default::default() })), "qwen/qwen3-coder:free null");
+        assert_eq!(ids(models_view(&raw, "qwen", None, &Value::Null, ModelFilter { deals: true, ..Default::default() })), "", "no index yet: no model is known to have a deal");
+        assert_eq!(models_view(&raw, "", None, &Value::Null, ModelFilter::default())["models"][2]["free"], json!(true));
     }
     #[test]
-    fn each_provider_has_its_own_data_policy_from_openrouters_model_page_apart_from_the_zdr_list() {
-        let html = page(&[
-            ("deepinfra/fp8", "standard", r#"{"training":false,"trainingOpenRouter":false,"retainsPrompts":false,"canPublish":false,"safetyRetention":false,"termsOfServiceURL":"https://deepinfra.com/terms","privacyPolicyURL":"https://deepinfra.com/privacy"}"#),
-            ("deepinfra/fp8/flex", "standard", r#"{"training":false,"trainingOpenRouter":false,"retainsPrompts":true,"canPublish":false,"safetyRetention":false}"#),
-            ("google-ai-studio", "free", r#"{"training":false,"trainingOpenRouter":false,"retainsPrompts":true,"retentionDays":55,"canPublish":false,"safetyRetention":false}"#),
-            ("google-ai-studio", "standard", r#"{"training":false,"trainingOpenRouter":false,"retainsPrompts":false,"canPublish":false,"safetyRetention":true}"#),
-            ("chutes", "standard", r#"{"training":true,"trainingOpenRouter":false,"retainsPrompts":true,"canPublish":false,"safetyRetention":false}"#),
-            ("publisher", "standard", r#"{"training":false,"trainingOpenRouter":false,"retainsPrompts":false,"canPublish":true,"safetyRetention":false}"#)]);
-        let pol = page_policies(&html);
-        assert_eq!(pol.len(), 6, "{:?}", pol.keys().collect::<Vec<_>>());
-        let raw = |id: &str| json!({ "data": { "id": id, "endpoints": [
-            { "provider_name": "DeepInfra", "tag": "deepinfra/fp8", "pricing": { "prompt": "0.0000001" } },
-            { "provider_name": "DeepInfra", "tag": "deepinfra/fp8/flex", "service_tier": "flex", "pricing": { "prompt": "0.0000001" } },
-            { "provider_name": "Google AI Studio", "tag": "google-ai-studio", "pricing": { "prompt": "0.0000001" } },
-            { "provider_name": "Chutes", "tag": "chutes", "pricing": { "prompt": "0.0000001" } },
-            { "provider_name": "Publisher", "tag": "publisher", "pricing": { "prompt": "0.0000001" } },
-            { "provider_name": "Nowhere", "tag": "nowhere", "pricing": { "prompt": "0.0000001" } }] } });
-        // DeepInfra keeps nothing and is not on the ZDR list: the two are separate things
-        let v = endpoints_view(&raw("a/b"), &json!([]), &Value::Null, &pol); let e = v["endpoints"].as_array().unwrap();
-        let by = |n: &str| e.iter().find(|x| s(x, "route") == n).unwrap().clone();
-        let di = by("deepinfra/fp8");
-        assert_eq!((s(&di, "data"), di["policy"]["level"].clone(), di["policy"]["training"]["words"].clone(), di["policy"]["retention"]["words"].clone()), ("train".into(), json!("green"), json!("No training"), json!("Keeps nothing")));
-        assert_eq!(di["policy"]["privacyUrl"], "https://deepinfra.com/privacy");
-        assert_eq!(by("deepinfra/fp8/flex")["policy"]["retention"], json!({ "level": "yellow", "words": "Keeps prompts", "days": null }), "the flex tier's own policy");
-        assert_eq!(by("google-ai-studio")["policy"]["retention"]["words"], "Keeps prompts for safety checks", "the standard variant");
-        assert_eq!((by("chutes")["policy"]["level"].clone(), by("chutes")["policy"]["training"]["words"].clone()), (json!("red"), json!("Trains on your prompts")));
-        assert_eq!(by("publisher")["policy"]["training"], json!({ "level": "red", "words": "May publish your prompts" }));
-        assert!(by("nowhere")["policy"].is_null(), "not on the page: unknown, never guessed");
-        // the free variant (a/b:free) has its own: Google keeps prompts 55 days there
-        let f = endpoints_view(&raw("a/b:free"), &Value::Null, &Value::Null, &pol);
-        let g = f["endpoints"].as_array().unwrap().iter().find(|x| s(x, "route") == "google-ai-studio").unwrap().clone();
-        assert_eq!((g["policy"]["level"].clone(), g["policy"]["retention"]["words"].clone(), g["policy"]["retention"]["days"].clone()), (json!("yellow"), json!("Keeps prompts 55 days"), json!(55)));
-        // OpenRouter itself training makes it red; a page in another shape gives nothing (unknown), never a wrong answer
-        assert_eq!(policy_view(&json!({ "trainingOpenRouter": true }))["level"], "red");
-        assert!(page_policies("<html>no data here</html>").is_empty());
-        assert!(page_policies(&page(&[("x", "standard", "not json")])).is_empty());
+    fn the_data_policy_is_openrouters_three_tiers_from_its_api_with_a_marker_each_and_a_zdr_model_filter() {
+        // OpenRouter's API gives a data policy per endpoint as three tiers (its ZDR list with safety_retention); nothing else
+        let raw = json!({ "data": { "id": "a/b", "endpoints": [{ "provider_name": "Z", "tag": "z" }, { "provider_name": "S", "tag": "s" }, { "provider_name": "T", "tag": "t" }] } });
+        let zdr = json!([{ "model_id": "a/b", "provider_name": "Z", "tag": "z", "safety_retention": false }, { "model_id": "a/b", "provider_name": "S", "tag": "s", "safety_retention": true }, { "model_id": "c/d", "provider_name": "T", "tag": "t" }]);
+        let v = endpoints_view(&raw, &zdr, &Value::Null); let e = v["endpoints"].as_array().unwrap();
+        let by = |n: &str| e.iter().find(|x| s(x, "provider") == n).unwrap().clone();
+        assert_eq!([by("Z"), by("S"), by("T")].iter().map(|x| format!("{} {}", s(x, "data"), s(x, "dataLevel"))).collect::<Vec<_>>(), ["zdr green", "safety yellow", "train red"]);
+        assert!(s(&by("S"), "dataMeaning").contains("never trained on") && s(&by("T"), "dataMeaning").contains("policy is unclear"));
+        let models = json!({ "data": [{ "id": "a/b", "name": "AB", "created": 2 }, { "id": "c/d", "name": "CD", "created": 1 }, { "id": "e/f", "name": "EF", "created": 0 }] });
+        let only = models_view(&models, "", None, &zdr, ModelFilter { zdr: true, ..Default::default() });
+        assert_eq!(only["models"].as_array().unwrap().iter().map(|m| format!("{} {}", s(m, "id"), m["zdrEndpoints"])).collect::<Vec<_>>(), ["a/b 2", "c/d 1"]);
+        assert_eq!(models_view(&models, "", None, &zdr, ModelFilter::default())["total"], 3);
     }
     #[test]
     fn only_a_real_model_id_reaches_openrouters_path() {

@@ -9,33 +9,28 @@ logged here in the same commit, newest first (hub law 15).
 
 ## 5.74.0 — 2026-11-17
 
-MINOR: **each provider of a model shows what it does with your data, with OpenRouter's own green, yellow and red markers;
-the ZDR list is shown apart from it** (T-386; Sponge: "zero retention list vs the red, yellow and green markers for what
-each provider PER model actually does with your data, is separate things").
+MINOR: **each provider of a model shows its data policy as a green, yellow or red marker, from OpenRouter's API only;
+the model search can be only the models with a zero-data-retention endpoint** (T-386; Sponge: the ZDR list and the
+per-provider markers are separate things, and "I just need this direct from their API where it is possible … using their
+page directly can break at any point in time").
 
-- 5.73.0 took OpenRouter's ZDR list for the data policy. That list is a different thing: OpenRouter's model page marks each
-  endpoint itself (training, keeping prompts and for how long, keeping them for safety checks, publishing them, OpenRouter
-  training on them), and a provider off the ZDR list may keep nothing while one on it may keep prompts for safety checks.
-- OpenRouter's API does not give these markers; its model page does, as each endpoint's `data_policy` beside its
-  `provider_slug` (the API's `tag`, service tier included) and `variant` (`free` for `:free` models). The hub reads the
-  model's page (`https://openrouter.ai/<author>/<slug>`, never with the API key; an hour in the cache, a page that cannot
-  be read asked again after 10 minutes) when a provider list opens. On 2026-11-17 it found all 15 of DeepSeek V4 Flash's
-  endpoints (StreamLake, GMICloud, Baidu and Atlas Cloud keep prompts) and Google AI Studio's "keeps prompts 55 days".
-- The picker's Data policy column shows the markers: **green** "No training" / "Keeps nothing", **yellow** "Keeps prompts
-  (n days)" / "Keeps prompts for safety checks", **red** "Trains on your prompts" / "May publish your prompts" /
-  "OpenRouter may train on them", and a separate **ZDR** badge when the endpoint is on OpenRouter's ZDR list. When the page
-  has no policy for an endpoint, it says the provider's own policy is unknown and shows the ZDR list's words as before.
-  Filters: green only, no training (green or yellow), on the ZDR list; sort: best data policy first. "More" says it all
-  in words, and the provider's policy links come from the page when the provider list has none.
-- `GET /api/openrouter/catalog/endpoints` adds `policy` per endpoint (`level`, `training {level, words}`, `retention
-  {level, words, days}`, `openRouterTrains`, `requiresUserIds`, `termsUrl`, `privacyUrl`; null when unknown). Add-only:
-  `data` / `dataLabel` (the ZDR list) stay.
-- This reads OpenRouter's website, not a documented API: if they change the page, the markers show as unknown (never a
-  wrong colour) and the hub log says so.
-- Checks: **R653** (the hub against a fake model page in OpenRouter's shape: green, yellow 30 days, red; the ZDR list
-  separate; no key sent to the page; the page's words); unit test
-  `each_provider_has_its_own_data_policy_from_openrouters_model_page_apart_from_the_zdr_list` (service tiers, the free
-  variant, 55 days, safety retention, publishing, OpenRouter training, a page in another shape).
+- What OpenRouter's API gives (its docs, 2026-11-17): every endpoint's data policy as **three tiers**, through
+  `GET /endpoints/zdr` and its `safety_retention` flag: **zero data retention** (nothing stored, so nothing trained on),
+  **safety retention** (may be kept only to detect abuse, never trained on) and **retention and training** (may be kept
+  and trained on under the provider's policy; OpenRouter also puts an endpoint here when its policy is unclear). Also
+  documented: `GET /models?zdr=true` (models with a ZDR endpoint) and the request's `provider.data_collection: "deny"`.
+- What it does not give: the finer marks on OpenRouter's website (training apart from keeping prompts, how many days).
+  They are on the site only (no field in the endpoint schema, its changelog, `/model/{author}/{slug}` or `/providers`),
+  so the hub does not show them: reading the website could break at any time.
+- The picker's Data policy column is a marker per endpoint: **green** "No retention", **yellow** "Retains, no training",
+  **red** "Retains, may train", with what OpenRouter says each means (hover, and the "More" row). Filters: green only,
+  no training (green or yellow); sort: best data policy first. The model search's **Zero data retention only** lists the
+  models with an endpoint on the ZDR list, and each model says how many it has.
+- `GET /api/openrouter/catalog/endpoints` adds `dataLevel` (green / yellow / red) and `dataMeaning` per endpoint;
+  `…/models` takes `zdr=1` and adds `zdrEndpoints` per model. Add-only.
+- Checks: **R653** (the three tiers as markers with their meanings, the ZDR model filter, the page's words, and that the
+  hub never asks OpenRouter's website); unit test
+  `the_data_policy_is_openrouters_three_tiers_from_its_api_with_a_marker_each_and_a_zdr_model_filter`.
 - Modules: web/aiadmin.js 1.4.0, web/polish.css 1.4.0; pgm-ai-internal's openrouter_catalog.rs.
 
 ## 5.73.0 — 2026-11-17
