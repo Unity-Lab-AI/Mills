@@ -403,7 +403,10 @@ pub enum MachineSeen { Linked { user: String, id: String, paused: bool }, Revoke
 /// what the machine named at `start` (it picks it on the machine).
 fn default_scope(meta: &Value) -> Value {
     let folder = meta["folder"].as_str().unwrap_or("");
-    let summary = if folder.is_empty() { "one folder (picked on the machine), read-write; shell (advisory)".to_string() } else { pgm_net_internal::machine::Scope::default_folder(folder).summary((now_ms() / 1000) as i64) };
+    // the folder is a path on the MACHINE, so it is read with the machine's path rules (the "os" it said at start), not the hub's
+    use pgm_net_internal::machine::{Access, Flavor, Preset, Scope};
+    let flavor = match meta["os"].as_str() { Some("windows") => Flavor::Windows, Some(_) => Flavor::Posix, None => Flavor::native() };
+    let summary = if folder.is_empty() { "one folder (picked on the machine), read-write; shell (advisory)".to_string() } else { Scope::preset_with(flavor, Preset::Folder, &[(folder, Access::Rw)], &[]).summary((now_ms() / 1000) as i64) };
     json!({ "preset": "folder", "folder": folder, "access": "rw", "summary": summary })
 }
 

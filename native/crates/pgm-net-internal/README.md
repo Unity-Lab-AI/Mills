@@ -51,8 +51,10 @@ Expected: every test passes (the `cfg(unix)` ones are simply not compiled), and 
 `install.sh`, `uninstall.sh`, `vibe-roller-machine.service` and `vibe-roller-machine.task.xml` to that folder without touching the task
 scheduler. Then, as the normal user (not elevated), `target\debug\vr-host.exe machine install` registers the task "VibeRoller linked
 machine"; `schtasks /Query /TN "VibeRoller linked machine" /XML` must show `LeastPrivilege` and a `LogonTrigger`, and
-`vr-host machine uninstall` removes it. Nothing here was run on Windows when it was written (no Windows toolchain on the build host):
-the first Windows run is the check. Report any failure with the test name.
+`vr-host machine uninstall` removes it. First Windows run (2026-11-16, Windows 11): the tests needed Windows-safe paths (fixed),
+then every `machine::` test passes (66, the `cfg(unix)` ones not compiled), the icacls ACL test included, `host::` passes and the
+files-only install writes all six files. Registering the task needs a linked computer (`machine install` says so until
+`machine link`), so that last step is still to be done on a linked PC. Report any failure with the test name.
 
 ## Use it in another project
 

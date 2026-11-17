@@ -11,7 +11,9 @@ fn setup(tag: &str, scope: &str) -> T {
     std::fs::create_dir_all(&home).unwrap();
     let state = dir.join("state");
     std::fs::create_dir_all(&state).unwrap();
-    std::fs::write(state.join("scope.json"), scope.replace("HOME", home.to_str().unwrap())).unwrap();
+    // the path goes into JSON escaped (a Windows path has backslashes)
+    let home_json = serde_json::to_string(home.to_str().unwrap()).unwrap();
+    std::fs::write(state.join("scope.json"), scope.replace("HOME", &home_json[1..home_json.len() - 1])).unwrap();
     let m = Machine::open(&state, "m1", "test").unwrap();
     T { dir, home, m }
 }

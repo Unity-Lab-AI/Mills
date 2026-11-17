@@ -504,6 +504,6 @@ fn detached(cmd: &str, args: &[&str], cwd: Option<&Path>) -> std::io::Result<()>
     #[cfg(unix)]
     { use std::os::unix::process::CommandExt; c.process_group(0); }
     #[cfg(windows)]
-    { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000 | 0x0000_0008); }
+    { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000 | 0x0000_0200); } // hidden console of its own + new process group: its own children never pop a window
     c.spawn().map(|_| ())
 }

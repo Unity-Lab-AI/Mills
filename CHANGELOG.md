@@ -36,7 +36,34 @@ Work** (T-381, from Sponge; team note plans/openrouter-team-admin.md). Jcode PGM
 - **This hub is the host:** Work's picker group is "This hub · OpenRouter"; a person's own key is "OpenRouter · my key".
 - **Fixed on the way:** a model id like `../x` reached OpenRouter's path, and two keys ending in the same 4 characters shared OpenRouter's answer for a minute.
 - **Versions:** web/aiadmin.js 1.1.0, web/index.html 1.55.0, web/polish.css 1.2.0.
-- **Checks:** R643–R646 are new (the catalogue, the chains, the limits and credits, the page). R591 now accepts a team key with no entries.
+- **Checks:** R647–R650 are new (the catalogue, the chains, the limits and credits, the page). R591 now accepts a team key with no entries.
+
+## 5.70.5 — 2026-11-17
+
+PATCH: **No more console windows popping up and stealing focus on Windows**, and the regression suite runs clean on Windows (from
+Gee: "it keeps opening cmd prompts or powershell or something, and when im in programs doing stuff it interrupts me and breaks
+what ever program im in"; "fix what failed and make sure its not old shit thats not suppose to work any more and fix the smoke
+test that u ran if it is out dated").
+
+### Fixed
+- The AI host started Ollama, the Python engines and its own background copy with no console at all (DETACHED_PROCESS), so every
+  console program those started (Ollama's llama-server / gpu-discover on each model load, nvidia-smi, Python helpers) opened a
+  console window of its own that flashed and took keyboard/mouse focus, in waves at start-up and on every model load/unload. They
+  now get a hidden console of their own (CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP), which their children share: no windows.
+  Native `proc::spawn_detached`, the hub's Ollama/engine starter and the desktop app's image-engine switch.
+- Tests that only worked on Linux now run on Windows too (Linux expectations unchanged): the linked-machines library tests
+  (Windows paths escaped in JSON, Linux-path tests say so), the Brain Modelfile test, the native host's update test (a local MSVC
+  build has no release to update to: said, not failed), its log (the host writes ai-node.log without a terminal), the control
+  app's private-file check (Windows has no Unix modes), the worktree renew (Git for Windows checks out CRLF), Files / attachments
+  (the stand-in passwd had a drive-letter colon; Windows refuses the execute bit by design). The Windows run of the
+  linked-machines tests is done (README).
+
+- A newly linked computer's folder is read with that computer's own path rules (the OS it names at linking), not the hub's: a
+  Windows computer's `C:\...` folder linked to the Linux hub (or a Linux one to a Windows hub) showed "nothing allowed" as its scope
+  summary. `pgm-identity-internal` devices.
+
+### Added
+- Regression check R643: nothing native starts a program with DETACHED_PROCESS again.
 
 ## 5.70.4 — 2026-11-17
 

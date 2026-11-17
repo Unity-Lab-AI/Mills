@@ -100,9 +100,10 @@ mod tests {
     }
     #[test]
     fn a_scope_with_a_higher_v_is_refused_whole_at_the_polls_boundary() {
-        let ok = scope_from_poll(&json!({ "v": 1, "preset": "folder", "paths": [{ "path": "/srv/x", "access": "rw" }] }), 1_700_000_000).unwrap();
-        assert!(ok.starts_with("one folder: /srv/x"), "{ok}");
-        let newer = json!({ "v": 2, "preset": "folder", "paths": [{ "path": "/srv/x", "access": "rw" }], "futureThing": true });
+        let x = if cfg!(windows) { r"C:\srv\x" } else { "/srv/x" }; // an absolute folder on this OS
+        let ok = scope_from_poll(&json!({ "v": 1, "preset": "folder", "paths": [{ "path": x, "access": "rw" }] }), 1_700_000_000).unwrap();
+        assert!(ok.starts_with(&format!("one folder: {x}")), "{ok}");
+        let newer = json!({ "v": 2, "preset": "folder", "paths": [{ "path": x, "access": "rw" }], "futureThing": true });
         let e = scope_from_poll(&newer, 1_700_000_000).unwrap_err();
         assert!(e.contains("needs a newer hub") && e.contains("v2"), "{e}");
         assert!(scope_from_poll(&Value::String(newer.to_string()), 0).is_err(), "as text too");
