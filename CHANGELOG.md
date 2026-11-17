@@ -40,7 +40,8 @@ providers, and do some fancy search things inside viberoller").
   first provider down gives way to the second with the switch said; any provider leaves OpenRouter free; someone who did
   not add the key gets 403 on changing and removing it; the search's filters and price order; the page's words);
   **R611** now says an admin may not change, rename, re-model, limit or remove a teammate's key (seen failing on 5.74.0:
-  the admin could, and even removed it); R599 and R650 follow the page's new words; unit test
+  the admin could, and even removed it); **R591**'s teammate changing the admin's team key now gets that 403 (was a
+  plain 400); R599 and R650 follow the page's new words; unit test
   `the_model_search_filters_by_what_a_model_takes_reads_costs_and_holds_and_sorts_four_ways`.
 - Modules: web/aiadmin.js 1.5.0, web/polish.css 1.4.1; pgm-ai-internal's openrouter.rs, openrouter_team.rs,
   openrouter_catalog.rs, openai.rs.
