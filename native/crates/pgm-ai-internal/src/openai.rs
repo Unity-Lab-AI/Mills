@@ -128,6 +128,21 @@ fn clamp_days(d: &Value) -> u64 { let n = d.as_f64().or_else(|| d.as_str().and_t
 fn providers_file(hub: &dyn AiHub) -> PathBuf { hub.root().join("providers.json") }
 fn providers_db(hub: &dyn AiHub) -> Vec<Value> { read_json(&providers_file(hub)).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default() }
 fn save_providers(hub: &dyn AiHub, list: Vec<Value>) { write_json(&providers_file(hub), &json!({ "providers": list })); }
+static PROVIDERS_LOCK: Mutex<()> = Mutex::new(());
+/// Change one provider record in place (T-383: a key's limits and management key); false when there is none with that id.
+pub fn edit_provider(hub: &dyn AiHub, id: &str, f: impl FnOnce(&mut Value)) -> bool {
+    let _one = PROVIDERS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = providers_db(hub);
+    let Some(p) = list.iter_mut().find(|x| x["id"] == json!(id)) else { return false };
+    f(p); save_providers(hub, list); true
+}
+/// Put a provider record in (replacing the one with its id).
+pub fn put_provider(hub: &dyn AiHub, rec: Value) {
+    let _one = PROVIDERS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = providers_db(hub);
+    match list.iter_mut().find(|x| x["id"] == rec["id"]) { Some(p) => *p = rec, None => list.push(rec) }
+    save_providers(hub, list);
+}
 fn host_models(hub: &dyn AiHub) -> Vec<String> { hub.cfg().get("models").and_then(Value::as_array).map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default() }
 fn clean_models(m: &Value, fallback: Vec<String>) -> Vec<String> {
     let list: Vec<String> = match m { Value::Array(a) => a.iter().map(|x| match x { Value::String(t) => t.trim().to_string(), Value::Null => String::new(), v => v.to_string() }).collect(), Value::String(t) => t.split(|c: char| c == ',' || c.is_whitespace()).map(|x| x.trim().to_string()).collect(), Value::Null => vec![], v => vec![v.to_string()] };
@@ -137,18 +152,27 @@ fn clean_models(m: &Value, fallback: Vec<String>) -> Vec<String> {
 fn pub_view(p: &Value) -> Value {
     let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
     for k in ["baseUrl", "configDir", "command", "home", "provider"] { if !s(p, k).is_empty() { v[k] = p[k].clone(); } }
-    if p["kind"] == json!(crate::openrouter::KIND) { v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) }; }
+    if p["kind"] == json!(crate::openrouter::KIND) { or_view(p, &mut v); }
     if p["args"].is_array() { v["args"] = p["args"].clone(); }
     if p["responses"] == json!(true) { v["responses"] = json!(true); }
     if p["kind"] == json!(crate::jcode::KIND) { v["harness"] = json!(crate::jcode::HARNESS); }
     v
 }
+/// What a page learns of an OpenRouter key besides the usual: its entries, whether it is someone's own, its limits, the
+/// last four characters of the key, whether it has a management key (never a key itself).
+pub fn or_view(p: &Value, v: &mut Value) {
+    v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) };
+    v["personal"] = json!(crate::openrouter::is_personal(p)); v["limits"] = if p["limits"].is_object() { p["limits"].clone() } else { json!({}) };
+    let k = s(p, "apiKey"); if !k.is_empty() { v["last4"] = json!(crate::openrouter::last4(&k)); }
+    v["hasManagementKey"] = json!(!s(p, "managementKey").is_empty());
+}
 /// A custom endpoint (this hub calls whatever address it names), a Claude config folder or a Jcode PGM binary on this
 /// machine: admins only.
 pub fn admin_only(p: &Value) -> bool { matches!(p["kind"].as_str(), Some("openai") | Some("claude-cli") | Some("jcode") | Some("openrouter")) }
 fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String> {
-    // the team's OpenRouter key lives here: the Manage AI permission's (T-379)
-    if s(b, "kind") == crate::openrouter::KIND { if !crate::openrouter::manages_ai(hub, user) { return Err(pgm_identity_internal::siteroles::needs(pgm_identity_internal::siteroles::MANAGE_AI)); } }
+    // an OpenRouter key: anyone may add one, their own or put into the team's (T-383); the address is fixed, so nothing here
+    // reaches anywhere but OpenRouter
+    if s(b, "kind") == crate::openrouter::KIND {}
     else if admin_only(b) {
         // a Jcode PGM binary runs here on the hub, and the team's OpenRouter key lives here too, so only being an admin counts; the others need an AI host of theirs
         let needs_host = s(b, "kind") != crate::jcode::KIND && s(b, "kind") != crate::openrouter::KIND;
@@ -187,11 +211,15 @@ fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String>
             p["models"] = json!(clean_models(&b["models"], vec![]));
         }
         "openrouter" => {
-            // the team's OpenRouter key and the allow-list of model + provider pairs (openrouter.rs); the address is fixed
+            // a named OpenRouter key and its entries (openrouter.rs), optional limits for everyone on it together and an
+            // optional management key (openrouter_team.rs); the address is fixed
             let k = s(b, "apiKey").trim().to_string();
             if k.is_empty() || k.len() > 400 || k.chars().any(|c| c.is_whitespace() || c.is_control()) { return Err("Give the OpenRouter API key (sk-or-…).".into()); }
-            let pairs = crate::openrouter::clean_pairs(&b["pairs"])?;
+            let pairs = if b["pairs"].is_null() { vec![] } else { crate::openrouter::clean_pairs(&b["pairs"])? };
             p["apiKey"] = json!(k); p["models"] = json!(pairs.iter().map(|x| x["id"].clone()).collect::<Vec<_>>()); p["pairs"] = json!(pairs);
+            p["limits"] = crate::openrouter_team::clean_limits(&b["limits"], None)?;
+            let mk = s(b, "managementKey").trim().to_string();
+            if !mk.is_empty() { if !crate::openrouter::key_ok(&mk) { return Err("The management key does not look like an OpenRouter key (sk-or-…).".into()); } p["managementKey"] = json!(mk); }
         }
         _ => {
             let url = s(b, "baseUrl").trim().trim_end_matches('/').to_string();
@@ -210,8 +238,14 @@ fn add_provider(hub: &dyn AiHub, user: &str, b: &Value) -> Result<Value, String>
     Ok(pub_view(&p))
 }
 fn update_provider(hub: &dyn AiHub, user: &str, id: &str, b: &Value) -> Result<Value, String> {
+    let _one = PROVIDERS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut list = providers_db(hub);
-    let Some(p) = list.iter_mut().find(|x| x["id"] == json!(id)).filter(|x| x["owner"] == json!(user)) else { return Err("Not your provider.".into()) };
+    // a team OpenRouter key: its owner, and anyone holding Manage AI (T-383)
+    let Some(p) = list.iter_mut().find(|x| x["id"] == json!(id)).filter(|x| x["owner"] == json!(user) || (x["kind"] == json!(crate::openrouter::KIND) && crate::openrouter_team::may_edit(hub, user, x))) else { return Err("Not your provider.".into()) };
+    if p["kind"] == json!(crate::openrouter::KIND) {
+        if b.get("limits").is_some() { p["limits"] = crate::openrouter_team::clean_limits(&b["limits"], None)?; }
+        if let Some(mk) = b.get("managementKey").and_then(Value::as_str) { let mk = mk.trim(); if mk.is_empty() { p.as_object_mut().map(|m| m.remove("managementKey")); } else if crate::openrouter::key_ok(mk) { p["managementKey"] = json!(mk); } else { return Err("The management key does not look like an OpenRouter key (sk-or-…).".into()); } }
+    }
     if !b["label"].is_null() { let l: String = match &b["label"] { Value::String(t) => t.trim().chars().take(60).collect(), v => v.to_string() }; if !l.is_empty() { p["label"] = json!(l); } }
     if b.get("shared").is_some() { p["shared"] = json!(!(b["shared"].is_null() || b["shared"] == json!(false) || b["shared"] == json!(0) || b["shared"] == json!(""))); }
     if p["kind"] == json!(crate::openrouter::KIND) {
@@ -228,10 +262,11 @@ fn update_provider(hub: &dyn AiHub, user: &str, id: &str, b: &Value) -> Result<V
     let v = pub_view(p); save_providers(hub, list);
     Ok(v)
 }
-fn remove_provider(hub: &dyn AiHub, user: &str, id: &str) -> Result<(), String> {
+pub(crate) fn remove_provider(hub: &dyn AiHub, user: &str, id: &str) -> Result<(), String> {
+    { let _one = PROVIDERS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut list = providers_db(hub);
-    let Some(i) = list.iter().position(|x| x["id"] == json!(id)).filter(|i| list[*i]["owner"] == json!(user)) else { return Err("Not your provider.".into()) };
-    list.remove(i); save_providers(hub, list);
+    let Some(i) = list.iter().position(|x| x["id"] == json!(id)).filter(|i| list[*i]["owner"] == json!(user) || (list[*i]["kind"] == json!(crate::openrouter::KIND) && crate::openrouter_team::may_edit(hub, user, &list[*i]))) else { return Err("Not your provider.".into()) };
+    list.remove(i); save_providers(hub, list); }
     // nobody keeps pointing at it
     for a in hub.accounts() { hub.work().drop_provider(&a, id); }
     hub.api().drop_provider(id);
@@ -285,7 +320,7 @@ async fn complete(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model: &str,
     let (w, ai) = (hub.work(), hub.ai());
     let pv = (if provider.is_empty() { None } else { w.provider_get(ai, provider, user) }).or_else(|| w.default_for(ai, user));
     let kind = pv.as_ref().map(|p| s(p, "kind")).unwrap_or_default();
-    if kind == crate::openrouter::KIND { crate::openrouter::note_for(&**hub, user, pv.as_ref().map(crate::openrouter::is_personal).unwrap_or(false), &an.native); } // the month budget (a person's own key: their own counter)
+    if kind == crate::openrouter::KIND { if let Some(p) = &pv { crate::openrouter::note_for(&**hub, user, p, &an.native); } } // the month budget (a person's own key: their own counter)
     if let Some(u) = normalise(&an.native) { ai.usage.note_answer(user, &kind, &an.model, &u); }
     Ok(an)
 }
@@ -475,7 +510,7 @@ async fn complete_tools(hub: &Arc<dyn AiHub>, user: &str, provider: &str, model:
         }
         _ => return Err(err(400, "That provider cannot carry tools: tool calls go through an OpenAI-compatible endpoint or an Anthropic one (an API key or a host's Claude login). Ask without tools for a text answer.")),
     };
-    if kind == crate::openrouter::KIND { crate::openrouter::note_for(&**hub, user, crate::openrouter::is_personal(&p), &ans.1); }
+    if kind == crate::openrouter::KIND { crate::openrouter::note_for(&**hub, user, &p, &ans.1); }
     if let Some(u) = normalise(&ans.1) { ai.usage.note_answer(user, &kind, &ans.0.model, &u); }
     Ok(ans.0)
 }
@@ -753,15 +788,23 @@ fn route_model(offers: &[Value], asked: &str) -> Option<(Value, String)> {
 }
 /// Every model once (plain id, the first provider that offers it) with the provider's label, and a `<provider>/<model>`
 /// entry for each provider when two offer the same id: (id, owned_by).
-fn list_models(offers: &[Value]) -> Vec<(String, String)> {
+fn list_models(offers: &[Value]) -> Vec<(String, String)> { list_routed(offers).into_iter().map(|(m, o, _)| (m, o)).collect() }
+/// The same, with how each is reached: "openrouter" (an OpenRouter key's entry: a jcode client sends these through the
+/// Jcode PGM Server) or "hub" (everything else, through this API; T-383).
+fn list_routed(offers: &[Value]) -> Vec<(String, String, &'static str)> {
     let owned = |p: &Value| if p["kind"] == json!("host") { "mills".to_string() } else { s(p, "label") };
+    let route = |p: &Value| if p["kind"] == json!(crate::openrouter::KIND) { "openrouter" } else { "hub" };
+    let own = |p: &Value| crate::openrouter::is_personal(p) && p["kind"] == json!(crate::openrouter::KIND);
     let mut seen: Vec<String> = vec![]; let mut out = vec![];
-    for p in offers { for m in p["models"].as_array().cloned().unwrap_or_default().iter().filter_map(|m| m.as_str()) { if !seen.iter().any(|x| x == m) { seen.push(m.to_string()); out.push((m.to_string(), owned(p))); } } }
-    for m in seen.iter() { let who: Vec<&Value> = offers.iter().filter(|p| p["personal"] != json!(true) && p["models"].as_array().map(|a| a.iter().any(|x| x == &json!(m))).unwrap_or(false)).collect(); if who.len() > 1 { for p in who { out.push((format!("{}/{m}", alias_of(p)), owned(p))); } } }
-    // a person's own OpenRouter key answers to `my/<pair id>` (T-372)
-    for p in offers.iter().filter(|p| p["personal"] == json!(true)) { for m in p["models"].as_array().cloned().unwrap_or_default().iter().filter_map(|m| m.as_str()) { out.push((format!("my/{m}"), owned(p))); } }
+    for p in offers { for m in p["models"].as_array().cloned().unwrap_or_default().iter().filter_map(|m| m.as_str()) { if !seen.iter().any(|x| x == m) { seen.push(m.to_string()); out.push((m.to_string(), owned(p), route(p))); } } }
+    for m in seen.iter() { let who: Vec<&Value> = offers.iter().filter(|p| !own(p) && p["models"].as_array().map(|a| a.iter().any(|x| x == &json!(m))).unwrap_or(false)).collect(); if who.len() > 1 { for p in who { out.push((format!("{}/{m}", alias_of(p)), owned(p), route(p))); } } }
+    // a person's own OpenRouter keys answer to `my/<entry id>` (T-372, T-383)
+    for p in offers.iter().filter(|p| own(p)) { for m in p["models"].as_array().cloned().unwrap_or_default().iter().filter_map(|m| m.as_str()) { let id = format!("my/{m}"); if !out.iter().any(|x| x.0 == id) { out.push((id, owned(p), "openrouter")); } } }
     out
 }
+/// Can this provider answer a client that is not Claude Code right now? Not when its AI host is offline or at its cap, and
+/// never a host's Claude subscription login (it serves Claude Code only: gateway.rs).
+fn usable_now(p: &Value) -> bool { is_usable(p) && !crate::gateway::is_login(p) }
 async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Resp {
     let p = r.path.as_str();
     if r.method == hyper::Method::OPTIONS { return cors(hyper::Response::builder().status(204).body(pgm_net_internal::http::full("")).expect("response")); }
@@ -793,6 +836,12 @@ async fn v1_key(hub: &Arc<dyn AiHub>, r: &Req, user: String, key: KeyCtx) -> Res
         None => legacy(),
     };
     match (r.method.as_str(), p) {
+        // T-383: `?usable=1` (a jcode client's `viberoller` provider): only what can answer it now, each with its way
+        ("GET", "/v1/models") if r.param("usable").as_deref() == Some("1") && !anthropic => {
+            let now: Vec<Value> = offers.iter().filter(|p| usable_now(p)).cloned().collect();
+            let ctx = |m: &str| hub.cfg().get("models").and_then(Value::as_array).and_then(|a| a.iter().find(|x| x["id"] == json!(m)).and_then(|x| x["contextWindow"].as_u64().or(x["context"].as_u64())));
+            jout(200, json!({ "object": "list", "data": list_routed(&now).iter().map(|(m, o, rt)| { let mut v = json!({ "id": m, "object": "model", "created": 0, "owned_by": o, "route": rt }); if let Some(c) = ctx(m) { v["context_window"] = json!(c); } v }).collect::<Vec<_>>() }))
+        }
         ("GET", "/v1/models") => {
             let list = if !offers.is_empty() { list_models(&offers) } else if key.named { return fail(403, NO_KEY_USE, "permission_error") } else { match legacy() { Ok((prov, _)) => str_list(&prov["models"]).into_iter().map(|x| (x, if prov["kind"] == json!("host") { "mills".to_string() } else { s(&prov, "owner") })).collect(), Err(e) => return e } };
             if anthropic { return jout(200, json!({ "data": list.iter().map(|(m, _)| json!({ "type": "model", "id": m, "display_name": m, "created_at": "1970-01-01T00:00:00Z" })).collect::<Vec<_>>(), "has_more": false, "first_id": list.first().map(|x| &x.0), "last_id": list.last().map(|x| &x.0) })); }

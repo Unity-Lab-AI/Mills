@@ -75,10 +75,10 @@ const L614 = { // T-375: /transfer in Work (a handoff, then a fresh session that
   R619: 'the page offers /transfer: typed with a focus, in the Commands panel with a tooltip and a confirm modal with a focus box that says what happens (a handoff, a fresh session in the same project and worktree, the switch), a progress line while it works, then it opens the new session; the old session shows "Transferred to …" and the new one "Continued from …" with a link to the other, the session list says "transferred →", and its icons are SVG symbols (no emoji)',
 };
 const L647 = { // T-381: AI Admin → Team OpenRouter (r647Check)
-  R647: 'AI Admin\'s model picker reads OpenRouter\'s catalogue with the team key: the models matching every word typed (price per million in and out), one model\'s providers fastest first with price, speed, first-token time and their data policy (no retention, retains without training, retains and may train, from OpenRouter\'s ZDR list); only the Manage AI permission may use it, and an unknown or malformed model is a plain error',
+  R647: 'AI Admin\'s model picker reads OpenRouter\'s catalogue with the team key: the models matching every word typed (price per million in and out), one model\'s providers fastest first with price, speed, first-token time and their data policy (no retention, retains without training, retains and may train, from OpenRouter\'s ZDR list); everyone signed in may use it (anyone may add a key of their own and pick its entries, T-383), and an unknown or malformed model is a plain error',
   R648: 'a team entry is a named chain: when model 1\'s provider is down before answering, the hub sends the same request to model 2 (each step its own model on exactly its provider endpoint) and says so in words (model 1: … unavailable (503: …), switching to model 2: …), on every way in (OpenAI chat, the Anthropic-shaped /v1/messages) and also when a stream fails as its first event; a credits refusal (402) is never passed on to the next model',
-  R649: 'the team key has limits for everyone together (5 hours and 7 days rolling, the month; 10 / 20 / 20 dollars by default) that only Manage AI changes and never above the key\'s own limit on OpenRouter; spend reaching one is refused in the caller\'s API shape naming the window and when it frees up; everyone sees the windows, the key\'s limit and, with a management key set, the account\'s credits left',
-  R650: 'the page: AI Admin searches models and picks a provider by price, speed and data policy to add a fallback or another fallback; Work\'s picker names the team\'s entries This hub · OpenRouter, and Work shows the team OpenRouter line only while the session on screen runs on the team\'s OpenRouter',
+  R649: 'a key has optional limits for everyone on it together (5 hours and 7 days rolling, the month; a new key has none) that only its owner or Manage AI changes and never above the key\'s own limit on OpenRouter; spend reaching one is refused in the caller\'s API shape naming the key, the window and when it frees up; everyone sees the windows, the key\'s limit and, with a management key set, the account\'s credits left',
+  R650: 'the page: AI Admin searches models and picks a provider by price, speed and data policy to add a fallback or another fallback; Work\'s picker names the team\'s entries This hub · OpenRouter and a person\'s own key by its name, and Work shows the OpenRouter line (for that key) only while the session on screen runs on an OpenRouter key',
 };
 const L637 = { // T-379: Site admin and AI Admin (siteRolesCheck)
   R637: 'site roles are the chat\'s ladder: the catalogue and the six roles are served, an existing admin is Super Admin and the hub\'s own account Co-owner; a member is refused the accounts list in words ("Needs the View accounts permission."); an admin gives a member Moderator, who then sees the accounts but cannot make one; nobody gives a role at or above their own, changes their own role or touches the owner; the admin flag follows the role (Admin on, back to Member off), and the security log has each role given',
@@ -248,12 +248,15 @@ const R647_MODELS = [{ id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek: V3.1'
 const R647_EP = (provider, tag, inp, out, tps) => ({ provider_name: provider, tag, quantization: tag.split('/')[1] || null, pricing: { prompt: inp, completion: out }, context_length: 163840, uptime_last_30m: 99, throughput_last_30m: { p50: tps }, latency_last_30m: { p50: 400 }, status: 0 });
 const R647_ENDPOINTS = [R647_EP('SiliconFlow', 'siliconflow/fp8', '0.00000027', '0.000001', 30), R647_EP('DeepInfra', 'deepinfra/fp4', '0.00000025', '0.00000095', 80), R647_EP('Chutes', 'chutes', '0.0000002', '0.0000008', 50)];
 const R591_KEY = 'sk-or-v1-r591-secret-0123456789';
+// R647-R650's own team key: the hub asks OpenRouter about a key at most once a minute (per key), so a key the earlier checks
+// already asked about would still answer with what the fake said then (no limit of its own), not with fakeOr.keyLimit
+const R647_KEY = 'sk-or-v1-r647-team-0123456789';
 // R606-R612 (T-372, personal keys): two people's own keys the fake also accepts; any other key is a 401 ("revoked", recorded in fakeOr.refused)
 const R606_KEY = 'sk-or-v1-r606-admin-own-aaaa1111', R606_KEY_U = 'sk-or-v1-r606-user-own-bbbb2222', R606_REVOKED = 'sk-or-v1-r606-revoked-cccc3333';
 fakeOr.refused = [];
 function fakeOpenRouter(req, res, body) {
   const b = JSON.parse(body || '{}'), h = req.headers;
-  if (![R591_KEY, R606_KEY, R606_KEY_U].some((k) => h.authorization === 'Bearer ' + k)) { fakeOr.refused.push(h.authorization); res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } })); }
+  if (![R591_KEY, R606_KEY, R606_KEY_U, R647_KEY].some((k) => h.authorization === 'Bearer ' + k)) { fakeOr.refused.push(h.authorization); res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } })); }
   fakeOr.calls.push({ headers: h, body: b, url: req.url });
   if (b.model === 'dead/r647') { res.writeHead(503, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 503, message: 'No instances available' } })); } // R648: model 1 is down
   if (b.model === 'midstream/r647') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(': OPENROUTER PROCESSING\n\ndata: ' + JSON.stringify({ error: { code: 503, message: 'Provider went away' } }) + '\n\ndata: [DONE]\n\n'); } // R648: a stream that fails as its first event
@@ -409,14 +412,14 @@ function startFakeOllama() {
       if (req.url === '/orapi/models') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: R647_MODELS })); }
       if (req.url.startsWith('/orapi/models/') && req.url.endsWith('/endpoints')) {
         fakeOr.catalogAuth = req.headers.authorization || '';
-        const id = req.url.slice('/orapi/models/'.length, -'/endpoints'.length), keyed = req.headers.authorization === 'Bearer ' + R591_KEY;
+        const id = req.url.slice('/orapi/models/'.length, -'/endpoints'.length), keyed = [R591_KEY, R647_KEY].some((k) => req.headers.authorization === 'Bearer ' + k);
         if (id !== 'deepseek/deepseek-chat-v3.1') { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 404, message: 'Model not found' } })); }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ data: { id, name: 'DeepSeek: V3.1', endpoints: R647_ENDPOINTS.map((e) => ({ ...e, throughput_last_30m: keyed ? e.throughput_last_30m : null, latency_last_30m: keyed ? e.latency_last_30m : null })) } }));
       }
       if (req.url === '/orapi/endpoints/zdr') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ model_id: 'deepseek/deepseek-chat-v3.1', provider_name: 'DeepInfra', tag: 'deepinfra/fp4', safety_retention: false }, { model_id: 'deepseek/deepseek-chat-v3.1', provider_name: 'SiliconFlow', tag: 'siliconflow/fp8', safety_retention: true }] })); }
       if (req.url === '/orapi/credits') { const ok = req.headers.authorization === 'Bearer ' + R647_MGMT; res.writeHead(ok ? 200 : 403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(ok ? { data: { total_credits: 30, total_usage: 5 } } : { error: { code: 403, message: 'Only management keys can fetch credits' } })); }
-      if (req.url === '/orapi/key' && req.headers.authorization === 'Bearer ' + R591_KEY) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: { label: 'team r647', limit: fakeOr.keyLimit === undefined ? null : fakeOr.keyLimit, limit_remaining: fakeOr.keyLimit === undefined ? null : fakeOr.keyLimit - 1, usage: 1, usage_daily: 0.5, usage_weekly: 1, usage_monthly: 1 } })); }
+      if (req.url === '/orapi/key' && [R591_KEY, R647_KEY].some((k) => req.headers.authorization === 'Bearer ' + k)) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: { label: 'team r647', limit: fakeOr.keyLimit === undefined ? null : fakeOr.keyLimit, limit_remaining: fakeOr.keyLimit === undefined ? null : fakeOr.keyLimit - 1, usage: 1, usage_daily: 0.5, usage_weekly: 1, usage_monthly: 1 } })); }
       if (req.url === '/orapi/key') { const ok = [R606_KEY, R606_KEY_U].some((k) => req.headers.authorization === 'Bearer ' + k); res.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(ok ? { data: { label: 'r606 key', usage: 1.5, limit: null } } : { error: { message: 'User not found.', code: 401 } })); } // R606: OpenRouter's GET /key
       if (req.url === '/orapi/chat/completions') return fakeOpenRouter(req, res, body); // R591-R598 (T-370): the fake OpenRouter
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
@@ -8353,7 +8356,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const seenText = []; const note = (r) => { seenText.push(r.text !== undefined ? r.text : JSON.stringify(r.data)); return r; };
     const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic', 'amazon-bedrock'], allowFallbacks: false }, { id: 'or/qwen', label: 'Qwen', model: 'qwen/qwen3-coder', providers: 'cerebras', allowFallbacks: true }];
     const add = { kind: 'openrouter', label: 'R591 OpenRouter', apiKey: R591_KEY, pairs, shared: true };
-    const notAdmin = note(await call('/api/providers/add', U, add)), noKey = note(await call('/api/providers/add', A, { ...add, apiKey: '' })), noPairs = note(await call('/api/providers/add', A, { ...add, pairs: [] })); const noPairsOffers = ((noPairs.data.provider || {}).models || []).length; if (noPairs.status === 200) await call('/api/providers/remove', A, { id: noPairs.data.provider.id }); // T-381: a team key may start with no entries; it offers nothing
+    const byU = note(await call('/api/providers/add', U, { ...add, label: 'R591 mine', shared: false })), byUSeenByA = (((await call('/api/providers', A)).data.providers) || []).some((p) => p.id === (byU.data.provider || {}).id); if (byU.status === 200) await call('/api/providers/remove', U, { id: byU.data.provider.id }); const noKey = note(await call('/api/providers/add', A, { ...add, apiKey: '' })), noPairs = note(await call('/api/providers/add', A, { ...add, pairs: [] })); const noPairsOffers = ((noPairs.data.provider || {}).models || []).length; if (noPairs.status === 200) await call('/api/providers/remove', A, { id: noPairs.data.provider.id }); // T-381: a team key may start with no entries; it offers nothing
     const dupPair = note(await call('/api/providers/add', A, { ...add, pairs: [pairs[0], pairs[0]] })), badId = note(await call('/api/providers/add', A, { ...add, pairs: [{ id: 'has space', model: 'm/x' }] }));
     const made = note(await call('/api/providers/add', A, add)), pv = made.data.provider || {};
     const listA = note(await call('/api/providers', A)), listU = note(await call('/api/providers', U)), check1 = note(await call('/api/check', U));
@@ -8369,15 +8372,15 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const upd = note(await call('/api/providers/update', A, { id: pv.id, apiKey: R591_KEY, pairs: [pairs[0], { id: 'or/glm', model: 'z-ai/glm-4.6', providers: ['z-ai'] }] }));
     const mA2 = note(await g('/v1/models', kA.key)), updNotAdmin = await call('/api/providers/update', U, { id: pv.id, pairs: [pairs[1]] });
     const storedAfter = JSON.parse(fs.readFileSync(path.join(SB, 'providers.json'), 'utf8')).providers.find((p) => p.id === pv.id) || {};
-    check('R591', 'an admin adds an OpenRouter provider (a non-admin, a missing key, no pairs, a pair twice and a bad pair id are refused) with the team key and an allow-list of model + provider pairs, shared with the team; only the pairs are offered (/v1/models lists the pair ids and nothing of OpenRouter\'s catalogue, a key limited to one pair sees one) and only they are routed (a raw OpenRouter model id, another model and a pair the key may not use get a plain 404 and OpenRouter is never asked); the pairs are editable by the admin alone; the key is stored but never shown back (not by the add, the update, the provider lists or the page check)',
-      notAdmin.status === 400 && noKey.status === 400 && noPairs.status === 200 && noPairsOffers === 0 && dupPair.status === 400 && badId.status === 400
+    check('R591', 'an admin adds an OpenRouter provider (a missing key, a pair twice and a bad pair id are refused; a teammate may add a key too since T-383, and one they keep to themselves is theirs alone: the admin does not see it) with the team key and an allow-list of model + provider pairs, shared with the team; only the pairs are offered (/v1/models lists the pair ids and nothing of OpenRouter\'s catalogue, a key limited to one pair sees one) and only they are routed (a raw OpenRouter model id, another model and a pair the key may not use get a plain 404 and OpenRouter is never asked); the pairs are editable by the admin alone; the key is stored but never shown back (not by the add, the update, the provider lists or the page check)',
+      byU.status === 200 && byU.data.provider.personal === true && !byUSeenByA && noKey.status === 400 && noPairs.status === 200 && noPairsOffers === 0 && dupPair.status === 400 && badId.status === 400
       && made.status === 200 && pv.kind === 'openrouter' && pv.hasKey === true && pv.shared === true && same(pv.models, ['or/sonnet', 'or/qwen']) && pv.baseUrl === 'https://openrouter.ai/api/v1' && pv.pairs.length === 2 && pv.pairs[1].providers.join() === 'cerebras' && pv.pairs[1].allowFallbacks === true && pv.pairs[0].allowFallbacks === false
       && inList(listA).kind === 'openrouter' && inList(listU).kind === 'openrouter' && inList(check1).kind === 'openrouter' && same(inList(listU).models, ['or/sonnet', 'or/qwen'])
       && stored.apiKey === R591_KEY && seenText.every((t) => !t.includes(R591_KEY)) && !JSON.stringify(inList(listU)).includes('apiKey')
       && same(ids(mA), ['or/sonnet', 'or/qwen']) && same(ids(mU), ['or/sonnet', 'or/qwen']) && same(ids(mOne), ['or/qwen']) && mA.json.data[0].owned_by === 'R591 OpenRouter'
       && okA.status === 200 && okU.status === 200 && rawId.status === 404 && other.status === 404 && oneNo.status === 404 && fakeOr.calls.length === 2
       && upd.status === 200 && same(upd.data.provider.models, ['or/sonnet', 'or/glm']) && same(ids(mA2), ['or/sonnet', 'or/glm']) && updNotAdmin.status === 400 && storedAfter.apiKey === R591_KEY && storedAfter.pairs.length === 2,
-      `refused ${notAdmin.status}/${noKey.status}/${noPairs.status}/${dupPair.status}/${badId.status}; made ${made.status} ${JSON.stringify(pv).slice(0, 160)}; models ${ids(mA)} / ${ids(mU)} / ${ids(mOne)}; asks ${okA.status}/${okU.status}/${rawId.status}/${other.status}/${oneNo.status} calls ${fakeOr.calls.length}; update ${upd.status} ${ids(mA2)}`);
+      `teammate's own ${byU.status} seen by the admin ${byUSeenByA}; refused ${noKey.status}/${noPairs.status}/${dupPair.status}/${badId.status}; made ${made.status} ${JSON.stringify(pv).slice(0, 160)}; models ${ids(mA)} / ${ids(mU)} / ${ids(mOne)}; asks ${okA.status}/${okU.status}/${rawId.status}/${other.status}/${oneNo.status} calls ${fakeOr.calls.length}; update ${upd.status} ${ids(mA2)}`);
 
     // R592: the request OpenRouter gets, whichever way it came in
     await call('/api/providers/update', A, { id: pv.id, pairs });
@@ -8540,9 +8543,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const blkProv = pageOr.slice(pageOr.indexOf('async function renderProviders()'), pageOr.indexOf('function sysSettings('));
     const orIcons = (blkOr + blkProv).match(/href="#(i-[a-z-]+)"/g) || [], symbols = pageOr.match(/<symbol id="(i-[a-z-]+)"/g) || [];
     check('R599', 'the page: AI Admin → Global → Team OpenRouter (Settings → My AIs before T-379) offers the OpenRouter kind (the key field, a pairs editor with id, label, OpenRouter model, provider order and allow-fallbacks per row, add and remove a pair; the owner can edit the pairs and replace the key later, the key is never filled back in); the Work AI picker shows two kinds of group, "Claude (<host>)" and "OpenRouter" (a pair shows its label, a provider the server cannot run is greyed with its reason); Settings has an OpenRouter budget box (the month\'s spend against the cap with a meter, the opt-in fallback switch with its pair, and for admins everyone\'s month with a cap field per person); only SVG icons from the page\'s own set, no emoji',
-      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /id="agOrBox"/.test(pageOr) && /kind: 'openrouter', label: 'Team OpenRouter', apiKey: key\.value\.trim\(\), pairs: \[\], shared: true/.test(aiAdm) && /'Add another fallback'/.test(aiAdm) // T-381: the team key, then entries picked from the catalogue && /pairsEditor\(p\.pairs/.test(blkOr) && /body\.apiKey = nk\.value/.test(blkOr) && !/nk\.value = p/.test(blkOr) && !/'openrouter', 'OpenRouter/.test(blkProv)
+      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /id="agOrBox"/.test(pageOr) && /kind: 'openrouter', label: name\.value\.trim\(\) \|\| \(sh\.checked \? 'Team OpenRouter' : 'my OpenRouter'\), apiKey: key\.value\.trim\(\), pairs: \[\], shared: sh\.checked/.test(aiAdm) && /'Add another fallback'/.test(aiAdm) // T-381: the team key, then entries picked from the catalogue && /pairsEditor\(p\.pairs/.test(blkOr) && /body\.apiKey = nk\.value/.test(blkOr) && !/nk\.value = p/.test(blkOr) && !/'openrouter', 'OpenRouter/.test(blkProv)
       && /allow fallbacks/.test(blkOr) && /OpenRouter model, e\.g\./.test(blkOr) && /providers in order/.test(blkOr) && /Add a pair/.test(blkOr)
-      && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? \(p\.personal \? 'OpenRouter · my key' : 'This hub · OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
+      && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? \(p\.personal \? 'OpenRouter · ' \+ \(p\.label \|\| 'my key'\) : 'This hub · OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
       && /\/api\/openrouter\/budget'\)/.test(blkOr) && /\/api\/openrouter\/fallback/.test(blkOr) && /\/api\/openrouter\/budget\/all/.test(aiAdm) && /\/api\/openrouter\/budget\/cap/.test(aiAdm) && /Use OpenRouter when Claude is unavailable/.test(blkOr) && /'orMeter'/.test(blkOr)
       && orIcons.length >= 3 && orIcons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blkOr),
       `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
@@ -8692,25 +8695,26 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const bud = async (tok) => (await call('/api/openrouter/budget', tok)).data;
     const settleMine = async (n, tok) => { let b = await bud(tok); for (let i = 0; i < 40 && b.mineCalls < n; i++) { await sleep(100); b = await bud(tok); } return b; };
     const listIds = async (tok) => ((await call('/api/providers', tok)).data.providers || []).map((p) => p.id);
-    const adminKeyFile = path.join(SB, 'profiles', 't-admin', 'openrouter-key.json'), userKeyFile = path.join(SB, 'profiles', 't-user', 'openrouter-key.json');
+    // T-383: a person's key is a provider record (providers.json, owner-only) like any key; the older pages' "my OpenRouter" is the record or-me:<user>
+    const provFile = path.join(SB, 'providers.json'), recOf = (id) => (JSON.parse(fs.readFileSync(provFile, 'utf8')).providers || []).find((p) => p.id === id);
     for (const t of [A, U]) await my(t, '/api/openrouter/mykey/remove', {});
 
     // R606: the key is stored privately and never comes back, only its last four characters
     const get0 = note(await my(A));
     const bad = [note(await my(A, '/api/openrouter/mykey', { apiKey: '' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-ant-api03-abcdefghijklmnopqrstuvwx' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-or-short' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-or-v1-has space in it-0123456789' })), note(await my(A, '/api/openrouter/mykey', { pairs: [] }))];
     const setA = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY })), getA = note(await my(A)), budA = note(await call('/api/openrouter/budget', A)), listA = note(await call('/api/providers', A)), chkA = note(await call('/api/check', A));
-    const stKey = fs.statSync(adminKeyFile), storedA = JSON.parse(fs.readFileSync(adminKeyFile, 'utf8'));
+    const stKey = fs.statSync(provFile), storedA = recOf('or-me:t-admin') || {};
     const tOk = note(await my(A, '/api/openrouter/mykey/test', {}));
-    const rmA = note(await my(A, '/api/openrouter/mykey/remove', {})), goneFile = !fs.existsSync(adminKeyFile);
+    const rmA = note(await my(A, '/api/openrouter/mykey/remove', {})), goneFile = !recOf('or-me:t-admin');
     const setA2 = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY }));
     const delRes = await fetch(H + '/api/openrouter/mykey', { method: 'DELETE', headers: { Authorization: 'Bearer ' + A } }); note({ text: await delRes.text() });
-    const goneFile2 = !fs.existsSync(adminKeyFile);
+    const goneFile2 = !recOf('or-me:t-admin');
     note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY }));
     const pA = ((await call('/api/providers', A)).data.providers || []).find((p) => p.id === 'or-me:t-admin') || {};
-    check('R606', 'a person\'s own OpenRouter key is stored owner-only in their profile (openrouter-key.json, mode 0600) and never comes back: the settings, the budget, the provider lists and every answer carry only hasKey and the last four characters (…1111); only a key shaped sk-or-… of a plausible length is accepted (an empty one, an Anthropic one, a short one, one with a space are a plain 400, and no call to OpenRouter is made to save it); "test" asks OpenRouter\'s key endpoint through the configured base and says it works; removing it (POST …/mykey/remove or DELETE …/mykey) deletes the file',
+    check('R606', 'a person\'s own OpenRouter key is stored owner-only (a key record of theirs in providers.json, mode 0600, theirs alone) and never comes back: the settings, the budget, the provider lists and every answer carry only hasKey and the last four characters (…1111); only a key shaped sk-or-… of a plausible length is accepted (an empty one, an Anthropic one, a short one, one with a space are a plain 400, and no call to OpenRouter is made to save it); "test" asks OpenRouter\'s key endpoint through the configured base and says it works; removing it (POST …/mykey/remove or DELETE …/mykey) deletes the record',
       get0.data.hasKey === false && get0.data.last4 === null && get0.data.personalKeys === true && bad.every((b) => b.status === 400 && b.data.error)
       && setA.status === 200 && setA.data.hasKey === true && setA.data.last4 === '…1111' && getA.data.last4 === '…1111' && budA.data.hasOwnKey === true && budA.data.personalKeys === true
-      && storedA.apiKey === R606_KEY && (stKey.mode & 0o777) === 0o600 && pA.hasKey === true && pA.apiKey === undefined && !JSON.stringify(inListOr(chkA)).includes(R606_KEY)
+      && storedA.apiKey === R606_KEY && storedA.owner === 't-admin' && storedA.shared === false && (stKey.mode & 0o777) === 0o600 && pA.hasKey === true && pA.apiKey === undefined && !JSON.stringify(inListOr(chkA)).includes(R606_KEY)
       && tOk.status === 200 && tOk.data.ok === true && tOk.data.label === 'r606 key'
       && rmA.status === 200 && rmA.data.hasKey === false && goneFile && setA2.status === 200 && delRes.status === 200 && goneFile2 && leaked() === 0,
       `empty ${get0.status}; bad ${bad.map((b) => b.status)}; set ${setA.status} ${JSON.stringify(setA.data).slice(0, 140)}; mode ${(stKey.mode & 0o777).toString(8)}; test ${JSON.stringify(tOk.data)}; removed ${rmA.status}/${goneFile}; delete ${delRes.status}/${goneFile2}; leaks ${leaked()}`);
@@ -8828,43 +8832,71 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && /Claude \(test-node\) is offline, so this run uses OpenRouter \(Qwen\) through Jcode PGM on the server/.test(kf.info) && up1,
       `pick ${pick.status}; init ${JSON.stringify(k1.init).slice(0, 80)}; text "${t1.slice(0, 300)}"; call ${c1 && c1.headers.authorization.slice(-6)}; info "${k1.info}"; mine ${JSON.stringify([a0.mineUsd, a0.mineCalls])} -> ${JSON.stringify([a1.mineUsd, a1.mineCalls])}, team ${a1.spentUsd}/${a0.spentUsd}; late ${late.status}; fallback ${fbOther.status}/${fbSet.status} down ${down} run "${tf.slice(0, 120)}" call ${cf && cf.headers.authorization.slice(-6)} info "${kf.info.slice(0, 160)}"`);
 
-    // R611: the admin switch: off = nobody can create a key (a plain message) and the personal providers are not offered (stored keys stay, unused); on = they are back
+    // R611 (T-383): named keys. The personal-keys switch is gone (an older page sending it changes nothing); anyone adds a key
+    // under a name and keeps it to themselves or puts it into the team's keys; a key's own limits stop everyone on it, and its
+    // owner (or Manage AI, for a team key) changes them
     const localCfgFile = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(localCfgFile);
-    const noAdmin = await call('/api/openrouter/personal', U, { on: false }), badBody = await call('/api/openrouter/personal', A, { on: 'maybe' });
-    const off = await call('/api/openrouter/personal', A, { on: false });
-    const offA = await listIds(A), offU = await listIds(U), offM = note(await g('/v1/models', kA.key));
-    const offAsk = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'switched off r611' }] }));
-    const offPick = await call('/api/model', A, { provider: 'or-me:t-admin', model: 'or/sonnet' });
-    const offCreate = note(await my(U, '/api/openrouter/mykey', { apiKey: R606_KEY_U })), offReplace = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY })), offView = note(await my(A)), offBud = await bud(A);
-    const stillFiles = fs.existsSync(adminKeyFile) && fs.existsSync(userKeyFile);
-    const localCfg = JSON.parse(fs.readFileSync(path.join(SB, 'config.local.json'), 'utf8'));
-    const teamOff = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team pairs still work r611' }] }));
+    const oldSwitch = await call('/api/openrouter/personal', A, { on: false });
+    const afterSwitch = await listIds(A), stillMine = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'no switch any more r611' }] }));
+    const ent = [{ id: 'r611/ds', label: 'DS', model: 'deepseek/deepseek-chat-v3.1', providers: [] }];
+    const madeU = note(await call('/api/providers/add', U, { kind: 'openrouter', label: 'Ann deepseek', apiKey: R606_KEY_U, pairs: ent, shared: false, limits: { monthUsd: 50 } })), uk = madeU.data.provider || {};
+    const aSeesBefore = (await listIds(A)).includes(uk.id), uListed = ((await call('/api/providers', U)).data.providers || []).find((x) => x.id === uk.id) || {};
+    const aAskBefore = note(await g('/v1/chat/completions', kA.key, { model: 'r611/ds', messages: [{ role: 'user', content: 'not shared yet r611' }] }));
+    const share = note(await call('/api/providers/update', U, { id: uk.id, shared: true }));
+    const aBud0 = await bud(A);
     fakeOr.calls.length = 0;
-    const on = await call('/api/openrouter/personal', A, { on: true });
-    const onA = await listIds(A), onAsk = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'switched on again r611' }] })), fOn = fakeOr.calls[0];
-    check('R611', 'config openrouter.personalKeys (default true) is an admin\'s switch (POST /api/openrouter/personal { on }: not for a non-admin, not for a non-boolean): off, creating or replacing a key is refused with a plain message (403) and "my OpenRouter" is not offered to anyone (not in the provider lists or /v1/models, my/<id> gives 404, picking it is refused) while the stored key files stay in place and the team\'s pairs go on; on again, the same stored key is back in use',
-      noAdmin.status === 403 && badBody.status === 400 && off.status === 200 && off.data.personalKeys === false && localCfg.openrouter.personalKeys === false
-      && !offA.includes('or-me:t-admin') && !offU.includes('or-me:t-user') && ids(offM).every((x) => !x.startsWith('my/')) && offAsk.status === 404 && offPick.status === 400
-      && offCreate.status === 403 && /switched off/.test(offCreate.data.error) && offReplace.status === 403 && offView.data.personalKeys === false && offView.data.hasKey === true && offView.data.offered === false && offBud.personalKeys === false && stillFiles && teamOff.status === 200
-      && on.status === 200 && on.data.personalKeys === true && onA.includes('or-me:t-admin') && onAsk.status === 200 && fOn && fOn.headers.authorization === 'Bearer ' + R606_KEY && leaked() === 0,
-      `switch ${noAdmin.status}/${badBody.status}/${off.status}; off lists ${offA.filter((x) => /or-me/.test(x))}/${offU.filter((x) => /or-me/.test(x))} ask ${offAsk.status} pick ${offPick.status}; create ${offCreate.status} "${(offCreate.data.error || '').slice(0, 60)}" replace ${offReplace.status}; files ${stillFiles}; team ${teamOff.status}; on ${on.status} ${onA.includes('or-me:t-admin')} ask ${onAsk.status}`);
+    const aAsk = note(await g('/v1/chat/completions', kA.key, { model: 'r611/ds', messages: [{ role: 'user', content: 'shared now COST=0.02' }] })), fA = fakeOr.calls[0];
+    let aBud1 = await bud(A); for (let i = 0; i < 40 && aBud1.calls < aBud0.calls + 1; i++) { await sleep(100); aBud1 = await bud(A); }
+    const kv = (d) => ((d && d.keys) || []).find((x) => x.id === uk.id) || {};
+    const keysU = (await call('/api/openrouter/keys', U)).data, keysA = (await call('/api/openrouter/keys', A)).data; note({ data: keysU }); note({ data: keysA });
+    const uOnTeamKey = await call('/api/openrouter/team/caps', U, { key: tp.id, monthUsd: 1 });
+    const aOnU = await call('/api/openrouter/team/caps', A, { key: uk.id, fiveHourUsd: 0 });
+    const atLimit = note(await g('/v1/chat/completions', kA.key, { model: 'r611/ds', messages: [{ role: 'user', content: 'at the key limit r611' }] }));
+    const noLimit = await call('/api/openrouter/team/caps', U, { key: uk.id });
+    const again = note(await g('/v1/chat/completions', kA.key, { model: 'r611/ds', messages: [{ role: 'user', content: 'no limit again r611' }] }));
+    const rmByU = await call('/api/providers/remove', U, { id: uk.id }), goneForA = !(await listIds(A)).includes(uk.id);
+    check('R611', 'OpenRouter keys are named and anyone may add one (T-383): the old personal-keys switch changes nothing (it answers that personal keys are always allowed, and "my OpenRouter" keeps answering); a teammate adds "Ann deepseek" with an entry and a month limit, kept to themselves it is theirs alone (the admin neither lists it nor reaches its entry: 404), put into the team\'s keys the admin uses it with the teammate\'s key and it counts against the admin\'s month on the team\'s keys; both see its limits, the teammate may not change a team key that is not theirs (403) while Manage AI may change theirs; at its limit every request on it is refused naming the key (429), with no limits it answers again; its owner removes it',
+      oldSwitch.status === 200 && oldSwitch.data.personalKeys === true && afterSwitch.includes('or-me:t-admin') && stillMine.status === 200
+      && madeU.status === 200 && uk.label === 'Ann deepseek' && uk.personal === true && same(uk.limits, { monthUsd: 50 }) && !aSeesBefore && uListed.personal === true && aAskBefore.status === 404
+      && share.status === 200 && aAsk.status === 200 && fA && fA.headers.authorization === 'Bearer ' + R606_KEY_U && fA.body.model === 'deepseek/deepseek-chat-v3.1' && aBud1.calls === aBud0.calls + 1 && Math.abs(aBud1.spentUsd - aBud0.spentUsd - 0.02) < 1e-9
+      && kv(keysU).caps && kv(keysU).caps.monthUsd === 50 && kv(keysU).mayEdit === true && kv(keysA).mayEdit === true && kv(keysA).owner === 't-user' && kv(keysA).shared === true
+      && uOnTeamKey.status === 403 && aOnU.status === 200 && atLimit.status === 429 && /The OpenRouter key "Ann deepseek" has reached its limit for the last 5 hours/.test(msgOf(atLimit))
+      && noLimit.status === 200 && noLimit.data.limited === false && again.status === 200 && rmByU.status === 200 && goneForA && leaked() === 0,
+      `switch ${oldSwitch.status} ${JSON.stringify(oldSwitch.data)} mine ${stillMine.status}; made ${madeU.status} ${JSON.stringify(uk).slice(0, 160)}; before shared: listed ${aSeesBefore} ask ${aAskBefore.status}; shared ${share.status} ask ${aAsk.status} ${fA && fA.headers.authorization.slice(-6)} month ${aBud0.spentUsd}/${aBud0.calls} -> ${aBud1.spentUsd}/${aBud1.calls}; keys ${JSON.stringify(kv(keysU).caps)} ${kv(keysA).mayEdit}; caps ${uOnTeamKey.status}/${aOnU.status}; at limit ${atLimit.status} "${msgOf(atLimit).slice(0, 90)}"; none ${noLimit.status} again ${again.status}; removed ${rmByU.status} ${goneForA}`);
 
-    // R612: the page: the key box in Settings → OpenRouter budget, the admin switch, the picker
+    // R612: the page: AI Admin → Yours → My OpenRouter keys, Global → Team OpenRouter keys, the picker
     const page = await (await fetch(H + '/')).text();
     const blk = page.slice(page.indexOf('async function renderOrBudget()'), page.indexOf('// ── AI Admin → My AIs: providers'));
-    const aiAdm = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'); // T-379: the personal-keys switch is in AI Admin → Global
-    const blkP = page.slice(page.indexOf('async function renderProviders()'), page.indexOf('function sysSettings('));
+    const aiAdm = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8');
     const blkPick = page.slice(page.indexOf('function showModels(d)'), page.indexOf('// The project picker (Work header)'));
-    const icons = blk.match(/href="#(i-[a-z-]+)"/g) || [], symbols = page.match(/<symbol id="(i-[a-z-]+)"/g) || [];
-    check('R612', 'the page: AI Admin → My OpenRouter (Settings → OpenRouter budget before T-379) has "My OpenRouter key" (a password field to paste or replace it, "Stored: …abcd" from the last four characters the hub sends, Test and a Remove with an icon, the key never filled back in), "My own models (optional)" with the same pairs editor, a line for what the person spent on their own key beside the team key\'s, and for admins the "Allow personal OpenRouter keys" switch; Settings → My AIs lists "my OpenRouter" without share, remove or edit buttons; the Work picker names its group "OpenRouter · my OpenRouter"; icons are SVG symbols that exist and no emoji',
-      /My OpenRouter key/.test(blk) && /ki\.type = 'password'/.test(blk) && /'Stored: ' \+ mykey\.last4/.test(blk) && !/ki\.value = mykey/.test(blk) && /\/api\/openrouter\/mykey'/.test(blk) && /\/api\/openrouter\/mykey\/remove/.test(blk) && /\/api\/openrouter\/mykey\/test/.test(blk) && /\/api\/openrouter\/personal/.test(aiAdm)
-      && /My own models \(optional\)/.test(blk) && /pairsEditor\(mykey\.pairs/.test(blk) && /Your own key: /.test(blk) && /team key /.test(blk) && /Allow personal OpenRouter keys/.test(aiAdm) && /Which key pays/.test(blk)
-      && /owner === me\.username && !p\.personal/.test(blkP) && /p\.personal/.test(blkPick) && /g\.label = orp \? \(p\.personal \? 'OpenRouter · my key' : 'This hub · OpenRouter'/.test(blkPick)
-      && icons.length >= 3 && icons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blk + blkP),
+    const icons = (blk + aiAdm).match(/href="#(i-[a-z-]+)"/g) || [], symbols = page.match(/<symbol id="(i-[a-z-]+)"/g) || [];
+    check('R612', 'the page: AI Admin → Yours → My OpenRouter shows the person\'s month and their own keys (aiadmin.js myKeys) and adds a key with a name, a password field for the key (never filled back in), "Put it into the team\'s keys" and optional limits (empty = no limit); each key has Rename, Test, Remove, its limits, its management key and its entries; Global → Team OpenRouter keys lists the team\'s keys the same way with "Add a team key"; there is no personal-keys switch and no "Which key pays" any more; the Work picker names a person\'s own key by its name; icons exist, no emoji',
+      /AIADMIN\.myKeys\(box, renderOrBudget\)/.test(blk) && /\/api\/openrouter\/budget'/.test(blk) && !/Which key pays/.test(page) && !/Allow personal OpenRouter keys/.test(aiAdm + page) && !/\/api\/openrouter\/personal/.test(aiAdm + page)
+      && /'My OpenRouter keys'/.test(aiAdm) && /key\.type = 'password'/.test(aiAdm) && !/key\.value = st/.test(aiAdm) && /Put it into the team/.test(aiAdm) && /placeholder = 'no limit'/.test(aiAdm)
+      && /'Rename'/.test(aiAdm) && /'Test'/.test(aiAdm) && /'Remove key'/.test(aiAdm) && /'Add a team key'/.test(aiAdm) && /\/api\/openrouter\/keys/.test(aiAdm) && /\/api\/openrouter\/mykey\/test/.test(aiAdm) && /management-key/.test(aiAdm)
+      && /g\.label = orp \? \(p\.personal \? 'OpenRouter · ' \+ \(p\.label \|\| 'my key'\)/.test(blkPick)
+      && icons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blk + aiAdm),
       `served ${page.length}b; icons ${icons.join(',')}`);
 
+    // R651 (T-383): /v1/models?usable=1, what jcode's viberoller provider lists: only what can answer a client that is not Claude
+    // Code right now, each with its way (an OpenRouter key's entry: through the Jcode PGM Server; the rest: through this API)
+    if (!(await nodeOnline())) startAiNode(); const up651 = await waitNode(true);
+    const provs651 = (await call('/api/providers', A)).data.providers || [], login = provs651.find((x) => x.id === 'h:test-node/claude') || {};
+    const usableOn = note(await g('/v1/models?usable=1', kA.key)), plain651 = note(await g('/v1/models', kA.key));
+    const routeOf = (r, id) => (((r.json || {}).data || []).find((m) => m.id === id) || {}).route;
+    stopAiNode(); const down651 = await waitNode(false);
+    const usableOff = note(await g('/v1/models?usable=1', kA.key));
+    startAiNode(); const back651 = await waitNode(true);
+    const has = (r, id) => (((r.json || {}).data || []).some((m) => m.id === id));
+    check('R651', 'GET /v1/models?usable=1 (jcode\'s viberoller provider) lists only the models that can answer it now, each with its way: the team\'s and the person\'s own OpenRouter entries say route "openrouter" (or/sonnet, my/or/sonnet), an AI host\'s local model says route "hub", a host\'s Claude subscription login is never listed (it serves Claude Code only), and with that host offline its models are gone; the plain list keeps its old shape (no route)',
+      up651 && usableOn.status === 200 && routeOf(usableOn, 'or/sonnet') === 'openrouter' && routeOf(usableOn, 'my/or/sonnet') === 'openrouter' && routeOf(usableOn, 'tiny-local') === 'hub'
+      && !!login.label && !((usableOn.json || {}).data || []).some((m) => m.owned_by === login.label)
+      && down651 && usableOff.status === 200 && !has(usableOff, 'tiny-local') && has(usableOff, 'or/sonnet') && back651
+      && plain651.status === 200 && ((plain651.json || {}).data || []).every((m) => m.route === undefined),
+      `on ${usableOn.status} ${JSON.stringify(((usableOn.json || {}).data || []).map((m) => m.id + ':' + m.route + ':' + m.owned_by)).slice(0, 400)}; login "${login.label}"; off ${JSON.stringify(((usableOff.json || {}).data || []).map((m) => m.id)).slice(0, 200)}; node ${up651}/${down651}/${back651}`);
+
     for (const t of [A, U]) await my(t, '/api/openrouter/mykey/remove', {});
-    if (!hadLocal) { try { fs.unlinkSync(localCfgFile); } catch {} } else await call('/api/openrouter/personal', A, { on: true });
+    if (!hadLocal) { try { fs.unlinkSync(localCfgFile); } catch {} }
     await call('/api/providers/remove', A, { id: tp.id });
     for (const k of [kA, kU]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
   }
@@ -8875,7 +8907,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const seen = {};
     const g = async (p, key, body) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, headers: r.headers, text, json }; };
     fakeOr.keyLimit = 15; // the key itself is limited on OpenRouter: the hub's limits cannot be higher
-    const made = await call('/api/providers/add', A, { kind: 'openrouter', label: 'R647 team', apiKey: R591_KEY, pairs: [], shared: true }), tp = made.data.provider || {};
+    const made = await call('/api/providers/add', A, { kind: 'openrouter', label: 'R647 team', apiKey: R647_KEY, pairs: [], shared: true }), tp = made.data.provider || {};
     let k = null;
     try {
       // R647: the catalogue
@@ -8885,9 +8917,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.models = (ms.data.models || []).map((m) => m.id + ' ' + m.inPerM + '/' + m.outPerM).join(',') + ' total ' + ms.data.total;
       seen.notManager = msU.status + ' ' + (msU.data.error || '');
       seen.providers = e.map((x) => [x.provider, x.route, x.inPerM, x.outPerM, x.tpsP50, x.latencyP50Ms, x.data].join(' ')).join(' | ');
-      seen.withKey = fakeOr.catalogAuth === 'Bearer ' + R591_KEY;
+      seen.withKey = fakeOr.catalogAuth === 'Bearer ' + R647_KEY;
       seen.badModel = bad.status + '/' + unknown.status;
-      const okCatalog = seen.models === 'deepseek/deepseek-chat-v3.1 0.25/0.95 total 1' && /^403 Needs the Manage AI permission/.test(seen.notManager)
+      const okCatalog = seen.models === 'deepseek/deepseek-chat-v3.1 0.25/0.95 total 1' && /^200 $/.test(seen.notManager)
         && seen.providers === 'DeepInfra deepinfra/fp4 0.25 0.95 80 400 zdr | Chutes chutes 0.2 0.8 50 400 train | SiliconFlow siliconflow/fp8 0.27 1 30 400 safety' && seen.withKey && seen.badModel === '502/502';
       check('R647', L647.R647, okCatalog, JSON.stringify(seen));
       // R648: an entry is a named chain; model 1 down (503) gives way to model 2, said in words; credits (402) never switch
@@ -8914,13 +8946,14 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && seen.stream === '200 true false | model 1: midstream/r647 via x unavailable (503: Provider went away), switching to model 2: deepseek via deepinfra', JSON.stringify(seen));
       // R649: the team key's limits for everyone together, and what is left (the ledger already holds the earlier checks' spend:
       // everything is measured from it)
-      const t0 = await call('/api/openrouter/team', U), base = (w) => ((t0.data.windows || {})[w] || {}).spentUsd || 0, r2 = (x) => Math.round(x * 1e6) / 1e6;
-      const high = await call('/api/openrouter/team/caps', A, { fiveHourUsd: 10, weekUsd: 20, monthUsd: 20 });
-      const notU = await call('/api/openrouter/team/caps', U, { fiveHourUsd: 1, weekUsd: 1, monthUsd: 1 });
-      const low = await call('/api/openrouter/team/caps', A, { fiveHourUsd: r2(base('fiveHour') + 0.05), weekUsd: r2(base('week') + 1), monthUsd: r2(base('month') + 1) });
+      const tq = '/api/openrouter/team?key=' + encodeURIComponent(tp.id);
+      const t0 = await call(tq, U), base = (w) => ((t0.data.windows || {})[w] || {}).spentUsd || 0, r2 = (x) => Math.round(x * 1e6) / 1e6;
+      const high = await call('/api/openrouter/team/caps', A, { key: tp.id, fiveHourUsd: 10, weekUsd: 20, monthUsd: 20 });
+      const notU = await call('/api/openrouter/team/caps', U, { key: tp.id, fiveHourUsd: 1, weekUsd: 1, monthUsd: 1 });
+      const low = await call('/api/openrouter/team/caps', A, { key: tp.id, fiveHourUsd: r2(base('fiveHour') + 0.05), weekUsd: r2(base('week') + 1), monthUsd: r2(base('month') + 1) });
       const spend = await g('/v1/chat/completions', k.key, { model: 'deepseek', messages: [{ role: 'user', content: 'COST=0.06 r647' }] });
       const refused = await g('/v1/chat/completions', k.key, { model: 'deepseek', messages: [{ role: 'user', content: 'hi again r647' }] });
-      const mg = await call('/api/openrouter/team/management-key', A, { apiKey: R647_MGMT }), t1 = await call('/api/openrouter/team', U), tA = await call('/api/openrouter/team', A);
+      const mg = await call('/api/openrouter/team/management-key', A, { key: tp.id, apiKey: R647_MGMT }), t1 = await call(tq, U), tA = await call(tq, A);
       const w1 = (w) => (t1.data.windows || {})[w] || {}, cr = t1.data.credits || {};
       seen.defaults = JSON.stringify(t0.data.caps); seen.creditsBefore = t0.data.credits === null && /management key/.test(t0.data.creditsWhy || '');
       seen.aboveKey = high.status + ' ' + (high.data.error || '').slice(0, 90); seen.notU = notU.status; seen.low = low.status + ' ' + (low.data.error || '');
@@ -8928,8 +8961,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       seen.fiveHour = [base('fiveHour'), w1('fiveHour').spentUsd, w1('fiveHour').over, w1('week').over, w1('month').over].join(' ');
       seen.credits = JSON.stringify(t1.data.credits); seen.key = (t1.data.key || {}).limit; seen.mgmtHidden = !('hasManagementKey' in t1.data) && tA.data.hasManagementKey === true && mg.status === 200;
       const near = (a, b) => Math.abs(a - b) < 1e-6;
-      check('R649', L647.R649, seen.defaults === '{"fiveHourUsd":10,"weekUsd":20,"monthUsd":20}' && seen.creditsBefore && /^400 The weekly limit \(20\.00\) is above the key's own limit on OpenRouter \(15\.00\)/.test(seen.aboveKey)
-        && seen.notU === 403 && low.status === 200 && seen.spend === 200 && /^429 The team's OpenRouter limit for the last 5 hours is reached: [0-9.]+ of [0-9.]+ USD; it frees up at /.test(seen.refused)
+      check('R649', L647.R649, seen.defaults === '{"fiveHourUsd":null,"weekUsd":null,"monthUsd":null}' && seen.creditsBefore && /^400 The weekly limit \(20\.00\) is above the key's own limit on OpenRouter \(15\.00\)/.test(seen.aboveKey)
+        && seen.notU === 403 && low.status === 200 && seen.spend === 200 && /^429 The OpenRouter key "R647 team" has reached its limit for the last 5 hours: [0-9.]+ of [0-9.]+ USD; it frees up at /.test(seen.refused)
         && near(w1('fiveHour').spentUsd, r2(base('fiveHour') + 0.06)) && w1('fiveHour').over === true && w1('week').over === false && w1('month').over === false
         && cr.totalUsd === 30 && cr.usedUsd === 5 && cr.leftUsd === 25 && cr.from === 'management key' && seen.key === 15 && seen.mgmtHidden,
         JSON.stringify(seen));
@@ -8945,11 +8978,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     // R650: the page (no browser here: the AI Admin and Work parts run in vm on stand-ins)
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), aa = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'), s646 = {};
     s646.picker = /api\/openrouter\/catalog\/models\?q=/.test(aa) && /api\/openrouter\/catalog\/endpoints\?model=/.test(aa) && /'Add a fallback'/.test(aa) && /'Add another fallback'/.test(aa) && /No retention/.test(aa) && /Retains, may train/.test(aa);
-    s646.label = /g\.label = orp \? \(p\.personal \? 'OpenRouter · my key' : 'This hub · OpenRouter'/.test(page);
-    const fn = (page.match(/\nfunction teamOrSession\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
-    const run = (provider, sessionProvider) => require('vm').runInNewContext(fn + '\nteamOrSession()', { me: { provider, providers: [{ id: 'or-team', kind: 'openrouter' }, { id: 'or-me:ann', kind: 'openrouter', personal: true }, { id: 'h:gee/claude', kind: 'host-claude' }] }, SESSIONS: { onScreen: () => 's-1', byId: () => ({ provider: sessionProvider }) } });
+    s646.label = /g\.label = orp \? \(p\.personal \? 'OpenRouter · ' \+ \(p\.label \|\| 'my key'\) : 'This hub · OpenRouter'/.test(page);
+    const fn = (page.match(/\nfunction orSession\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+    const run = (provider, sessionProvider) => require('vm').runInNewContext(fn + '\n(() => { const x = orSession(); return x ? x.sid + ":" + x.p.id : null; })()', { me: { provider, providers: [{ id: 'or-team', kind: 'openrouter' }, { id: 'or-me:ann', kind: 'openrouter', personal: true }, { id: 'h:gee/claude', kind: 'host-claude' }] }, SESSIONS: { onScreen: () => 's-1', byId: () => ({ provider: sessionProvider }) } });
     try { s646.work = [run('h:gee/claude', 'or-team'), run('or-team', 'h:gee/claude'), run('or-team', ''), run('or-me:ann', '')].map(String).join(','); } catch (e) { s646.err = e.message; }
-    check('R650', L647.R650, s646.picker && s646.label && s646.work === 's-1,null,s-1,null' && !s646.err, JSON.stringify(s646));
+    check('R650', L647.R650, s646.picker && s646.label && s646.work === 's-1:or-team,null,s-1:or-team,s-1:or-me:ann' && !s646.err, JSON.stringify(s646));
   }
   // R620-R626 (T-376, stage 1; team note plans/jcode-pgm-server.md B.1): the hub's side of the Jcode PGM Server. The server is a
   // fake here (a node HTTP server that records what reaches it and checks the hub's signed x-pgm-hub-user with the shared secret);

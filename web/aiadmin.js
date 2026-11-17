@@ -1,9 +1,10 @@
 // AI Admin (T-379): the team's AI and your own on one screen. Hub side: GET /api/admin/ai (Manage AI or See AI hosts: the
 // default AI, its choices, every AI host, everyone's Unity tools), POST /api/admin/ai/default, the OpenRouter routes
 // (/api/openrouter/*, /api/providers/*) and /api/admin/unity-tools; the hub checks each against the person's site role.
-// Global (top): Default AI for everyone, Team OpenRouter, AI hosts on this hub, Unity's own-computer tools, each shown to
-// the roles allowed it (siteCan; an older hub: the admin flag). Yours (under a line): AI source, My AIs, My OpenRouter,
-// My AI hosts, drawn by the page's own functions (index.html). Loaded after the page script; uses its helpers at call time.
+// Global (top): Default AI for everyone, Team OpenRouter keys, AI hosts on this hub, Unity's own-computer tools, each shown
+// to the roles allowed it (siteCan; an older hub: the admin flag). Yours (under a line): AI source, My AIs, My OpenRouter
+// (its keys from myKeys here), My AI hosts, drawn by the page's own functions (index.html). Loaded after the page script;
+// uses its helpers at call time.
 'use strict';
 const AIADMIN = (() => {
   const $id = (id) => document.getElementById(id);
@@ -42,88 +43,137 @@ const AIADMIN = (() => {
     if (d.hubClaude === false) box.append(mk('div', 'status', 'This hub has no Claude of its own: the default is always an AI host.'));
   }
 
-  // ── Team OpenRouter (T-381): what is left and the key's limits for everyone together, the team's key (and an optional
-  // management key, for the account's credits), the entries (named fallback chains: model 1 and its fallbacks, each a model
-  // on one exact provider endpoint, picked from OpenRouter's catalogue with its price, speed and data policy), the personal-
-  // keys switch and everyone's month. The hub is the host of these entries: Work's picker shows them as "This hub · OpenRouter".
+  // ── OpenRouter keys (T-381, T-383): every key has a name (it shows in the AI dropdown under it), is someone's own or put
+  // into the team's keys, and may carry limits for everyone on it together (5 h and 7 d rolling, the calendar month; empty =
+  // no limit) and a management key (for the account's credits). Its entries are named fallback chains: model 1 and its
+  // fallbacks, each a model on one exact provider endpoint, picked from OpenRouter's catalogue with its price, speed and data
+  // policy. Global → Team OpenRouter keys shows the team's (Manage AI edits them, with everyone's month); Yours → My
+  // OpenRouter keys shows the person's own (index.html calls myKeys). The hub hosts these entries: Work's picker shows them.
   const money = (n) => (n == null || !isFinite(n) ? '–' : '$' + Number(n).toFixed(2));
   const perM = (n) => (n == null ? '–' : '$' + (n >= 10 ? n.toFixed(1) : n.toFixed(2)));
   const DATA_WORDS = { zdr: 'No retention', safety: 'Retains, no training', train: 'Retains, may train' };
+  /** The keys the person sees, each its status (GET /api/openrouter/keys) with its provider record (entries) beside it. */
+  async function loadKeys() {
+    const [k, p] = await Promise.all([json('/api/openrouter/keys'), json('/api/providers')]);
+    const provs = (p.providers || []).filter((x) => x.kind === 'openrouter');
+    return { manage: !!k.manage, keys: (k.keys || []).map((st) => ({ st, prov: provs.find((x) => x.id === st.id) || { id: st.id, label: st.label, pairs: [] } })) };
+  }
   async function renderTeamOr() {
     const box = $id('agOrBox'); if (!box) return;
-    let provs = []; try { provs = ((await json('/api/providers')).providers || []).filter((p) => p.kind === 'openrouter' && !p.personal); } catch (e) { say(box, e.message); return; }
-    let st = null; try { st = await json('/api/openrouter/team'); } catch {}
+    let d; try { d = await loadKeys(); } catch (e) { say(box, e.message.includes('Not found') ? 'This hub cannot list OpenRouter keys yet (it needs a newer hub).' : e.message); return; }
     box.textContent = '';
-    const team = provs.find((p) => p.owner === me.username) || provs[0] || null;
-    box.append(statusCard(st), limitsForm(st), keysForm(team, st));
-    if (team) box.append(entriesBox(team));
-    await personalSwitch(box);
+    const team = d.keys.filter((x) => x.st.shared);
+    if (!team.length) box.append(mk('div', 'status', 'The team has no OpenRouter key yet. Add one below, or anyone may put one of theirs into the team\'s keys (AI Admin → Yours).'));
+    for (const x of team) box.append(keyCard(x, renderTeamOr));
+    box.append(addKeyForm(true, renderTeamOr));
     await everyonesMonth(box);
   }
-  /** What is left: the account's credits, the three windows against the hub's limits, the key's own counters. */
+  /** Yours → My OpenRouter keys: the person's own keys (theirs alone, or put into the team's), and adding one. */
+  async function myKeys(box, again) {
+    let d; try { d = await loadKeys(); } catch { return false; }
+    const mine = d.keys.filter((x) => x.st.owner === me.username);
+    const f = mk('div', 'orMyKeys'); f.append(mk('h4', '', 'My OpenRouter keys'));
+    f.append(mk('p', 'setHint', 'Each key shows in the AI dropdown under its name. Kept to yourself, only you use it (you pay OpenRouter; no hub budget applies). Put into the team\'s keys, the whole team may use it, within the limits you give it. The hub never shows a key again: only its last four characters.'));
+    if (!mine.length) f.append(mk('div', 'status', 'No key of yours yet.'));
+    for (const x of mine) f.append(keyCard(x, again));
+    f.append(addKeyForm(false, again));
+    box.append(f);
+    return true;
+  }
+  /** One key: its name, whose it is, what is left, its limits, its management key, its entries. */
+  function keyCard(x, again) {
+    const { st, prov } = x; const edit = st.mayEdit !== false;
+    const card = mk('div', 'orKey');
+    const head = mk('div', 'row'); const name = mk('input'); name.value = st.label || ''; name.maxLength = 60; name.disabled = !edit; name.setAttribute('aria-label', 'The key\'s name');
+    head.append(name);
+    const note = mk('span', 'status');
+    const upd = async (body, said) => { try { await json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: st.id, ...body }) }); note.textContent = said || 'Saved.'; refreshProviders(); again(); } catch (e) { note.textContent = e.message; } };
+    if (edit) {
+      const rn = mk('button', 'ghost', 'Rename'); rn.type = 'button'; rn.onclick = () => { const n = name.value.trim(); if (n) upd({ label: n }, 'Renamed.'); }; head.append(rn);
+      if (st.owner === me.username) { const sh = mk('button', 'ghost', st.shared ? 'Keep it to myself' : 'Put it into the team\'s keys'); sh.type = 'button'; sh.onclick = () => upd({ shared: !st.shared }, st.shared ? 'Only you use it now.' : 'The whole team may use it now.'); head.append(sh); }
+      const t = mk('button', 'ghost', 'Test'); t.type = 'button'; t.title = 'Ask OpenRouter whether the key works'; t.onclick = () => { note.textContent = 'Asking OpenRouter…'; json('/api/openrouter/mykey/test', { method: 'POST', body: JSON.stringify({ key: st.id }) }).then((r) => { note.textContent = r.ok ? 'OpenRouter accepts the key.' : r.error; }).catch((e) => { note.textContent = e.message; }); }; head.append(t);
+      head.append(confirmButton('Remove key', () => json('/api/providers/remove', { method: 'POST', body: JSON.stringify({ id: st.id }) }).then(() => { refreshProviders(); again(); }).catch((e) => { note.textContent = e.message; })));
+    }
+    head.append(mk('small', 'status', (st.shared ? 'team key' : 'yours alone') + ' · ' + (st.owner === me.username ? 'yours' : (st.ownerName || st.owner) + '\'s') + (st.last4 ? ' · key ' + st.last4 : '')));
+    card.append(head, statusCard(st));
+    if (edit) card.append(limitsForm(st, again), mgmtForm(st, again), entriesBox(prov, again));
+    else if ((prov.pairs || []).length) card.append(mk('div', 'status', 'Entries: ' + prov.pairs.map((p) => p.label || p.id).join(', ')));
+    card.append(note);
+    return card;
+  }
+  /** What is left: the account's credits, the three windows against the key's limits, the key's own counters, the session's. */
   function statusCard(st) {
     const c = mk('div', 'orStatus');
-    if (!st) { c.append(mk('div', 'status', 'This hub cannot tell the team key\'s limits (it needs a newer hub).')); return c; }
     const cr = st.credits;
-    c.append(mk('div', 'orCredits', cr ? 'Credits left on the account: ' + money(cr.leftUsd) + ' (of ' + money(cr.totalUsd) + ' bought, ' + money(cr.usedUsd) + ' used)' : (st.creditsWhy || 'No team key yet.')));
+    c.append(mk('div', 'orCredits', cr ? 'Credits left on the account: ' + money(cr.leftUsd) + ' (of ' + money(cr.totalUsd) + ' bought, ' + money(cr.usedUsd) + ' used)' : (st.creditsWhy || 'OpenRouter did not say what is left.')));
     const names = { fiveHour: 'Last 5 hours', week: 'Last 7 days', month: 'This month' };
     for (const k of ['fiveHour', 'week', 'month']) {
       const w = (st.windows || {})[k]; if (!w) continue;
+      const lim = w.capUsd != null;
       const row = mk('div', 'orWin' + (w.over ? ' over' : ''));
-      const meter = mk('div', 'orMeter'), fill = mk('span'); fill.style.width = (w.capUsd > 0 ? Math.min(100, Math.round(w.spentUsd / w.capUsd * 100)) : 100) + '%'; meter.append(fill);
-      meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', names[k] + ': ' + money(w.spentUsd) + ' of ' + money(w.capUsd));
-      row.append(mk('span', 'orWinName', names[k]), meter, mk('span', 'orWinNum', money(w.spentUsd) + ' of ' + money(w.capUsd) + (w.over && w.freesAt ? ' · frees up ' + (k === 'month' ? 'on ' : 'at ') + w.freesAt : '')));
+      const meter = mk('div', 'orMeter'), fill = mk('span'); fill.style.width = (lim ? (w.capUsd > 0 ? Math.min(100, Math.round(w.spentUsd / w.capUsd * 100)) : 100) : 0) + '%'; meter.append(fill);
+      meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', names[k] + ': ' + money(w.spentUsd) + (lim ? ' of ' + money(w.capUsd) : ', no limit'));
+      row.append(mk('span', 'orWinName', names[k]), meter, mk('span', 'orWinNum', money(w.spentUsd) + (lim ? ' of ' + money(w.capUsd) : ' · no limit') + (w.over && w.freesAt ? ' · frees up ' + (k === 'month' ? 'on ' : 'at ') + w.freesAt : '')));
       c.append(row);
     }
     const k = st.key;
     if (k) c.append(mk('div', 'status', 'The key on OpenRouter: ' + (k.limit == null ? 'no limit of its own' : 'its limit ' + money(k.limit) + (k.limitRemaining != null ? ', ' + money(k.limitRemaining) + ' left' : '')) + ' · spent today ' + money(k.usageDaily) + ', this week ' + money(k.usageWeekly) + ', this month ' + money(k.usageMonthly)));
     return c;
   }
-  /** The hub's limits on the team key (everyone together): 5 h and 7 d rolling, the calendar month. */
-  function limitsForm(st) {
-    const f = mk('div', 'orLimits'); f.append(mk('h4', '', 'Limits for everyone together'));
-    const caps = (st && st.caps) || { fiveHourUsd: 10, weekUsd: 20, monthUsd: 20 };
-    const inp = (label, v) => { const l = mk('label', 'orLim'), i = mk('input'); i.type = 'number'; i.min = '0'; i.step = '0.5'; i.value = String(v); i.setAttribute('aria-label', label); l.append(mk('span', '', label), i); f.append(l); return i; };
+  /** The key's limits for everyone on it together: 5 h and 7 d rolling, the calendar month; empty = no limit. */
+  function limitsForm(st, again) {
+    const f = mk('div', 'orLimits'); f.append(mk('h4', '', 'Limits for everyone on this key together (empty = no limit)'));
+    const caps = st.caps || {};
+    const inp = (label, v) => { const l = mk('label', 'orLim'), i = mk('input'); i.type = 'number'; i.min = '0'; i.step = '0.5'; i.placeholder = 'no limit'; i.value = v == null ? '' : String(v); i.setAttribute('aria-label', label); l.append(mk('span', '', label), i); f.append(l); return i; };
     const a = inp('Per 5 hours ($)', caps.fiveHourUsd), b = inp('Per 7 days ($)', caps.weekUsd), c = inp('Per month ($)', caps.monthUsd);
-    const lim = st && st.key && st.key.limit != null ? st.key.limit : null;
-    f.append(mk('p', 'setHint', lim != null ? 'The key itself is limited to ' + money(lim) + ' on OpenRouter: the hub\'s limits cannot be higher.' : 'The key has no limit of its own on OpenRouter, so these may be higher than the credits on the account; the account\'s balance is the real stop (no top-up happens by itself).'));
+    const lim = st.key && st.key.limit != null ? st.key.limit : null;
+    f.append(mk('p', 'setHint', lim != null ? 'The key itself is limited to ' + money(lim) + ' on OpenRouter: these cannot be higher.' : 'The key has no limit of its own on OpenRouter, so these may be higher than the credits on the account; the account\'s balance is the real stop (no top-up happens by itself). An answer already being written when a limit is reached finishes.'));
     const save = mk('button', '', 'Save limits'); save.type = 'button'; const note = mk('span', 'status');
-    save.onclick = async () => { try { await json('/api/openrouter/team/caps', { method: 'POST', body: JSON.stringify({ fiveHourUsd: Number(a.value), weekUsd: Number(b.value), monthUsd: Number(c.value) }) }); note.textContent = 'Saved.'; renderTeamOr(); } catch (e) { note.textContent = e.message; } };
+    const val = (i) => (i.value.trim() === '' ? null : Number(i.value));
+    save.onclick = async () => { try { await json('/api/openrouter/team/caps', { method: 'POST', body: JSON.stringify({ key: st.id, fiveHourUsd: val(a), weekUsd: val(b), monthUsd: val(c) }) }); note.textContent = 'Saved.'; again(); } catch (e) { note.textContent = e.message; } };
     const row = mk('div', 'row'); row.append(save, note); f.append(row);
     return f;
   }
-  /** The team's key (set, or replace: never shown) and the optional management key (only for the account's credits). */
-  function keysForm(team, st) {
-    const f = mk('div', 'orKeys'); f.append(mk('h4', '', 'Keys'));
-    const key = mk('input'); key.type = 'password'; key.autocomplete = 'off'; key.placeholder = team ? 'Replace the team key: paste a new one (sk-or-…)' : 'The team\'s OpenRouter key (sk-or-…; kept on the hub, never shown again)'; key.setAttribute('aria-label', 'The team\'s OpenRouter key');
-    const kb = mk('button', '', team ? 'Replace key' : 'Set the team key'); kb.type = 'button'; const note = mk('span', 'status');
-    kb.onclick = async () => {
-      if (!key.value.trim()) { note.textContent = 'Paste a key first.'; return; }
-      try {
-        if (team) await json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: team.id, apiKey: key.value.trim() }) });
-        else await json('/api/providers/add', { method: 'POST', body: JSON.stringify({ kind: 'openrouter', label: 'Team OpenRouter', apiKey: key.value.trim(), pairs: [], shared: true }) });
-        key.value = ''; refreshProviders(); renderTeamOr();
-      } catch (e) { note.textContent = e.message; }
-    };
-    const r1 = mk('div', 'row'); r1.append(key, kb); if (team) r1.append(mk('span', 'status', 'Set · ' + (team.label || 'Team OpenRouter'))); f.append(r1);
-    const mkey = mk('input'); mkey.type = 'password'; mkey.autocomplete = 'off'; mkey.placeholder = st && st.hasManagementKey ? 'A management key is set: paste another to replace it' : 'Optional: a management key, to see the account\'s credits'; mkey.setAttribute('aria-label', 'OpenRouter management key');
-    const mb = mk('button', 'ghost', 'Save'); mb.type = 'button';
-    mb.onclick = async () => { try { await json('/api/openrouter/team/management-key', { method: 'POST', body: JSON.stringify({ apiKey: mkey.value.trim() }) }); mkey.value = ''; renderTeamOr(); } catch (e) { note.textContent = e.message; } };
+  /** The key's optional management key (only for the account's credits; never shown). */
+  function mgmtForm(st, again) {
+    const f = mk('div', 'orKeys'); const note = mk('span', 'status');
+    const mkey = mk('input'); mkey.type = 'password'; mkey.autocomplete = 'off'; mkey.placeholder = st.hasManagementKey ? 'A management key is set: paste another to replace it' : 'Optional: a management key, to see the account\'s credits'; mkey.setAttribute('aria-label', 'OpenRouter management key');
+    const send = async (v) => { try { await json('/api/openrouter/team/management-key', { method: 'POST', body: JSON.stringify({ key: st.id, apiKey: v }) }); mkey.value = ''; again(); } catch (e) { note.textContent = e.message; } };
+    const mb = mk('button', 'ghost', 'Save'); mb.type = 'button'; mb.onclick = () => send(mkey.value.trim());
     const r2 = mk('div', 'row'); r2.append(mkey, mb);
-    if (st && st.hasManagementKey) { const rm = mk('button', 'ghost', 'Remove'); rm.type = 'button'; rm.onclick = async () => { try { await json('/api/openrouter/team/management-key', { method: 'POST', body: JSON.stringify({ apiKey: '' }) }); renderTeamOr(); } catch (e) { note.textContent = e.message; } }; r2.append(rm); }
+    if (st.hasManagementKey) { const rm = mk('button', 'ghost', 'Remove'); rm.type = 'button'; rm.onclick = () => send(''); r2.append(rm); }
     f.append(r2, note);
     return f;
+  }
+  /** Add a key: its name, the key, whether the team may use it, optional limits. */
+  function addKeyForm(team, again) {
+    const det = mk('details', 'orAdd'); det.append(mk('summary', '', team ? 'Add a team key' : 'Add a key'));
+    const name = mk('input'); name.placeholder = 'Name it, e.g. ' + (team ? 'Team OpenRouter' : 'my OpenRouter'); name.maxLength = 60; name.setAttribute('aria-label', 'The key\'s name');
+    const key = mk('input'); key.type = 'password'; key.autocomplete = 'off'; key.placeholder = 'The OpenRouter key (sk-or-…; kept on the hub, never shown again)'; key.setAttribute('aria-label', 'The OpenRouter key');
+    const lab = mk('label', 'chk'), sh = mk('input'); sh.type = 'checkbox'; sh.checked = team; lab.append(sh, ' Put it into the team\'s keys (the whole team may use it)');
+    const lims = mk('div', 'orLimits'); const inp = (label) => { const l = mk('label', 'orLim'), i = mk('input'); i.type = 'number'; i.min = '0'; i.step = '0.5'; i.placeholder = 'no limit'; i.setAttribute('aria-label', label); l.append(mk('span', '', label), i); lims.append(l); return i; };
+    const a = inp('Per 5 hours ($)'), b = inp('Per 7 days ($)'), c = inp('Per month ($)');
+    const go = mk('button', '', 'Add key'); go.type = 'button'; const note = mk('span', 'status');
+    const val = (i) => (i.value.trim() === '' ? null : Number(i.value));
+    go.onclick = async () => {
+      if (!key.value.trim()) { note.textContent = 'Paste a key first.'; return; }
+      try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify({ kind: 'openrouter', label: name.value.trim() || (sh.checked ? 'Team OpenRouter' : 'my OpenRouter'), apiKey: key.value.trim(), pairs: [], shared: sh.checked, limits: { fiveHourUsd: val(a), weekUsd: val(b), monthUsd: val(c) } }) }); refreshProviders(); again(); }
+      catch (e) { note.textContent = e.message; }
+    };
+    const r = mk('div', 'row'); r.append(go, note);
+    det.append(name, key, lab, mk('p', 'setHint', 'Limits for everyone on it together (optional):'), lims, r);
+    return det;
   }
   // ── the entries: named fallback chains ──
   const slug = (t) => t.toLowerCase().replace(/[^a-z0-9._:@/-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
   const stepsOf = (e) => (Array.isArray(e.steps) && e.steps.length ? e.steps : [{ model: e.model, provider: (e.providers || [])[0] || '', label: '' }]);
   const stepName = (st) => st.label || (st.provider ? st.model + ' via ' + st.provider : st.model);
-  function entriesBox(team) {
+  function entriesBox(team, again) {
     const f = mk('div', 'orEntries'); f.append(mk('h4', '', 'Entries'));
-    f.append(mk('p', 'setHint', 'Each entry is what people pick in Work and the API (by its name), hosted by this hub: model 1, and when its provider is unavailable the next fallback, in order. A switch is said in the session: "model 1: … unavailable, switching to model 2: …".'));
+    f.append(mk('p', 'setHint', 'Each entry is what people pick in Work, the API and jcode\'s viberoller provider (by its name), hosted by this hub: model 1, and when its provider is unavailable the next fallback, in order. A switch is said in the session: "model 1: … unavailable, switching to model 2: …".'));
     const entries = (team.pairs || []).map((e) => ({ id: e.id, label: e.label || e.id, steps: stepsOf(e).map((s) => ({ model: s.model, provider: s.provider || '', label: s.label || '' })) }));
     const note = mk('div', 'status');
-    const save = async (list, said) => { try { await json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: team.id, pairs: list.map((e) => ({ id: e.id, label: e.label, steps: e.steps })) }) }); note.textContent = said || 'Saved.'; refreshProviders(); renderTeamOr(); } catch (e) { note.textContent = e.message; } };
+    const save = async (list, said) => { try { await json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: team.id, pairs: list.map((e) => ({ id: e.id, label: e.label, steps: e.steps })) }) }); note.textContent = said || 'Saved.'; refreshProviders(); (again || renderTeamOr)(); } catch (e) { note.textContent = e.message; } };
     if (!entries.length) f.append(mk('div', 'status', 'No entries yet: add one below.'));
     entries.forEach((e, ei) => {
       const card = mk('div', 'orEntry');
@@ -214,18 +264,10 @@ const AIADMIN = (() => {
     };
     host.append(p); q.focus(); search();
   }
-  async function personalSwitch(box) {
-    let mykey = null; try { mykey = await json('/api/openrouter/mykey'); } catch {}
-    if (!mykey) return;
-    const row2 = mk('div', 'row'), lab = mk('label', 'chk'), sw = mk('input'); sw.type = 'checkbox'; sw.checked = mykey.personalKeys;
-    lab.append(sw, ' Allow personal OpenRouter keys (people may pay with a key of their own instead of the team\'s)'); const n2 = mk('span', 'status');
-    sw.onchange = () => json('/api/openrouter/personal', { method: 'POST', body: JSON.stringify({ on: sw.checked }) }).then(() => { n2.textContent = sw.checked ? 'Allowed.' : 'Off: stored personal keys stay but are not used.'; renderOrBudget(); refreshProviders(); }).catch((e) => { n2.textContent = e.message; sw.checked = !sw.checked; });
-    row2.append(lab, n2); box.append(row2);
-  }
-  // everyone's month on the team key, and each person's cap
+  // everyone's month on the team's keys, and each person's cap (Manage AI)
   async function everyonesMonth(box) {
     let all; try { all = await json('/api/openrouter/budget/all'); } catch { return; }
-    const det = mk('details'); det.append(mk('summary', '', 'Each person\'s month on the team key · default cap ' + usd(all.defaultCapUsd)));
+    const det = mk('details'); det.append(mk('summary', '', 'Each person\'s month on the team\'s keys · default cap ' + usd(all.defaultCapUsd)));
     const t = mk('table'), hr = mk('tr'); for (const h of ['Person', 'Spent', 'Cap', '']) hr.append(mk('th', '', h)); t.append(hr);
     for (const p of all.people || []) {
       const tr = mk('tr'); const cap = mk('input'); cap.type = 'number'; cap.min = '0'; cap.step = '1'; cap.value = String(p.capUsd); cap.style.width = '6rem'; cap.setAttribute('aria-label', 'Monthly cap of ' + p.username);
@@ -273,5 +315,5 @@ const AIADMIN = (() => {
     }
     box.append(t, note);
   }
-  return { open };
+  return { open, myKeys };
 })();

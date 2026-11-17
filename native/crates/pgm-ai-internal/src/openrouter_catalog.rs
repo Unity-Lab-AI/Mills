@@ -196,10 +196,10 @@ pub async fn endpoints(hub: &dyn AiHub, model: &str) -> Result<Value, String> {
 }
 
 /// `GET /api/openrouter/catalog/models?q=` and `GET /api/openrouter/catalog/endpoints?model=<author/slug>`: AI Admin's
-/// model and provider picker (the Manage AI permission).
-pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
+/// model and provider picker (everyone signed in since T-383: anyone may add a key of their own and pick its entries; the
+/// catalogue is OpenRouter's public one).
+pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, _a: &Account) -> Option<Resp> {
     if r.method != hyper::Method::GET || !r.path.starts_with("/api/openrouter/catalog/") { return None; }
-    if !crate::openrouter::manages_ai(&**hub, &a.username) { return Some(answer(403, json!({ "error": pgm_identity_internal::siteroles::needs(pgm_identity_internal::siteroles::MANAGE_AI) }))); }
     let got = match r.path.as_str() {
         "/api/openrouter/catalog/models" => models(&**hub, &r.param("q").unwrap_or_default().chars().take(100).collect::<String>()).await,
         "/api/openrouter/catalog/endpoints" => endpoints(&**hub, r.param("model").unwrap_or_default().trim()).await,
