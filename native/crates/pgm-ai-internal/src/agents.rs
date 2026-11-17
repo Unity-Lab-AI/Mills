@@ -698,8 +698,9 @@ impl Agents {
             let ix = sessions::index(&ra);
             let target = resolve(&ix, &addr, &s(&t, "session"), &sessions::ext_live(&p.user, now));
             let sx = match target {
-                Some(Target::Hub(sid)) => sessions::resolve(&ra, &sid),
-                Some(Target::Primary) => sessions::resolve(&ra, ""),
+                // (a session transferred with its worktree runs no more: the one it went on in gets it, T-375)
+                Some(Target::Hub(sid)) => sessions::resolve(&ra, &sid).map(|sx| sessions::follow_transfer(&ra, sx)),
+                Some(Target::Primary) => sessions::resolve(&ra, "").map(|sx| sessions::follow_transfer(&ra, sx)),
                 Some(Target::External { source, device, id }) => {
                     // their agent is another tool now (section 2 rule 3): the message waits in that tool's inbox (T-299)
                     if ag.set_msg(&**hub, &m, |x| { x["to"]["source"] = json!(source); x["to"]["session"] = json!(id); if !device.is_empty() { x["x"]["device"] = json!(device); } }).is_some() { ag.inbox.notify_waiters(); }

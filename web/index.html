@@ -183,6 +183,9 @@
   #logRow { flex: 1; min-height: 0; display: flex; position: relative; } #logRow > #log { min-width: 0; }
   #queuePanel { flex: none; width: 18rem; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: .5rem .6rem; font-size: .8rem; display: flex; flex-direction: column; gap: .45rem; }
   #queuePanel[hidden] { display: none; }
+  .xferNote { display: flex; align-items: center; gap: .4rem; padding: .3rem .7rem; font-size: .82rem; border-bottom: 1px solid var(--line, #8883); }
+  .xferNote[hidden] { display: none; }
+  .xferNote button { padding: .05rem .45rem; font-size: .8rem; }
   .qBadge { margin-left: .35rem; background: var(--accent); color: var(--on-accent); border-radius: .7rem; padding: 0 .38rem; font-size: .7rem; font-weight: 600; }
   .qBadge[hidden] { display: none; }
   #queuePanel .qpHead { display: flex; align-items: baseline; gap: .45rem; } #queuePanel .qpSum { flex: 1; color: var(--muted); font-size: .74rem; }
@@ -503,7 +506,32 @@
   .apiBox .row, .provBox .row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
   .apiBox .row button, .provBox .row button { padding: .3rem .6rem; font-size: .8rem; }
   .apiBox .row select, .provBox .row select, .provBox .row input { width: auto; flex: 1; min-width: 9rem; padding: .35rem .5rem; font-size: .85rem; }
+  .apiSub { margin: .4rem 0 0; font-size: .85rem; font-weight: 700; }
+  .apiKeys { display: flex; flex-direction: column; gap: .35rem; }
+  .apiKeyRow { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 6px; padding: .4rem .55rem; font-size: .82rem; }
+  .apiKeyRow small { color: var(--muted, inherit); opacity: .8; overflow-wrap: anywhere; }
+  .apiKeyRow.off { opacity: .55; }
+  .apiKeyRow .apiKeyBtns { display: inline-flex; gap: .3rem; }
+  .apiUsage { flex-basis: 100%; display: flex; flex-direction: column; gap: .35rem; border-top: 1px solid var(--line); padding-top: .4rem; }
+  .apiBars { display: flex; align-items: flex-end; gap: 2px; height: 3.2rem; padding-bottom: 1px; border-bottom: 1px solid var(--line); }
+  .apiBar { flex: 1 1 0; min-width: 3px; height: 100%; display: flex; align-items: flex-end; }
+  .apiBar span { display: block; width: 100%; min-height: 0; background: var(--accent); border-radius: 4px 4px 0 0; }
+  .apiBar:hover span { opacity: .75; }
+  .apiBarAxis { display: flex; justify-content: space-between; font-size: .72rem; opacity: .7; }
+  .apiUsage table { border-collapse: collapse; font-size: .78rem; width: 100%; }
+  .apiUsage th, .apiUsage td { text-align: left; padding: .1rem .4rem .1rem 0; border-bottom: 1px solid var(--line); }
+  .apiUsage td.n, .apiUsage th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .apiUsage summary { cursor: pointer; font-size: .8rem; }
+  .apiNew { display: flex; flex-direction: column; gap: .4rem; border-top: 1px solid var(--line); padding-top: .5rem; }
+  .apiNew .checks { display: flex; flex-wrap: wrap; gap: .2rem .8rem; font-size: .82rem; }
+  .apiNew .checks label { display: inline-flex; gap: .25rem; align-items: center; }
+  .apiSnip { border: 1px solid var(--line); border-radius: 6px; padding: .3rem .55rem; }
+  .apiSnip summary { cursor: pointer; font-size: .85rem; font-weight: 600; }
+  .apiSnip pre { margin: .4rem 0; padding: .5rem; overflow-x: auto; white-space: pre; font-size: .78rem; background: color-mix(in srgb, var(--text) 8%, transparent); border-radius: 6px; max-width: 100%; }
+  .apiSnip .row small { flex: 1; min-width: 12rem; }
   .apiKeyShow { display: flex; gap: .4rem; align-items: center; } .apiKeyShow input { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
+  .orMeter { height: .5rem; background: var(--line); border-radius: 4px; overflow: hidden; } .orMeter span { display: block; height: 100%; background: var(--text); opacity: .55; }
+  .orPairs .row { margin-bottom: .3rem; } .orPairs .row input[type=text], .orPairs .row input:not([type]) { flex: 1 1 11rem; }
   .provItem { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--line); }
   .provItem:first-child { border-top: 0; } .provItem small { color: var(--muted); }
   .startCard { display: flex; flex-direction: column; gap: .45rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; }
@@ -694,13 +722,20 @@
   #settings .setBody label.setRow > input[type="number"] { width: 7rem; justify-self: end; }
   #settings .slider { grid-template-columns: minmax(8rem, 13rem) 1fr 2.4rem; }
   #settings .slider > span:last-child { text-align: right; font-size: .8rem; color: var(--muted); }
-  .setSave { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: .6rem; margin: 0 -1.1rem; padding: .65rem 1.1rem; border-top: 1px solid var(--line); background: var(--panel); }
-  @media (min-width: 861px) { .setBox:not(.searching) .hasNav .setSave { margin-left: -12.6rem; padding-left: 12.6rem; } } /* under the section list too: the bar spans the box */
+  /* T-378: the Save bar (App, Sound & voice) is the box's own footer, under the scrolling body; web/profile.js hides it on the other tabs */
+  .setSave { flex: none; display: flex; align-items: center; gap: .6rem; padding: .65rem 1.1rem; border-top: 1px solid var(--line); background: var(--panel); border-radius: 0 0 12px 12px; }
+  .setSave[hidden] { display: none; }
+  /* Downloads: a window of its own (T-378), laid out like Settings */
+  #downloads .setBox { width: min(760px, 96vw); max-height: 86vh; }
+  #downloads .bar > span { display: inline-flex; align-items: center; font-size: .95rem; }
+  #downloads .setBody { flex: 1; min-height: 0; padding: 1rem 1.1rem; }
+  #downloads .dlJcode { display: flex; flex-direction: column; gap: .4rem; padding: .3rem 0 .5rem; }
+  #downloads .dlJcode + .dlJcode { border-top: 1px dashed var(--line); padding-top: .7rem; }
   .sfOut { display: none !important; }
   .setBox.searching #profilePreview, .setBox.searching .setNav { display: none; }
   .setBox.searching .setTabs button.on { background: transparent; color: var(--muted); box-shadow: none; }
   @media (max-width: 860px) { .setNav { display: none; } #settings [data-setpane].hasNav { display: flex; flex-direction: column; } }
-  @media (max-width: 700px) { #settings .setBox { width: 100vw; height: 100dvh; max-height: 100dvh; } #settings .setBody { padding: .8rem .8rem 0; } .setSave { margin: 0 -.8rem; padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom)); } }
+  @media (max-width: 700px) { #settings .setBox { width: 100vw; height: 100dvh; max-height: 100dvh; } #settings .setBody, #downloads .setBody { padding: .8rem .8rem 0; } .setSave { padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom)); border-radius: 0; } }
   @media (max-width: 560px) {
     #settings .setBody label.setRow { grid-template-columns: 1fr; }
     #settings .setBody label.setRow > input[type="number"] { justify-self: start; }
@@ -930,7 +965,7 @@
      shrink to fit and scrolls inside itself instead. */
   #shell, #room, #admin, #app, #panes, #panes > section, .paneBody, #roomHost, #roomPaneBody, #roomFloatBody,
   #roomCore, .roomMain, #roomLog, #log, #chat, #edit, #files, #tree, #callFloatBody, #callCore { min-width: 0; min-height: 0; }
-  #shell, #room, #admin { overflow: hidden; }
+  #shell, #room, #admin, #aiAdmin { overflow: hidden; }
   #panes > section { min-width: min(120px, 22vw); }
   #login, #menu { max-height: 100%; overflow: auto; padding: 1rem 0; }
   header { max-height: 40vh; overflow-y: auto; }
@@ -1007,6 +1042,7 @@
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h10"/></symbol>
   <symbol id="i-phone" viewBox="0 0 24 24"><path d="M6.2 3.5h2.6l1.9 4.7-2.3 1.5a11.5 11.5 0 0 0 5.9 5.9l1.5-2.3 4.7 1.9v2.6a2 2 0 0 1-2.1 2A16.5 16.5 0 0 1 4.2 5.6a2 2 0 0 1 2-2.1z"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.8l4.4 4.2L19 7.2"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.5M8.8 21h6.4"/></symbol>
   <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.5V6a3 3 0 0 0-5.6-1.5M9 9v2.5a3 3 0 0 0 4.8 2.4M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 9.6 5.7M12 17.5v3.5M8.8 21h6.4M3.5 3.5l17 17"/></symbol>
@@ -1061,6 +1097,7 @@
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.3l3.4 2"/></symbol>
   <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 0 0 0 17c1.2 0 1.8-.9 1.4-1.9-.5-1.3.3-2.6 1.7-2.6H17a3.5 3.5 0 0 0 3.5-3.5c0-5-3.8-9-8.5-9z"/><circle cx="7.8" cy="11.5" r="1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="7.7" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="8.2" r="1" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="16" height="6.5" rx="1.8"/><path d="M7.5 7.2h.01M7.5 16.7h.01M11 7.2h5.5M11 16.7h5.5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16M7 16.5V11M12 16.5V6.5M17 16.5v-3.5"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15.5" r="4"/><path d="M10.8 12.7L19.5 4M16 7.5l2.5 2.5M14 9.5l1.8 1.8"/></symbol>
   <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3.5v4.5M15 3.5v4.5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5v4"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2H5z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></symbol>
@@ -1089,25 +1126,51 @@
   <svg class="brandMark small" aria-hidden="true"><use href="#i-mills"/></svg>
   <h1 id="menuUser"></h1>
   <div id="menuWho" class="menuWho" hidden></div>
-  <!-- the menu is a grid of tiles: icon, name, one line on what is inside (styles in web/polish.css) -->
-  <div class="choices">
-    <button id="goWork" class="tile"><svg class="ic lead"><use href="#i-code"/></svg>Work<small>Claude, your files and the team, side by side</small></button>
-    <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
-    <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
-    <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
-    <button id="goAgents" class="tile" hidden><svg class="ic lead"><use href="#i-bot"/></svg>Agents<small>What your agent and the others' say to each other, and your say in it</small><span class="badge" id="agentsTileBadge" hidden></span></button>
-    <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
-    <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
-    <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
-    <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
-    <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
-    <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Admin<small>Accounts, devices and the hub</small></button>
+  <!-- T-379: Settings and Downloads, styled like My status / Team now (web/presence.js puts those right above them) -->
+  <div class="psBar menuQuick" id="menuQuick"><button type="button" id="goSettings" class="ghost psBtn" data-settings title="Your profile, look, Work, sounds and connections"><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button><button type="button" id="goDownloads" class="ghost psBtn" data-downloads title="VibeRoller Desktop, the AI host and Jcode PGM, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Downloads</button></div>
+  <!-- T-379: the site-wide message an admin set (Site admin → Site-wide settings), for everyone -->
+  <div id="menuMotd" class="menuMotd" role="note" hidden></div>
+  <!-- the menu: four sections of tiles (T-377: Productivity, Utility, AI, Administration; T-379: Productivity two to a
+       row, Administration = Site admin, AI Admin); a section whose tiles are all hidden hides itself (menuSections()); each
+       tile: icon, name, one line on what is inside (styles in web/polish.css) -->
+  <div class="menuSections">
+    <section class="menuSec" data-menusec="productivity" aria-label="Productivity">
+      <h2>Productivity</h2>
+      <div class="choices">
+        <button id="goWork" class="tile"><svg class="ic lead"><use href="#i-code"/></svg>Work<small>Claude, your files and the team, side by side</small></button>
+        <button id="goChat" class="tile"><svg class="ic lead"><use href="#i-chat"/></svg>Chat<small>Servers, channels, groups and calls, end-to-end encrypted</small><span class="badge" id="chatBadge" hidden></span></button>
+        <button id="goBoard" class="tile"><svg class="ic lead"><use href="#i-board"/></svg>Board<small>The team's tasks, claimed by people and Claude</small><span class="badge" id="boardBadge" hidden></span></button>
+        <button id="goCal" class="tile"><svg class="ic lead"><use href="#i-calendar"/></svg>Calendar<small>Everything with a due date</small></button>
+      </div>
+    </section>
+    <section class="menuSec" data-menusec="utility" aria-label="Utility">
+      <h2>Utility</h2>
+      <div class="choices">
+        <button id="goWorkflows" class="tile"><svg class="ic lead"><use href="#i-flow"/></svg>Workflows<small>Design and test Hyper Workflows: boxes and wires, with an AI beside you</small></button>
+        <button id="goFiles" class="tile"><svg class="ic lead"><use href="#i-folder"/></svg>Files<small>Everything you uploaded: open, download, delete</small></button>
+        <button id="goNotes" class="tile"><svg class="ic lead"><use href="#i-file"/></svg>Notes<small>Shared markdown notes in folders</small></button>
+        <button id="goTools" class="tile" hidden><svg class="ic lead"><use href="#i-plug"/></svg>Tools<small>This computer: your projects, a terminal, builds, git, the AI host</small></button>
+      </div>
+    </section>
+    <section class="menuSec" data-menusec="ai" aria-label="AI">
+      <h2>AI</h2>
+      <div class="choices">
+        <button id="goAgents" class="tile" hidden><svg class="ic lead"><use href="#i-bot"/></svg>Agents<small>What your agent and the others' say to each other, and your say in it</small><span class="badge" id="agentsTileBadge" hidden></span></button>
+        <button class="tile" id="goAssist"><svg class="ic lead"><use href="#i-sparkle"/></svg>Unity<small>Your assistant with voice, pictures and tools</small></button>
+      </div>
+    </section>
+    <section class="menuSec" data-menusec="admin" aria-label="Administration">
+      <h2>Administration</h2>
+      <div class="choices">
+        <button id="goAdmin" class="tile" hidden><svg class="ic lead"><use href="#i-shield"/></svg>Site admin<small>Accounts, roles and permissions, site-wide settings, the hub</small></button>
+        <button id="goAiAdmin" class="tile"><svg class="ic lead"><use href="#i-bot"/></svg>AI Admin<small>The team's AI and your own: OpenRouter, the default AI, AI hosts</small></button>
+        <button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"/></svg>Exit to menu<small>Back to Jcode PGM Desktop's menu (Jcode or VibeRoller)</small></button>
+      </div>
+    </section>
   </div>
-  <div class="menuFoot menuDl"><button class="ghost" id="goDownloads" data-downloads title="Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux"><svg class="ic lead"><use href="#i-download"/></svg>Download</button></div>
   <!-- the PGM products this hub serves (PGM Gateway, 5.2.0): each its own program and account, signed in with the same VibeRoller login -->
-  <div class="menuFoot menuProducts" id="menuProducts" hidden><span class="folder">Also here:</span> <a href="/p/prodsuit/" target="_blank" rel="noopener">PGM Prod Suit</a> · <a href="/p/shadowchat/" target="_blank" rel="noopener">PGM ShaDow Chat</a> · <a href="/p/hyperprodman/" target="_blank" rel="noopener">PGM Hyper Prod Man</a></div>
+  <div class="menuFoot menuProducts" id="menuProducts" hidden><span class="folder">Also here:</span> <a class="prodBtn" href="/p/prodsuit/" target="_blank" rel="noopener">PGM Prod Suit</a> <a class="prodBtn" href="/p/shadowchat/" target="_blank" rel="noopener">PGM ShaDow Chat</a> <a class="prodBtn" href="/p/hyperprodman/" target="_blank" rel="noopener">PGM Hyper Prod Man</a></div>
   <div class="menuFoot">
-    <button class="ghost" id="goSettings" data-settings><svg class="ic lead"><use href="#i-gear"/></svg>Settings</button>
     <button class="ghost" id="menuLogout"><svg class="ic lead"><use href="#i-logout"/></svg>Sign out</button>
   </div>
 </div>
@@ -1202,12 +1265,15 @@
   <div class="box setBox">
     <!-- T-318: the title, a filter over every tab's settings (web/profile.js SETFIND) and Close (Escape too) -->
     <div class="bar"><span>Settings</span><input id="setFind" type="search" placeholder="Find a setting…" aria-label="Find a setting" spellcheck="false" autocomplete="off"><button class="ghost" id="closeSettings"><svg class="ic lead"><use href="#i-close"/></svg>Close</button></div>
-    <!-- four tabs (web/profile.js): Profile = what others see (user settings); App = how VibeRoller behaves for you
-         (app settings, saved to your account so they follow you to every browser); Connections = keys and add-ons;
-         Downloads = the native applications (Vibe Roller Desktop, Vibe Roller AI Host) for Windows and Linux, and how
-         each one stays up to date. Each tab is made of groups (.setGroup: a heading, one line on what is inside, the
-         controls); a tab with three or more groups gets a sticky list of them on wide screens (web/profile.js). -->
-    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App settings</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button><button type="button" class="ghost" data-settab="downloads"><svg class="ic lead"><use href="#i-download"/></svg>Downloads</button></div>
+    <!-- five tabs (web/profile.js; T-378, T-379), all about your own account: Profile = what others see; App = how VibeRoller
+         looks for you (theme, Desktop Unity, the version); Work = how Chat and Work behave, your projects, when the AI asks;
+         Sound & voice = sounds, read-aloud, calls; Connections = what connects to your account from outside (your API key
+         and tools, signed-in devices, your machines, Forgejo). Your AI settings are in AI Admin (#aiAdmin), Downloads is a
+         window of its own (#downloads). App, Work and Sound & voice are saved with one Save bar at the bottom (saved to your
+         account, so they follow you to every browser); the other tabs save as you go. Each tab is made of groups (.setGroup:
+         a heading, one line on what is inside, the controls); a tab with three or more groups gets a sticky list of them on
+         wide screens (web/profile.js). -->
+    <div class="setTabs" id="setTabs"><button type="button" class="ghost on" data-settab="profile"><svg class="ic lead"><use href="#i-user"/></svg>Profile</button><button type="button" class="ghost" data-settab="app"><svg class="ic lead"><use href="#i-gear"/></svg>App</button><button type="button" class="ghost" data-settab="work"><svg class="ic lead"><use href="#i-code"/></svg>Work</button><button type="button" class="ghost" data-settab="sound"><svg class="ic lead"><use href="#i-speaker"/></svg>Sound &amp; voice</button><button type="button" class="ghost" data-settab="connections"><svg class="ic lead"><use href="#i-plug"/></svg>Connections</button></div>
     <div class="setBody">
      <div id="setNone" class="setHint" hidden>No setting matches that. Try another word, or clear the box to see every tab.</div>
      <div data-setpane="profile">
@@ -1219,7 +1285,38 @@
       </section>
       <div id="profileBox"></div>
      </div>
-     <div data-setpane="app" hidden>
+     <div data-setpane="app" data-saves hidden>
+      <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
+       <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
+      </section>
+      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. She is off until you turn her on here.Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
+       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <button type="button" id="duReset" title="Back to herself: her default look, a fresh one filmed; where she stands goes back to the middle">Reset</button> <span id="duState" class="status"></span></span></div>
+       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
+       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
+      </section>
+      <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
+      <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
+     </div>
+     <div data-setpane="work" data-saves hidden>
+      <section class="setGroup" id="sgWork"><h3>Chat and Work</h3><p class="setHint">How conversations behave on your screen.</p>
+       <label class="chk"><input type="checkbox" id="setToasts"><span>Floating pop-ups for new chat messages while in Work</span></label>
+       <label class="chk"><input type="checkbox" id="setReopen"><span>Reopen what I had open after a reload<small>The previous Work conversation and the chat you were in. Off: a reload starts fresh on the menu; nothing is deleted.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setEnhance"><span>Show the prompt enhancer<small>The sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setAutoScroll"><span>Auto-scroll to the newest message, even when scrolled up<small>Off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself.</small></span></label>
+       <label class="setRow"><span>Auto-save Claude sessions to Past sessions</span><select id="setAutosave">
+        <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
+        <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
+      </section>
+      <section class="setGroup"><h3>My projects</h3><p class="setHint">The projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.</p>
+        <div id="projBox" class="apiBox"></div></section>
+      <section class="setGroup" id="sgAsk"><h3>When the AI asks</h3><p class="setHint">Off: the AI waits for you as long as it takes. The alert sound has its own volume under Sounds.</p>
+       <label class="chk"><input type="checkbox" id="setAskAuto"><span>If I do not respond, use the recommended answers<small>The ones marked "chosen by default".</small></span></label>
+       <label class="setRow"><span>…after this many minutes</span><input type="number" id="setAskMin" min="1" max="1440" step="1"></label>
+       <label class="chk"><input type="checkbox" id="setAskActivity"><span>Any activity on the page makes it wait for me again<small>While a question is open: a click, a key, coming back to the window.</small></span></label>
+       <label class="chk"><input type="checkbox" id="setAskTts"><span>Say "User action required" and the question aloud<small>Needs the text to speech master switch under Read aloud; Do not disturb mutes it.</small></span></label>
+      </section>
+     </div>
+     <div data-setpane="sound" data-saves hidden>
       <section class="setGroup" id="sgSounds"><h3>Sounds</h3><p class="setHint">A short sound for each kind of news, each with its own volume; ▷ plays it in the style picked below.</p>
        <label class="chk"><input type="checkbox" id="setSound"><span>Sound when a chat message arrives</span></label>
        <div class="slider"><span>Message</span><input type="range" id="volMessage" min="0" max="100"><button type="button" class="ghost" data-test="message" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
@@ -1229,21 +1326,6 @@
        <div class="slider"><span>Board reminder</span><input type="range" id="volBoard" min="0" max="100"><button type="button" class="ghost" data-test="board" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
        <div class="slider"><span>User action required (the AI asks)</span><input type="range" id="volAsk" min="0" max="100"><button type="button" class="ghost" data-test="ask" aria-label="Play a test"><svg class="ic"><use href="#i-play"/></svg></button></div>
        <label class="setRow"><span>Sound style</span><select id="soundSet"><option value="patterns">Patterns: a distinct motif per kind</option><option value="classic">Classic: short beeps</option></select></label>
-      </section>
-      <section class="setGroup" id="sgAsk"><h3>When the AI asks</h3><p class="setHint">Off: the AI waits for you as long as it takes. The alert sound has its own volume under Sounds.</p>
-       <label class="chk"><input type="checkbox" id="setAskAuto"><span>If I do not respond, use the recommended answers<small>The ones marked "chosen by default".</small></span></label>
-       <label class="setRow"><span>…after this many minutes</span><input type="number" id="setAskMin" min="1" max="1440" step="1"></label>
-       <label class="chk"><input type="checkbox" id="setAskActivity"><span>Any activity on the page makes it wait for me again<small>While a question is open: a click, a key, coming back to the window.</small></span></label>
-       <label class="chk"><input type="checkbox" id="setAskTts"><span>Say "User action required" and the question aloud<small>Needs the text to speech master switch under Read aloud; Do not disturb mutes it.</small></span></label>
-      </section>
-      <section class="setGroup" id="sgWork"><h3>Chat and Work</h3><p class="setHint">How conversations behave on your screen.</p>
-       <label class="chk"><input type="checkbox" id="setToasts"><span>Floating pop-ups for new chat messages while in Work</span></label>
-       <label class="chk"><input type="checkbox" id="setReopen"><span>Reopen what I had open after a reload<small>The previous Work conversation and the chat you were in. Off: a reload starts fresh on the menu; nothing is deleted.</small></span></label>
-       <label class="chk"><input type="checkbox" id="setEnhance"><span>Show the prompt enhancer<small>The sparkle button <svg class="ic"><use href="#i-sparkle"/></svg> under + in Work: a throw-away Claude rewrites your prompt clearer and task by task, keeping everything you said; you read it before sending.</small></span></label>
-       <label class="chk"><input type="checkbox" id="setAutoScroll"><span>Auto-scroll to the newest message, even when scrolled up<small>Off: a conversation only follows new messages while you are at its bottom; scrolling up turns this off by itself.</small></span></label>
-       <label class="setRow"><span>Auto-save Claude sessions to Past sessions</span><select id="setAutosave">
-        <option value="0">Off</option><option value="1">Every minute</option><option value="2">Every 2 minutes</option>
-        <option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option></select></label>
       </section>
       <section class="setGroup" id="sgSpeech"><h3>Read aloud</h3><p class="setHint">Everything VibeRoller says out loud: chat read-aloud and Unity's voice.</p>
        <label class="chk"><input type="checkbox" id="setTtsAll"><span><b>Text to speech</b>: the master switch<small>Off = silence, whatever the switches below say.</small></span></label>
@@ -1264,44 +1346,46 @@
        <div class="slider"><span>Voice clip volume</span><input type="range" id="clipVolume" min="0" max="100"><span></span></div>
        <label class="chk"><input type="checkbox" id="clipAuto"><span>Auto-play incoming voice clips<small>Queued together with read-aloud.</small></span></label>
       </section>
-      <section class="setGroup" id="sgLook"><h3>Appearance</h3><p class="setHint">The theme follows you to every browser you sign in on (it changes as you pick it).</p>
-       <label class="setRow"><span>Theme</span><select id="setTheme"></select></label>
-      </section>
-      <section class="setGroup" id="sgDeskUnity" hidden><h3>Desktop Unity</h3><p class="setHint">Unity standing on the bottom of this window, head to toe. Tell her what to do here, or in her section or the team chat. A new look takes a few minutes on this PC's GPU; she keeps her look until it is ready.</p>
-       <div class="setRow"><span>Showing</span><span><button type="button" id="duOn">On</button> <button type="button" id="duOff">Off</button> <button type="button" id="duReset" title="Back to herself: her default look, a fresh one filmed; where she stands goes back to the middle">Reset</button> <span id="duState" class="status"></span></span></div>
-       <div class="setRow"><span>How she looks</span><span style="display:flex;gap:6px;flex:1"><input id="duLook" style="flex:1" placeholder="Describe how she looks"><button type="button" id="duApply">Change her look</button></span></div>
-       <div class="setRow"><span>Tell her</span><span style="display:flex;gap:6px;flex:1"><input id="duDo" style="flex:1" placeholder="Anything you want her to do"><button type="button" id="duDoGo">Do it</button></span></div>
-      </section>
-      <!-- one Save for the whole tab, always in reach at the bottom of the box -->
-      <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
-      <!-- the hub's version (semver, hub law 14) and every module's, from /api/check -->
-      <details id="aboutVibeRoller" class="setSection"><summary></summary><div id="aboutModules"></div></details>
      </div>
      <div data-setpane="connections" hidden>
-      <section class="setGroup"><h3>AI source</h3><p class="setHint">Whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Gee's host).</p>
-        <div id="srcBox" class="apiBox"></div></section>
-      <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
-        <div id="provBox" class="provBox"></div></section>
-      <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
-        <div id="hostBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>API access</h3><p class="setHint">Your own key for this hub's OpenAI-compatible API (any harness that talks to OpenAI can talk to VibeRoller: set its base URL to the endpoint below and the key as the API key). The key is shown once; rotate it any time, or let it expire so it must be rotated.</p>
-        <div id="apiBox" class="apiBox"></div></section>
+        <div id="apiBox" class="apiBox"></div>
+        <h4 class="apiSub">Connect a tool</h4><p class="setHint">Ready-to-paste setups for the tools people use, with this hub&#39;s address and your model filled in. The key itself is filled in only right after you make one; otherwise the setups say &lt;your key&gt;. A provider that is a Claude subscription login serves Claude Code only; other tools need a provider with an API key (the person who shares it can tell).</p>
+        <div id="apiConnect" class="apiBox"></div></section>
       <section class="setGroup"><h3>Signed-in devices</h3><p class="setHint">Tools you signed in with a code (Jcode PGM and others): type the code the tool shows to approve it, or refuse it. Each device has its own key; revoke one and it stops working at once.</p>
         <div id="devBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My machines</h3><p class="setHint">Your own computers linked to your account (the VibeRoller app or <code>vr-host machine</code>), so your Work runs can use them within the scope you chose ON that machine. Only you see them and only your runs can use them. Pause or unlink one here; its scope and kill switch are set on the machine.</p>
         <div id="machBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My Forgejo</h3><p class="setHint">Your own Forgejo access token. Board tasks mirrored to Forgejo issues then show up as you, and your own Work runs can push to Forgejo and call its API as you. The hub checks the token, keeps it on the host and never shows it again; nobody else's run gets it.</p>
         <div id="fjBox" class="apiBox"></div></section>
-      <section class="setGroup"><h3>My projects</h3><p class="setHint">The projects you work in (your own git worktree of each), when you last used them, and what is new for you in the team's shared projects area. Pin or hide a project in your list; Remove my worktree takes away only yours (uncommitted work is committed first, unmerged work is kept as a ref, nothing is lost); an admin can delete a project nobody else works in: it is moved to the trash folder, not erased.</p>
-        <div id="projBox" class="apiBox"></div></section>
      </div>
-     <!-- the native programs, pre-built, handed out by the Rust hub to people with an account (vr-hub downloads.rs) -->
-     <div data-setpane="downloads" hidden>
-      <section class="setGroup"><h3>Staying up to date</h3><p class="setHint">This page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</p></section>
+    </div>
+    <!-- one Save for App and Sound & voice (the panes marked data-saves), always in reach at the bottom of the box -->
+    <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
+  </div>
+</div>
+<!-- Settings as a page (T-380): from the main menu Settings opens here, a screen like the others; from anywhere else
+     (Work, chat, a profile card, /settings) it is the modal above. One Settings: the #settings element itself moves
+     between the two (settingsAs()), so both always carry the same options. -->
+<div id="settingsPage" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Settings</b>
+    <span class="folder">Your profile, look, Work, sounds and connections</span>
+  </header>
+  <div id="settingsPageBody"></div>
+</div>
+<!-- Downloads (T-378: its own window, no longer a Settings tab): VibeRoller (the native app and the AI host, pre-built
+     by the Rust hub, vr-hub downloads.rs), Jcode PGM and Jcode PGM Desktop, the team's other products (/api/releases),
+     the chat app from the browser and how everything stays up to date. Every Download button opens it. -->
+<div id="downloads" class="modal" hidden>
+  <div class="box setBox dlBox">
+    <div class="bar"><span><svg class="ic lead"><use href="#i-download"/></svg>Downloads</span><button class="ghost" id="closeDownloads"><svg class="ic lead"><use href="#i-close"/></svg>Close</button></div>
+    <div class="setBody">
       <div id="dlBody"></div>
       <section class="setGroup"><h3>VibeRoller Chat app from the browser</h3><p class="setHint">The chat side of VibeRoller installed straight from this browser (the best install: it updates with the site).</p>
         <div id="appBox" class="apiBox"></div></section>
-     </div>
+      <section class="setGroup"><h3>Staying up to date</h3><p class="setHint">This page and the VibeRoller app (the same page in its own window) reload themselves onto a new VibeRoller as soon as nothing is in progress, and the app updates its own program while you are signed in. An AI Host updates itself from this hub between answers (only after a few quiet minutes, so it never cuts anyone off); to update one by hand, run <code>vr-host update</code> (or download the package again). Downloads always contain the version running here: <b id="dlVersion"></b>.</p></section>
     </div>
   </div>
 </div>
@@ -1425,26 +1509,73 @@
 </div>
 <div id="assistNotice"></div>
 
+<!-- AI Admin (T-379): the team's AI on top (Global: shown to roles with the Manage AI or See AI hosts permission,
+     web/aiadmin.js), then, under a line, your own AI settings (moved here from Settings). Everyone may open it. -->
+<div id="aiAdmin" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>AI Admin</b>
+    <span class="folder">The team's AI and your own</span>
+  </header>
+  <div id="aiAdminBody" class="adminPage">
+    <div class="adminPart" id="aiGlobal" hidden>
+      <h2 class="adminPartHead">Global<small>For everyone on this hub. Any admin can change it (the Manage AI permission).</small></h2>
+      <section class="setGroup" id="agDefault" hidden><h3>Default AI for everyone</h3><p class="setHint">What answers Work and the API for everyone whose AI source is on Default: this hub's own Claude, or one person's AI host. A person who picks a source of their own keeps it.</p>
+        <div id="agDefaultBox" class="apiBox"></div></section>
+      <section class="setGroup" id="agOpenRouter" hidden><h3>Team OpenRouter</h3><p class="setHint">The team's OpenRouter key and the models (model + provider pairs) everyone may use with it, everyone's monthly budget on the team key, and whether people may use a personal key of their own.</p>
+        <div id="agOrBox" class="apiBox"></div></section>
+      <section class="setGroup" id="agHosts" hidden><h3>AI hosts on this hub</h3><p class="setHint">Every AI host connected to this hub: whose it is, whether it is online, its version and who is using it now. Only its owner controls it (AI Admin → My AI hosts on their account).</p>
+        <div id="agHostsBox" class="apiBox"></div></section>
+      <section class="setGroup" id="agUnity" hidden><h3>Unity's own-computer tools</h3><p class="setHint">Per person: whether Unity may read and change files in the folder they opened on their own PC, and run code in their browser.</p>
+        <div id="agUnityBox" class="apiBox"></div></section>
+    </div>
+    <hr class="adminSplit" id="aiSplit" hidden>
+    <div class="adminPart" id="aiPersonal">
+      <h2 class="adminPartHead">Yours<small>Only you see these. Your AI host's controls show up once you have one.</small></h2>
+      <div id="aiMsg" class="status" role="status"></div>
+      <section class="setGroup"><h3>AI source</h3><p class="setHint">Whose AI answers your Work runs and your API calls: a teammate's <b>AI host</b> (their computer lending its Claude, known by its nickname), this hub's own Claude, or an AI of your own. Leave it on Default to follow the hub's choice (Global → Default AI for everyone).</p>
+        <div id="srcBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
+        <div id="provBox" class="provBox"></div></section>
+      <section class="setGroup" id="sgOpenRouter"><h3>My OpenRouter</h3><p class="setHint">Which key pays for your OpenRouter models, and your month. The team's OpenRouter models cost money, so each person has a monthly budget (US dollars, counted from what OpenRouter charges for each answer). At the cap OpenRouter answers stop until the 1st. You can also let a Work session fall back to an OpenRouter model when its Claude host is offline or at its cap.</p>
+        <div id="orBox" class="apiBox"></div></section>
+      <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
+        <div id="hostBox" class="apiBox"></div></section>
+    </div>
+  </div>
+</div>
+
+<!-- Site admin (T-379; was Admin): accounts with their site role, the roles and what each may do (the chat roles' ladder),
+     site-wide settings, the hub. Each group shows to the roles whose permission it needs (web/siteadmin.js); the hub checks
+     the permission on every call. -->
 <div id="admin" class="screen" hidden>
   <header>
     <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
-    <b>Admin</b>
-    <span class="folder">Accounts and hub controls</span>
+    <b>Site admin</b>
+    <span class="folder">Accounts, roles, site-wide settings and the hub</span>
   </header>
-  <div id="adminBody">
-    <table><thead><tr><th>User</th><th>Status</th><th>Model</th><th>Actions</th></tr></thead><tbody id="adminRows"></tbody></table>
-    <div class="row">
-      <input id="newUser" placeholder="new username (a-z, 0-9, -)" autocapitalize="none" spellcheck="false">
-      <input id="newDisplay" placeholder="display name">
-      <label style="font-size:.85rem"><input type="checkbox" id="newAdmin" style="width:auto"> admin</label>
-      <button id="createUser">Create account</button>
-    </div>
-    <div class="row">
-      <button class="ghost" id="adminRestart">Restart hub</button>
-      <button class="ghost" id="adminClearChat">Clear chat history</button>
-      <button class="ghost" id="adminRefresh">Refresh</button>
-    </div>
-    <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
+  <div id="adminBody" class="adminPage">
+    <section class="setGroup" id="saAccounts"><h3>Accounts</h3><p class="setHint">Everyone with an account here, their role, devices and what they run. Generated passwords show once below: copy them before leaving this page.</p>
+      <table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Model</th><th>Actions</th></tr></thead><tbody id="adminRows"></tbody></table>
+      <div class="row">
+        <input id="newUser" placeholder="new username (a-z, 0-9, -)" autocapitalize="none" spellcheck="false">
+        <input id="newDisplay" placeholder="display name">
+        <select id="newRole" aria-label="Their role" hidden></select><label style="font-size:.85rem"><input type="checkbox" id="newAdmin" style="width:auto"> admin</label>
+        <button id="createUser">Create account</button>
+      </div>
+      <div id="adminOut">Generated passwords appear here once. Copy them before leaving this page.</div>
+    </section>
+    <section class="setGroup" id="saRoles" hidden><h3>Roles and permissions</h3><p class="setHint">The same ladder as the chat servers: Member, Moderator, Super Moderator, Admin, Super Admin, Co-owner, and roles of your own in between. A role is a set of permissions; you give and change only roles below your own.</p>
+      <div id="saRolesBox" class="apiBox"></div></section>
+    <section class="setGroup" id="saSite" hidden><h3>Site-wide settings</h3><p class="setHint">Settings that apply to everyone on this hub.</p>
+      <div id="saSiteBox" class="apiBox"></div></section>
+    <section class="setGroup" id="saHub"><h3>The hub</h3><p class="setHint">Restart it (as soon as nobody has Claude working; the pages reconnect by themselves) or clear the chat history for everyone.</p>
+      <div class="row">
+        <button class="ghost" id="adminRestart">Restart hub</button>
+        <button class="ghost" id="adminClearChat">Clear chat history</button>
+        <button class="ghost" id="adminRefresh">Refresh</button>
+      </div>
+    </section>
     <!-- PGM Gateway (5.1.1): the products this hub is the gateway for (native/crates/vr-hub gateway.rs); hidden when the
          Rust hub is not in front (the gateway is its own) -->
     <!-- Health (T-331 § 4): the hub's metrics, its write buffer, and one run's trace (the Rust hub's; hidden on a hub without them) -->
@@ -1540,6 +1671,7 @@
         <button type="button" class="ghost" id="queueBtn" aria-expanded="false" aria-controls="queuePanel" title="Queued messages: see, copy or cancel what is still to go">Queue<span id="queueBadge" class="qBadge" hidden></span></button>
         <button type="button" class="ghost" id="agentsBtn" hidden aria-expanded="false" aria-controls="agentsPanel" title="Agent threads: what your agent and the others' say to each other, and your say in it">Agents<span id="agentsBadge" class="qBadge" hidden></span></button>
         <button class="ghost min" data-min="chat" title="Minimize">—</button></div>
+      <div id="xferNote" class="xferNote" hidden role="note"></div>
       <div id="gitBox" hidden>
         <div class="gitHead"><b id="gitBranch">…</b><span id="gitAB" class="muted"></span><span class="grow"></span>
           <button type="button" class="ghost" id="gitUpdate" title="Bring the integration branch (or, in a session worktree, your own work branch) into this branch (worktree.js update)">Update</button>
@@ -1641,6 +1773,7 @@
 <script src="menu.js"></script>
 <script src="sessions.js"></script>
 <script src="queue.js"></script>
+<script src="apisetup.js"></script>
 <script src="tools.js"></script>
 <script src="agents.js"></script>
 <script>
@@ -1687,13 +1820,21 @@ const store = {
 };
 let me = null;               // { username, display, admin, models, ... } from /api/check
 let USER_NAME = 'you';       // display name of whoever is signed in
-if (PRODUCT) { // a product's page: its name, only its screens on the menu, no Downloads / Connections (those are the hub's)
+if (PRODUCT) { // a product's page: its name, only its screens on the menu, no Downloads / AI / Connections (those are the hub's)
   document.title = PRODUCT.name; $('title').textContent = PRODUCT.name;
   $('loginHint').textContent = 'Sign in with your VibeRoller username and password. The first time, your ' + PRODUCT.name + ' account is made from it; after that it is its own.';
   for (const [s, id] of Object.entries({ shell: 'goWork', room: 'goChat', board: 'goBoard', cal: 'goCal', notes: 'goNotes', library: 'goFiles', assist: 'goAssist', workflows: 'goWorkflows' })) if (!PRODUCT.screens.includes(s)) $(id).hidden = true;
-  $('goDownloads').hidden = true;
-  for (const t of ['connections', 'downloads']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
+  $('goDownloads').hidden = true; $('goAiAdmin').hidden = true; // the AI is the hub's (T-379)
+  for (const t of ['ai', 'connections']) { const b = document.querySelector(`[data-settab="${t}"]`); if (b) b.hidden = true; }
 } else if ('__MILLS_SERVED__' === 'hub') $('menuProducts').hidden = false; // the hub's own page (the hub fills this in; SERVED_BY_HUB is defined further down): the products it serves
+// T-377: a menu section whose tiles are all hidden (Agents off, no Admin, a product's page …) hides with them; it follows
+// every later show / hide of a tile by itself
+function menuSections() {
+  // only on a change: setting `hidden` again would be a mutation of its own and wake the observer in a loop
+  document.querySelectorAll('#menu .menuSec').forEach((sec) => { const empty = ![...sec.querySelectorAll('.choices > button')].some((b) => !b.hidden); if (sec.hidden !== empty) sec.hidden = empty; });
+}
+menuSections();
+new MutationObserver(menuSections).observe($('menu'), { subtree: true, attributes: true, attributeFilter: ['hidden'] });
 // The dev hub (T-327) puts its DEV band (#devBand) at the top of the page and "DEV · " in front of the title; every title
 // this page sets later keeps that prefix. A page without the band (the live hub's, a product's copy of web/) is unchanged.
 if ($('devBand')) {
@@ -1819,6 +1960,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // for harmless things only: desktop notifications, the unread count on its tray / taskbar, its Tools window and the AI
 // host switch; everything that touches the computer lives in the Tools window, the app's own page.
 const NATIVE = window.__TAURI__ && window.__TAURI__.core ? { call: (cmd, args = {}) => window.__TAURI__.core.invoke(cmd, args) } : null;
+// Jcode PGM Desktop's VibeRoller window (T-373): its own small bridge (exitToMenu, notify, openExternal), not Tauri's
+const PGMD = (window.__PGM_DESKTOP__ && typeof window.__PGM_DESKTOP__.exitToMenu === 'function') ? window.__PGM_DESKTOP__ : null;
+const nativeNotify = (title, body) => { if (NATIVE) return NATIVE.call('notify', { title, body: body || '' }).catch(() => {}); if (PGMD) { try { PGMD.notify(title, body || ''); } catch {} return true; } return false; };
 let reconnecting = false;
 // 5.41.1: the hub being away (a restart, a deploy, a dropped long poll) is shown in a small badge at the top, not written
 // into the chat: only when it lasts more than CONN_GRACE (a blip shows nothing), "Back" for a moment when it returns, and
@@ -2241,7 +2385,9 @@ async function enter() {
   document.title = `${APP_NAME} · ${me.display}`;
   $('brand').textContent = `${APP_NAME} · ${me.display}`;
   $('menuUser').textContent = me.username;
-  $('goAdmin').hidden = !me.admin;
+  $('goAdmin').hidden = !siteAdminAny(); // T-379: any permission Site admin shows (an older hub: the admin flag)
+  const site = me.site || {}; $('menuMotd').hidden = !site.motd; $('menuMotd').textContent = site.motd || ''; // T-379: the site-wide message
+  if (site.defaultTheme && !(me.prefs && me.prefs.theme) && !store.get('mills.theme') && THEMES[site.defaultTheme]) { const m = me; me = null; applyTheme(site.defaultTheme); store.set('mills.theme', ''); me = m; } // the hub's default theme for someone who never picked one (not saved as their pick)
   $('login').hidden = true;
   showModels(me);
   renderProjects();
@@ -2264,8 +2410,8 @@ async function enter() {
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
-  if (PRODUCT && !['menu', 'admin', ...PRODUCT.screens].includes(name)) name = 'menu'; // a product has only its own screens
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows']) $(id).hidden = true;
+  if (PRODUCT && !['menu', 'admin', 'settingsPage', ...PRODUCT.screens].includes(name)) name = 'menu'; // a product has only its own screens
+  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'settingsPage', 'board', 'cal', 'assist', 'notes', 'library', 'workflows']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   if (name === 'notes') NOTES.show(); // web/notes.js
@@ -2277,6 +2423,7 @@ function showScreen(name) {
   applyLayout(); // places the team chat where it belongs for this screen (and hides the floating window elsewhere)
   if (name === 'room') openRoom();
   if (name === 'admin') loadAdmin();
+  if (name === 'aiAdmin') AIADMIN.open(); // web/aiadmin.js (T-379)
   if (name === 'assist') openAssist();
 }
 $('goWork').onclick = () => showScreen('shell');
@@ -2287,15 +2434,17 @@ $('goNotes').onclick = () => showScreen('notes');
 $('goFiles').onclick = () => showScreen('library');
 $('goWorkflows').onclick = () => showScreen('workflows');
 // the desktop app's Tools window (its own page, which may use this computer; the hub's page never can)
+if (PGMD) { $('goPgmMenu').hidden = false; $('goPgmMenu').onclick = () => { try { PGMD.exitToMenu(); } catch {} }; document.body.classList.add('pgmDesktop'); }
 if (NATIVE) { $('goTools').hidden = false; $('goTools').onclick = () => NATIVE.call('open_tools').catch((e) => sys(String(e), true)); document.body.classList.add('native'); }
 $('goAdmin').onclick = () => showScreen('admin');
+$('goAiAdmin').onclick = () => showScreen('aiAdmin');
 $('goAssist').onclick = () => showScreen('assist');
 document.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => showScreen('menu'); });
 function signOut() {
   if (NATIVE && token) NATIVE.call('set_session', { token: '' }).catch(() => {});
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); appForget(); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'board', 'cal', 'settings', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'settingsPage', 'board', 'cal', 'settings', 'downloads', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
   BOARD.stop(); NOTES.stop(); agentsPanel.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
@@ -2569,8 +2718,12 @@ function showModels(d) {
   sel.append(def);
   if (d.hubClaude !== false) for (const m of d.models) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label; sel.append(o); }
   for (const p of provs.filter((x) => x.id !== 'host' && !NOT_WORK(x))) {
-    const g = document.createElement('optgroup'); g.label = provName(p) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
-    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = modelName(m); o.disabled = p.online === false; g.append(o); }
+    // two kinds of engine: Claude (Claude Code, through an AI host's login or a key) and OpenRouter (Jcode PGM on the server, T-370)
+    const orp = p.kind === 'openrouter', pairLabel = Object.fromEntries((p.pairs || []).map((x) => [x.id, x.label || x.id]));
+    const g = document.createElement('optgroup');
+    g.label = orp ? 'OpenRouter' + (provs.filter((x) => x.kind === 'openrouter').length > 1 || p.personal ? ' · ' + p.label : '') + (p.workOff ? ' · not set up on this server' : '')
+      : (p.kind === 'host-claude' ? 'Claude (' + (p.nickname || p.label) + ')' + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '') : provName(p)) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
+    for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = orp ? (pairLabel[m] || m) : modelName(m); o.disabled = p.online === false || !!p.workOff; if (p.workOff) o.title = p.workOff; g.append(o); }
     sel.append(g);
   }
   // ChatGPT / Codex and local models (Ollama …) are listed too, so people see what their hosts offer, but greyed out:
@@ -2884,7 +3037,7 @@ function agentNotify(n) {
     $('toasts').append(t);
   }
   if (away) {
-    if (NATIVE) NATIVE.call('notify', { title: n.title, body: n.body || '' }).catch(() => {});
+    if (NATIVE || PGMD) nativeNotify(n.title, n.body);
     else { try { if (window.Notification && Notification.permission === 'granted') new Notification(n.title, { body: n.body || '' }); } catch {} }
   }
 }
@@ -2914,6 +3067,7 @@ function enqueue(message, restoring, first) { // first: back at the head of the 
 // the session list's every refresh (web/sessions.js): a message refused for the session limit goes when a slot frees
 function onSessionSlots(d) {
   queuePanel.render(); // the other sessions' queued counts are in this refresh
+  paintTransfer(); // its transfer links (T-375)
   if (!slotWait || busy || !(queue.length || sendNowMessage)) return;
   const s = SESSIONS.byId(SESSIONS.onScreen()), h = s && (((d && d.counts) || {}).perHost || {})[s.host];
   if (h && ((h.max && h.used >= h.max) || (h.maxPerProvider && ((h.providers || {})[s.provider] || 0) >= h.maxPerProvider))) return; // still full
@@ -2939,7 +3093,7 @@ function hideThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = nu
 let runOutcome = null; // set by handleEvent: { state, text } for the message being worked on
 // Several Work sessions (T-287): opening another one while this one runs leaves its run going on the hub (the session
 // list follows it in the background); workGen tells a reply loop that the screen now shows another session.
-let workGen = 0, workAbort = null, slotWait = false;
+let workGen = 0, workAbort = null, slotWait = false, pgmTarget = '';
 async function send(message) {
   const gen = workGen, ac = new AbortController(); workAbort = ac;
   const mine = bubble('me'); renderText(mine, message); record('me', message); scroll(true); // you sent it: to the bottom
@@ -2951,7 +3105,8 @@ async function send(message) {
   try {
     postLive();
     const context = watchContext(); // summaries of the shared sessions you are watching, for your own Claude
-    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh, ...(context ? { context } : {}) }), signal: ac.signal });
+    const target = pgmTarget; pgmTarget = ''; // /onserver (T-376 stage 3): a PGM session continues on the server
+    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message, fresh, ...(context ? { context } : {}), ...(target ? { target } : {}) }), signal: ac.signal });
     if (res.status === 429) { // over the session limit: the message stays queued in this session and goes when a slot frees
       const d = await res.json().catch(() => ({}));
       clearInterval(tick); hideThinking(); mine.remove();
@@ -3173,7 +3328,7 @@ function qAlert(ev) {
   if (dndOn()) return;
   if (P.sound.on) playTone('ask', P.sound.ask);
   if (P.tts.ask) speak('User action required. ' + title);
-  if (NATIVE && (document.visibilityState !== 'visible' || !document.hasFocus())) NATIVE.call('notify', { title: 'User action required', body: title }).catch(() => {});
+  if ((NATIVE || PGMD) && (document.visibilityState !== 'visible' || !document.hasFocus())) nativeNotify('User action required', title);
 }
 function closeQuestion(ev) {
   const o = openQuestions.get(ev.id); if (!o) return; openQuestions.delete(ev.id); o.stop(); qStore.del(ev.id);
@@ -3288,11 +3443,15 @@ function handleEvent(ev) {
 // ── Slash commands: "/" at the start of the Claude box lists the common ones. Most are passed through to
 // Claude Code exactly as typed (it understands them); a few act on VibeRoller itself ("here").
 const CLEAR_ASK = 'Clear this conversation? Claude starts fresh on your next message. The session, its worktree and its files stay as they are.';
+// /transfer (T-375): a handoff, then a fresh session that goes on from it (POST /api/work/sessions/transfer)
+const TRANSFER_ASK = 'Write a handoff of this session (its goal, what is done, the state of its worktree, decisions, open problems, next steps), start a fresh session with it in the same project and worktree, with the same AI, and switch to it. The new session picks up where this one left off; this one stays in the list, marked as transferred. Optional: what the handoff should stress or leave out.';
 const SLASH = [
+  { cmd: '/transfer', desc: 'Hand this session over to a fresh one: write a handoff, start a new session with it in the same project and worktree, and switch to it (frees the context, keeps the work going)', args: '[focus]', hint: 'Optional: what the handoff stresses or leaves out, e.g. "keep everything about the API, drop the CSS detour". Empty = the usual handoff.', confirm: TRANSFER_ASK, go: 'Transfer', local: (a) => transferSession(a) },
   { cmd: '/compact', desc: 'Compress the conversation so far into a summary and keep going (frees context). With words after it, the summary follows them', args: '[focus]', hint: 'Optional: what the summary keeps or drops, e.g. "remove everything about X, keep all about Y and Z". Empty = the usual compact.' },
   { cmd: '/clear', desc: 'Clear the conversation: Claude starts fresh on your next message (the session, its worktree and its files stay)', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/clear', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
   { cmd: '/new', desc: 'Same as /clear: a fresh conversation in this session', confirm: CLEAR_ASK, local: () => askCommand({ cmd: '/new', confirm: CLEAR_ASK }).then((ok) => { if (ok) newChatNow(); }) },
   { cmd: '/stop', desc: 'Stop the current reply', local: () => $('stop').click() },
+  { cmd: '/onserver', desc: 'A PGM session (OpenRouter through the Jcode PGM Server) that jcode on your computer has: continue it on the server with this message (jcode hands its unfinished work over first)', args: '<message>', local: (a) => { if (!String(a || '').trim()) { sys('Say what the server should do: /onserver <message>', true); return; } if (busy) { sys('Wait for the reply going now, then try again.', true); return; } pgmTarget = 'server'; send(String(a).trim()); } },
   { cmd: '/model', desc: 'Pick the model: /model opus · sonnet · haiku · fable · default', args: '<name>', choices: ['opus', 'sonnet', 'haiku', 'fable', 'default'], local: (a) => slashModel(a) },
   { cmd: '/hyperwork', desc: 'Send a prompt through a Hyper Workflow (it runs on the hub; type a name to see the list)', args: '<name> <prompt>', local: (a) => hyperwork(a) },
   { cmd: '/hw', desc: 'Short for /hyperwork', args: '<name> <prompt>', local: (a) => hyperwork(a) },
@@ -3339,18 +3498,19 @@ function askCommand(s) {
     const box = $('cmdModal'), field = $('cmdField'), sel = $('cmdSel');
     $('cmdTitle').textContent = s.cmd; $('cmdErr').textContent = '';
     $('cmdText').textContent = n.confirm || s.desc || '';
-    field.hidden = !n.input; sel.hidden = !n.choices; field.value = '';
+    field.hidden = !n.input; sel.hidden = !n.choices; field.value = s.prefill || '';
     field.placeholder = n.input ? (n.input.hint || (n.input.required ? 'What it needs' : 'Optional')) : '';
     if (n.choices) { sel.textContent = ''; for (const c of n.choices) { const o = document.createElement('option'); o.value = o.textContent = c; sel.append(o); } }
-    $('cmdGo').textContent = n.confirm ? 'Yes, ' + s.cmd.slice(1) : 'Run';
+    $('cmdGo').textContent = s.go || (n.confirm ? 'Yes, ' + s.cmd.slice(1) : 'Run');
     const done = (v) => { box.hidden = true; $('cmdGo').onclick = $('cmdCancel').onclick = $('cmdCancelX').onclick = null; field.onkeydown = null; resolve(v); };
     $('cmdGo').onclick = () => {
+      if (n.confirm && n.input) return done(field.value.trim()); // a confirm with words (/transfer): the words, '' = none; cancel = null
       if (n.confirm) return done(true);
       if (n.choices) return done(sel.value);
       if (n.input && n.input.required && !field.value.trim()) { $('cmdErr').textContent = 'This one needs a few words.'; field.focus(); return; }
       done(field.value.trim());
     };
-    $('cmdCancel').onclick = $('cmdCancelX').onclick = () => done(n.confirm ? false : null);
+    $('cmdCancel').onclick = $('cmdCancelX').onclick = () => done(n.confirm && !n.input ? false : null);
     field.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('cmdGo').click(); if (e.key === 'Escape') $('cmdCancel').click(); };
     box.hidden = false;
     setTimeout(() => (n.input ? field : n.choices ? sel : $('cmdGo')).focus(), 0);
@@ -3464,6 +3624,46 @@ function newChatNow() {
   if (usageData) { usageData.context = null; paintUsage(); } // a new session starts with an empty context window
   sys('New conversation — Claude starts fresh on your next message.');
 };
+
+// /transfer [focus] (T-375): asked first (what happens, the focus box), then the hub writes the handoff, makes the new session in the
+// same project and worktree with the same AI, starts it with the handoff, and the page switches to it. A hub without the route: 404, said.
+let transferring = false;
+async function transferSession(focus) {
+  const s0 = SLASH.find((x) => x.cmd === '/transfer');
+  const words = await askCommand({ ...s0, prefill: String(focus || '').trim() });
+  if (words === null || words === false) return;
+  if (busy) return sys('Claude is still working in this session: wait for its reply (or stop it), then transfer it.', true);
+  if (transferring) return;
+  transferring = true;
+  const from = SESSIONS.onScreen(), line0 = sys('Transferring: writing the handoff and starting the new session…');
+  line0.prepend(ic('refresh', 'lead'));
+  try {
+    if (currentDirty) await saveCurrent(); // the hub writes the handoff from the conversation as it is now
+    const d = await json('/api/work/sessions/transfer', { method: 'POST', body: JSON.stringify({ session: from, focus: words }) });
+    line0.textContent = ''; line0.append(ic('check', 'lead'), 'Transferred to "' + d.title + '"' + (d.handoff && d.handoff.by === 'plain' ? ' (the handoff was made without a model: ' + (d.handoff.why || 'no model') + ')' : '') + '. Opening it…');
+    await SESSIONS.refresh();
+    await openWorkSession(d.to);
+    if (d.handoff && d.handoff.by === 'plain') sys('This handoff was made without a model (' + (d.handoff.why || 'no model') + '): it has the conversation in short and the worktree\'s state.');
+    if (d.queued) sys((d.error || 'Over your session limit.') + ' The handoff waits in this session and goes as soon as a slot frees.', true);
+    else if (!d.started && d.error) sys('The new session did not start: ' + d.error, true);
+  } catch (e) { line0.classList.add('bad'); line0.textContent = 'Could not transfer this session: ' + e.message; }
+  finally { transferring = false; paintTransfer(); }
+}
+// "Transferred to …" on the old session, "Continued from …" on the new one, each with a link to the other (T-375)
+function paintTransfer() {
+  const box = $('xferNote'); if (!box) return;
+  const s = typeof SESSIONS !== 'undefined' ? SESSIONS.byId(SESSIONS.onScreen()) : null;
+  const l = s && (s.transferredTo || s.transferredFrom); box.textContent = '';
+  if (!l) { box.hidden = true; return; }
+  const to = !!s.transferredTo;
+  box.append(ic(to ? 'share' : 'back'), to ? 'Transferred to ' : 'Continued from ');
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost'; b.textContent = l.title || 'Session';
+  b.title = to ? 'Open the session this one was handed over to' : 'Open the session this one continues (read it; it runs no more when it gave its worktree on)';
+  if (l.gone) { b.disabled = true; b.title = 'That session was deleted'; } else b.onclick = () => openWorkSession(l.id);
+  box.append(b);
+  if (to && s.gaveTree) box.append(' (it works in this session\'s worktree now; this one is read-only)');
+  box.hidden = false;
+}
 
 // Planner mode (T-275): a planner session is made on the hub (mode "planner": plan-only tools, enforced there); the badge shows while
 // it is open, in the header of the conversation and over the input box. "Leave planner" goes back to the normal session; a session
@@ -3673,7 +3873,7 @@ async function openWorkSession(id) {
     log.innerHTML = ''; queue.length = 0; sendNowMessage = null; queuePanel.render(); transcript = []; transcriptFrom = 0; archiveId = null; archiveTitle = null; savedLen = 0; lastSaveAt = 0;
     curRun = null; runEnded = false; fresh = false; slotWait = false; hideThinking(); setBusy(false);
     for (const q of openQuestions.values()) { try { q.stop(); } catch {} } openQuestions.clear(); openPlans.clear();
-    $('convTitle').textContent = SESSIONS.titleOf(s);
+    $('convTitle').textContent = SESSIONS.titleOf(s); paintTransfer();
     $('input').value = SESSIONS.draftOf(id); updateStopButton();
     me.project = s.project; renderProjects();
     const mv = s.provider && s.provider !== 'host' ? s.provider + '|' + (s.model || '') : s.model || ''; $('model').value = mv; if ($('model').selectedIndex < 0) $('model').value = '';
@@ -5209,7 +5409,14 @@ $('floatDock').onclick = () => { layout.roomMode = 'dock'; applyLayout(); };
 
 // ── Settings (main menu, chat, Work bar): nickname + colour (everyone sees them), sounds, pop-ups ──
 let pickedColor = null;
-function openSettings() {
+// T-380: Settings is one element shown two ways: the page (#settingsPage, from the main menu) or the modal (everywhere else)
+function settingsAs(page) {
+  const s = $('settings'); if (page === s.classList.contains('asPage')) return;
+  if (page) $('settingsPageBody').append(s); else $('downloads').before(s);
+  s.classList.toggle('asPage', page);
+}
+function openSettings(asPage) {
+  settingsAs(asPage === true);
   const P = prefs();
   $('setNick').value = P.nick; pickedColor = P.color;
   const sw = $('setColors'); sw.textContent = '';
@@ -5237,7 +5444,7 @@ function openSettings() {
   for (const n of Object.keys(THEMES)) opt(n, n.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
   th.value = store.get('mills.theme') || '';
   $('setMsg').textContent = ''; $('settings').hidden = false; $('setNick').focus();
-  renderDevices(); if (typeof MACHINES !== 'undefined') MACHINES.render(); renderApiAccess(); renderProviders(); renderAppCard(); renderForgejo(); renderMyProjects(); renderSource(); renderHosts();
+  renderDevices(); if (typeof MACHINES !== 'undefined') MACHINES.render(); renderApiAccess(); renderAppCard(); renderForgejo(); renderMyProjects(); // the AI groups: AI Admin (web/aiadmin.js, T-379)
   PROFILE.open(); // the Profile tab (web/profile.js) opens first
   renderAbout();
 }
@@ -5324,11 +5531,12 @@ async function renderDevices(prefill) {
 }
 // ── Settings → API access: this person's key for the hub's OpenAI-compatible API (/v1) ──
 let providerList = [];
-const KIND_NAMES = { host: 'Host Claude', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host · Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
+const KIND_NAMES = { host: 'Host Claude', openrouter: 'OpenRouter', anthropic: 'Anthropic API key', 'claude-cli': 'Claude Code login', openai: 'OpenAI-compatible endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host · Jcode PGM', 'host-claude': 'AI host · Claude', 'host-codex': 'AI host · ChatGPT / Codex', 'host-openai': 'AI host · local model' };
 async function renderApiAccess(freshKey) {
   const box = $('apiBox'); if (!box) return;
   let st; try { st = await json('/api/apikey'); } catch (e) { box.textContent = e.message; return; }
   try { providerList = (await json('/api/providers')).providers; } catch {}
+  apiFreshKey = freshKey || '';
   box.textContent = '';
   const line = (...kids) => { const d = document.createElement('div'); d.className = 'row'; d.append(...kids); box.append(d); return d; };
   const code = (t) => { const c = document.createElement('code'); c.textContent = t; return c; };
@@ -5363,17 +5571,253 @@ async function renderApiAccess(freshKey) {
   mdl.onchange = () => json('/api/apikey/settings', { method: 'POST', body: JSON.stringify({ model: mdl.value }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
   const pl = document.createElement('span'); pl.textContent = 'Answers come from:';
   line(pl, prov, mdl);
+  // several named keys (hub with the key list): the list and "New key"; an older hub has no `keys`, so only the single key above shows
+  if (Array.isArray(st.keys)) renderApiKeys(box, st, info);
+  renderApiConnect(st);
 }
-// ── Settings → My AIs: providers this person hooked up (private or shared with the team) ──
+let apiFreshKey = '';
+function apiKeyLimits(k) {
+  const bits = [];
+  if (k.providers && k.providers.length) bits.push('providers: ' + k.providers.join(', '));
+  if (k.models && k.models.length) bits.push('models: ' + k.models.join(', '));
+  if (k.maxConcurrent) bits.push(k.maxConcurrent + ' at once');
+  return bits.length ? bits.join(' · ') : 'no extra limits';
+}
+function renderApiKeys(box, st, info) {
+  const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const list = mk('div', 'apiKeys');
+  if (!st.keys.length) list.append(mk('div', 'status', 'No named keys yet.'));
+  for (const k of st.keys) {
+    const r = mk('div', 'apiKeyRow' + (k.enabled === false ? ' off' : ''));
+    const t = mk('div'); t.append(mk('b', '', k.label || 'key'), mk('span', '', ' ' + k.prefix + '…'), document.createElement('br'),
+      mk('small', '', 'made ' + new Date(k.createdAt).toLocaleDateString() + (k.expiresDays ? ' · expires after ' + k.expiresDays + ' days' : ' · never expires') + ' · ' + (k.calls || 0) + ' call' + (k.calls === 1 ? '' : 's') + (k.lastUsed ? ', last ' + new Date(k.lastUsed).toLocaleString() : ', never used') + ' · ' + apiKeyLimits(k)));
+    const rv = mk('button', 'ghost', 'Revoke'); rv.type = 'button';
+    rv.onclick = () => {
+      if (rv.dataset.armed !== '1') { rv.dataset.armed = '1'; rv.textContent = 'Click again to revoke'; return; }
+      json('/api/apikey/revoke', { method: 'POST', body: JSON.stringify({ id: k.id }) }).then(() => renderApiAccess()).catch((e) => { info.textContent = e.message; });
+    };
+    // Usage (G5): this key's last 30 days, opened on demand (a hub without /api/apikey/usage says so in the panel)
+    const ub = mk('button', 'ghost'); ub.type = 'button'; ub.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg>'; ub.append(' Usage');
+    ub.setAttribute('aria-expanded', 'false');
+    const panel = mk('div', 'apiUsage'); panel.hidden = true;
+    ub.onclick = async () => {
+      if (!panel.hidden) { panel.hidden = true; ub.setAttribute('aria-expanded', 'false'); return; }
+      panel.hidden = false; ub.setAttribute('aria-expanded', 'true'); panel.textContent = 'Loading usage…';
+      try { const u = await json('/api/apikey/usage?days=30'); renderApiUsage(panel, (u.keys || []).find((x) => x.id === k.id), u.days || 30); } catch (e) { panel.textContent = e.message; }
+    };
+    const btns = mk('span', 'apiKeyBtns'); btns.append(ub, rv);
+    r.append(t, btns, panel); list.append(r);
+  }
+  box.append(list);
+  // New key: label, expiry, optional limits chosen from what this person may use
+  const nw = mk('div', 'apiNew');
+  const lab = mk('input'); lab.placeholder = 'Label, e.g. Claude Code on my laptop'; lab.maxLength = 60; lab.setAttribute('aria-label', 'Key label');
+  const exp = mk('select'); exp.setAttribute('aria-label', 'Key expiry');
+  for (const [v, l] of [[0, 'never expires'], [7, 'expires after 7 days'], [30, 'expires after 30 days'], [90, 'expires after 90 days']]) { const o = mk('option', '', l); o.value = v; exp.append(o); }
+  const conc = mk('input'); conc.type = 'number'; conc.min = '1'; conc.max = '64'; conc.placeholder = 'requests at once (optional)'; conc.setAttribute('aria-label', 'Requests at once');
+  const checks = (title, items) => { const w = mk('div', 'checks'); w.append(mk('span', 'status', title)); const boxes = []; for (const it of items) { const l = mk('label'); const c = mk('input'); c.type = 'checkbox'; c.value = it.id; l.append(c, it.label); w.append(l); boxes.push(c); } return { w, boxes }; };
+  const provs = providerList.filter((p) => (p.models || []).length || p.id === 'host');
+  const pc = checks('Only these providers (none ticked = all you may use):', provs.map((p) => ({ id: p.id, label: p.label })));
+  const mset = []; for (const p of providerList) for (const m of p.models || []) if (!mset.includes(m)) mset.push(m);
+  const mc = checks('Only these models (none ticked = all):', mset.map((m) => ({ id: m, label: m })));
+  const go = mk('button', '', 'Create key'); go.type = 'button';
+  go.onclick = async () => {
+    const body = { label: lab.value.trim() || 'key', expiresDays: Number(exp.value) };
+    const pv = pc.boxes.filter((c) => c.checked).map((c) => c.value), md = mc.boxes.filter((c) => c.checked).map((c) => c.value);
+    if (pv.length) body.providers = pv;
+    if (md.length) body.models = md;
+    if (Number(conc.value) > 0) body.maxConcurrent = Number(conc.value);
+    try { const d = await json('/api/apikey/create', { method: 'POST', body: JSON.stringify(body) }); renderApiAccess(d.key); } catch (e) { info.textContent = e.message; }
+  };
+  const row = mk('div', 'row'); row.append(lab, exp, conc, go);
+  nw.append(mk('b', '', 'New key'), row);
+  if (provs.length > 1) nw.append(pc.w);
+  if (mset.length) nw.append(mc.w);
+  box.append(nw);
+}
+// One key's usage (GET /api/apikey/usage): the period's totals, tokens per day as plain bars (each with its numbers on
+// hover), the active days as a table, and the calls and tokens per model
+function renderApiUsage(panel, ku, days) {
+  const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  panel.textContent = '';
+  if (!ku) { panel.append(mk('div', 'status', 'No usage recorded for this key yet.')); return; }
+  const p = ku.period || {};
+  panel.append(mk('div', 'status', 'Last ' + days + ' days: ' + fmt(p.calls) + ' call' + (p.calls === 1 ? '' : 's') + ', ' + fmt(p.tokensIn) + ' tokens in, ' + fmt(p.tokensOut) + ' out'));
+  const byDay = ku.byDay || [], tok = (d) => (d.tokensIn || 0) + (d.tokensOut || 0);
+  const useTokens = byDay.some((d) => tok(d) > 0), val = (d) => (useTokens ? tok(d) : d.calls || 0);
+  const max = Math.max(1, ...byDay.map(val));
+  const bars = mk('div', 'apiBars'); bars.setAttribute('role', 'img'); bars.setAttribute('aria-label', (useTokens ? 'Tokens' : 'Calls') + ' per day, last ' + days + ' days');
+  for (const d of byDay) {
+    const col = mk('div', 'apiBar'); col.title = d.day + ': ' + fmt(d.calls) + ' call' + (d.calls === 1 ? '' : 's') + ', ' + fmt(d.tokensIn) + ' in, ' + fmt(d.tokensOut) + ' out';
+    const fill = mk('span'); fill.style.height = (val(d) ? Math.max(4, Math.round(val(d) / max * 100)) : 0) + '%'; col.append(fill); bars.append(col);
+  }
+  const axis = mk('div', 'apiBarAxis'); axis.append(mk('span', '', byDay.length ? byDay[0].day : ''), mk('span', '', useTokens ? 'tokens per day' : 'calls per day'), mk('span', '', byDay.length ? byDay[byDay.length - 1].day : ''));
+  panel.append(bars, axis);
+  const table = (head, rows) => { const t = mk('table'), hr = mk('tr'); for (const [h, n] of head) hr.append(mk('th', n ? 'n' : '', h)); t.append(hr); for (const r of rows) { const tr = mk('tr'); r.forEach((c, i) => tr.append(mk('td', head[i][1] ? 'n' : '', c))); t.append(tr); } return t; };
+  const active = byDay.filter((d) => d.calls || tok(d));
+  const det = mk('details'); det.append(mk('summary', '', 'Per day (' + active.length + ' active)'));
+  det.append(active.length ? table([['Day'], ['Calls', 1], ['Tokens in', 1], ['Tokens out', 1]], active.slice().reverse().map((d) => [d.day, fmt(d.calls), fmt(d.tokensIn), fmt(d.tokensOut)])) : mk('div', 'status', 'No calls in this period.'));
+  panel.append(det);
+  const models = ku.byModel || [];
+  const provName = (id) => ((typeof providerList !== 'undefined' && providerList.find((x) => x.id === id)) || {}).label || id;
+  if (models.length) panel.append(table([['Model'], ['Provider'], ['Calls', 1], ['Tokens in', 1], ['Tokens out', 1]], models.map((m) => [m.model || '(default)', provName(m.provider), fmt(m.calls), fmt(m.tokensIn), fmt(m.tokensOut)])));
+}
+// Connect a tool: ready-to-paste setups (web/apisetup.js); the key is filled in only while it is the one just made
+function renderApiConnect(st) {
+  const box = $('apiConnect'); if (!box || typeof APISETUP === 'undefined') return;
+  box.textContent = '';
+  const models = []; for (const p of providerList) for (const m of p.models || []) if (!models.includes(m)) models.push(m);
+  for (const k of st.keys || []) for (const m of k.models || []) if (!models.includes(m)) models.push(m);
+  const sel = document.createElement('select'); sel.setAttribute('aria-label', 'Model for the setups');
+  const o0 = document.createElement('option'); o0.value = ''; o0.textContent = models.length ? 'model: the first' : 'model: (none listed)'; sel.append(o0);
+  for (const m of models) { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.append(o); }
+  sel.value = models.includes(st.model) ? st.model : '';
+  const top = document.createElement('div'); top.className = 'row'; top.append(sel); box.append(top);
+  const holder = document.createElement('div'); holder.className = 'apiKeys'; box.append(holder);
+  const draw = () => {
+    holder.textContent = '';
+    const model = APISETUP.pickModel(sel.value, models);
+    for (const sp of APISETUP.setups({ origin: APISETUP.originOf(st.endpoint, location.origin), key: apiFreshKey, model })) {
+      const d = document.createElement('details'); d.className = 'apiSnip';
+      const sm = document.createElement('summary'); sm.textContent = sp.title; d.append(sm);
+      const pre = document.createElement('pre'); pre.textContent = sp.text; d.append(pre);
+      const r = document.createElement('div'); r.className = 'row';
+      const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'ghost';
+      cp.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg> Copy';
+      cp.onclick = async () => { try { await navigator.clipboard.writeText(sp.text); cp.textContent = 'Copied'; } catch { cp.textContent = 'Select + copy'; } };
+      const n = document.createElement('small'); n.textContent = sp.note; r.append(cp, n); d.append(r); holder.append(d);
+    }
+  };
+  sel.onchange = draw; draw();
+}
+// The OpenRouter allow-list as rows: id (what people pick), label, OpenRouter model, providers in order, allow fallbacks.
+// get() gives the rows for /api/providers/add and /update (the hub checks them).
+function pairsEditor(initial) {
+  const wrap = document.createElement('div'); wrap.className = 'orPairs';
+  const list = document.createElement('div'), rows = [];
+  const mkIn = (ph, v) => { const i = document.createElement('input'); i.placeholder = ph; i.value = v || ''; i.setAttribute('aria-label', ph); return i; };
+  const addRow = (p) => {
+    p = p || {};
+    const r = document.createElement('div'); r.className = 'row';
+    const id = mkIn('id people pick, e.g. or/sonnet', p.id), label = mkIn('label', p.label), model = mkIn('OpenRouter model, e.g. anthropic/claude-sonnet-4.5', p.model), prov = mkIn('providers in order, e.g. anthropic, amazon-bedrock', (p.providers || []).join(', '));
+    const fl = document.createElement('label'); fl.className = 'chk'; const fc = document.createElement('input'); fc.type = 'checkbox'; fc.checked = p.allowFallbacks === true; fl.append(fc, ' allow fallbacks');
+    const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.title = 'Remove this pair'; rm.setAttribute('aria-label', 'Remove this pair'); rm.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>';
+    const rec = { get: () => ({ id: id.value.trim(), label: label.value.trim(), model: model.value.trim(), providers: prov.value, allowFallbacks: fc.checked }) };
+    rm.onclick = () => { r.remove(); rows.splice(rows.indexOf(rec), 1); };
+    r.append(id, label, model, prov, fl, rm); list.append(r); rows.push(rec);
+  };
+  (initial && initial.length ? initial : [{}]).forEach(addRow);
+  const add = document.createElement('button'); add.type = 'button'; add.className = 'ghost'; add.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg> Add a pair'; add.onclick = () => addRow();
+  wrap.append(list, add);
+  return { el: wrap, get: () => rows.map((x) => x.get()) };
+}
+// ── AI Admin → My OpenRouter (T-379; was Settings → OpenRouter budget): which key pays for your OpenRouter models (the
+// team's, counted against your monthly budget, or your own), your month, the fallback and your own key. The team's side
+// (its key and models, everyone's month, the personal-keys switch) is Global → Team OpenRouter (web/aiadmin.js). ──
+async function renderOrBudget() {
+  const box = $('orBox'); if (!box) return;
+  let m; try { m = await json('/api/openrouter/budget'); } catch { const g = $('sgOpenRouter'); if (g) g.hidden = true; return; } // an older hub has none
+  let provs = []; try { provs = ((await json('/api/providers')).providers || []).filter((p) => p.kind === 'openrouter'); } catch {}
+  let mykey = null; try { mykey = await json('/api/openrouter/mykey'); } catch {}
+  const team = provs.filter((p) => !p.personal), mine = provs.find((p) => p.personal);
+  const g = $('sgOpenRouter'); if (g) g.hidden = !team.length && !(mykey && (mykey.personalKeys || mykey.hasKey));
+  box.textContent = '';
+  const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const usd = (n) => '$' + Number(n || 0).toFixed(2);
+  box.append(mk('div', '', 'This month (' + m.month + '): team key ' + usd(m.spentUsd) + ' of ' + usd(m.capUsd) + (m.ownCap ? ' (your own cap)' : '') + ' · ' + m.calls + ' answer' + (m.calls === 1 ? '' : 's') + ' · resets ' + new Date(m.resetsAt).toLocaleDateString() + (m.over ? ' · used up' : '')));
+  if (m.hasOwnKey || m.mineCalls) box.append(mk('div', '', 'Your own key: ' + usd(m.mineUsd) + ' · ' + m.mineCalls + ' answer' + (m.mineCalls === 1 ? '' : 's') + ' (you pay OpenRouter; no hub budget applies)'));
+  const meter = mk('div', 'orMeter'); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', usd(m.spentUsd) + ' of ' + usd(m.capUsd) + ' used'); const fill = mk('span'); fill.style.width = (m.capUsd > 0 ? Math.min(100, Math.round(m.spentUsd / m.capUsd * 100)) : 100) + '%'; meter.append(fill); box.append(meter);
+  // which key pays: the team's or your own (T-379). It is the OpenRouter your AI source and your fallback use.
+  if (team.length || mine || (mykey && mykey.personalKeys)) {
+    const fb = m.fallback || {}, srcOr = provs.find((p) => p.id === me.provider), fbOr = fb.on ? provs.find((p) => p.id === fb.provider) : null, cur = srcOr || fbOr;
+    const which = mk('div', 'orWhich'); which.setAttribute('role', 'radiogroup'); which.setAttribute('aria-label', 'Which OpenRouter key pays for your models');
+    which.append(mk('h4', '', 'Which key pays'));
+    const opt = (label, hint, ok) => { const l = mk('label', 'chk'), r = mk('input'), sp = mk('span', '', label); r.type = 'radio'; r.name = 'orWhich'; r.disabled = !ok; sp.append(mk('small', '', hint)); l.append(r, sp); which.append(l); return r; };
+    const rt = opt('The team\'s key', team.length ? 'Counted against your monthly budget above.' : 'The team has no OpenRouter key yet.', team.length > 0);
+    const rm = opt('My own key', mine ? 'You pay OpenRouter directly; no hub budget applies.' : mykey && mykey.personalKeys ? 'Save your key below first.' : 'Personal keys are switched off on this hub.', !!mine);
+    (cur && cur.personal ? rm : rt).checked = true;
+    const note = mk('div', 'status'); which.append(note);
+    const pick = async (to) => {
+      if (!to) return;
+      try {
+        if (srcOr) { await json('/api/model', { method: 'POST', body: JSON.stringify({ provider: to.id, model: '' }) }); await refreshProviders(); }
+        if (fbOr) await json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: true, provider: to.id, pair: ((to.pairs || [])[0] || {}).id || '' }) });
+        note.textContent = (to.personal ? 'Your OpenRouter models now run on your own key.' : 'Your OpenRouter models now run on the team\'s key.') + (srcOr || fbOr ? '' : ' It applies once an OpenRouter model is your AI source or your fallback.');
+        if (srcOr || fbOr) { renderOrBudget(); renderSource(); }
+      } catch (e) { note.textContent = e.message; }
+    };
+    rt.onchange = () => pick(team[0]); rm.onchange = () => pick(mine);
+    box.append(which);
+  }
+  if (provs.length) {
+    const fb = m.fallback || {};
+    const row = mk('div', 'row'); const lab = mk('label', 'chk'); const on = mk('input'); on.type = 'checkbox'; on.checked = fb.on === true; lab.append(on, ' Use OpenRouter when Claude is unavailable');
+    const sel = mk('select'); sel.setAttribute('aria-label', 'OpenRouter model for the fallback');
+    for (const p of provs) for (const pr of p.pairs || []) { const o = mk('option', '', (p.personal ? 'my key · ' : '') + (pr.label || pr.id)); o.value = p.id + '|' + pr.id; sel.append(o); }
+    sel.value = (fb.provider || '') + '|' + (fb.pair || ''); if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+    const note = mk('span', 'status');
+    const save = () => { const [provider, pair] = sel.value.split('|'); json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: on.checked, provider, pair }) }).then(() => { note.textContent = on.checked ? 'On: a Work session whose Claude host is offline or at its cap runs this model through Jcode PGM, and says so.' : 'Off.'; }).catch((e) => { note.textContent = e.message; on.checked = false; }); };
+    on.onchange = save; sel.onchange = () => { if (on.checked) save(); };
+    row.append(lab, sel, note); box.append(row);
+  }
+  // my own OpenRouter key (T-372): kept on the hub, never shown back (only its last four characters); it appears as "my OpenRouter"
+  if (mykey) {
+    const kb = mk('div', 'orMine'); kb.append(mk('h4', '', 'My OpenRouter key'));
+    const kn = mk('span', 'status'); const say = (t) => { kn.textContent = t; };
+    if (!mykey.personalKeys && !mykey.hasKey) kb.append(mk('p', 'setHint', 'Personal OpenRouter keys are switched off on this hub: an admin can allow them (AI Admin → Global → Team OpenRouter).'));
+    else {
+      if (!mykey.personalKeys) kb.append(mk('p', 'setHint', 'An admin switched personal keys off: your stored key stays but is not used.'));
+      kb.append(mk('p', 'setHint', 'Paste your own OpenRouter key to use "my OpenRouter" in the AI picker, the API (model my/<id>) and Work. You pay OpenRouter directly: no hub budget applies, and the hub never shows the key again.'));
+      const row = mk('div', 'row'); const ki = mk('input'); ki.type = 'password'; ki.autocomplete = 'off'; ki.setAttribute('aria-label', 'Your OpenRouter key');
+      ki.placeholder = mykey.hasKey ? 'Replace it: paste a new key (sk-or-…)' : 'Your OpenRouter key (sk-or-…)';
+      const ks = mk('button', '', mykey.hasKey ? 'Replace' : 'Save key'); ks.type = 'button';
+      ks.onclick = () => { if (!ki.value.trim()) { say('Paste a key first.'); return; } json('/api/openrouter/mykey', { method: 'POST', body: JSON.stringify({ apiKey: ki.value.trim() }) }).then(() => { ki.value = ''; renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message)); };
+      row.append(ki, ks);
+      if (mykey.hasKey) {
+        const tag = mk('span', 'orTail'); tag.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-key"/></svg> '; tag.append('Stored: ' + mykey.last4);
+        const kt = mk('button', 'ghost'); kt.type = 'button'; kt.title = 'Ask OpenRouter whether the key works'; kt.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-check"/></svg> Test';
+        kt.onclick = () => { say('Asking OpenRouter…'); json('/api/openrouter/mykey/test', { method: 'POST', body: '{}' }).then((r) => say(r.ok ? 'OpenRouter accepts the key.' : r.error)).catch((e) => say(e.message)); };
+        const kr = mk('button', 'ghost'); kr.type = 'button'; kr.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg> Remove'; kr.setAttribute('aria-label', 'Remove my OpenRouter key');
+        kr.onclick = () => json('/api/openrouter/mykey/remove', { method: 'POST', body: '{}' }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message));
+        row.append(tag, kt, kr);
+      }
+      kb.append(row);
+      if (mykey.hasKey) {
+        const det = mk('details'); det.append(mk('summary', '', 'My own models (optional) · ' + (mykey.pairs.length ? mykey.pairs.length + ' of yours' : 'the team\'s models')));
+        det.append(mk('p', 'setHint', 'Leave it empty to use the team\'s models with your key. Rows you list here are used only for you (model my/<id>).'));
+        const pe3 = pairsEditor(mykey.pairs || []); const sv = mk('button', '', 'Save my models'); sv.type = 'button';
+        sv.onclick = () => { const rows = pe3.get().filter((x) => x.id || x.model); json('/api/openrouter/mykey', { method: 'POST', body: JSON.stringify({ pairs: rows }) }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message)); };
+        det.append(pe3.el, sv); kb.append(det);
+      }
+    }
+    kb.append(kn);
+    box.append(kb);
+  }
+}
+// an OpenRouter provider's editor (its allow-list of pairs, and its key replaced, never shown): the team's in AI Admin
+function orProviderEditor(p, done) {
+  const wrap = document.createElement('span');
+  const ed = document.createElement('button'); ed.type = 'button'; ed.className = 'ghost'; ed.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg> Edit pairs';
+  const panel = document.createElement('div'); panel.hidden = true; panel.style.flexBasis = '100%';
+  const pe2 = pairsEditor(p.pairs || []); const nk = document.createElement('input'); nk.type = 'password'; nk.autocomplete = 'off'; nk.placeholder = 'new OpenRouter key (leave empty to keep the current one)';
+  const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save'; const m2 = document.createElement('span'); m2.className = 'status';
+  save.onclick = () => { const body = { id: p.id, pairs: pe2.get() }; if (nk.value.trim()) body.apiKey = nk.value; json('/api/providers/update', { method: 'POST', body: JSON.stringify(body) }).then(() => { done(); renderApiAccess(); refreshProviders(); }).catch((e) => { m2.textContent = e.message; }); };
+  panel.append(pe2.el, nk, save, m2); ed.onclick = () => { panel.hidden = !panel.hidden; };
+  wrap.append(ed, panel); return wrap;
+}
+// ── AI Admin → My AIs: providers this person hooked up (private or shared with the team); OpenRouter ones are elsewhere:
+// the team's in Global → Team OpenRouter, your own key in My OpenRouter (T-379) ──
 async function renderProviders() {
   const box = $('provBox'); if (!box) return;
   try { providerList = (await json('/api/providers')).providers; } catch (e) { box.textContent = e.message; return; }
   box.textContent = '';
-  for (const p of providerList) {
+  for (const p of providerList.filter((x) => x.kind !== 'openrouter')) {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = p.label; it.append(b);
     const s = document.createElement('small'); s.textContent = KIND_NAMES[p.kind] + (p.id === 'host' ? ' · everyone' : ' · ' + (p.owner === me.username ? 'yours' : nickOf(p.owner) + "'s") + (p.shared ? ' · shared with the team' : ' · private')) + (p.models && p.models.length ? ' · ' + p.models.join(', ') : ''); it.append(s);
-    if (p.id !== 'host' && p.owner === me.username) {
+    if (p.personal) s.textContent = 'Your own OpenRouter key · only you see it · no hub budget (set it in AI Admin → My OpenRouter) · ' + (p.models || []).join(', ');
+    if (p.id !== 'host' && p.owner === me.username && !p.personal) {
       const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'ghost'; sh.textContent = p.shared ? 'Make private' : 'Share with team';
       sh.onclick = () => json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: p.id, shared: !p.shared }) }).then(() => { renderProviders(); showModels(me); }).catch((e) => sysSettings(e.message));
       const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
@@ -5391,11 +5835,13 @@ async function renderProviders() {
   const where = document.createElement('input'); where.placeholder = 'base URL, e.g. https://api.example.com/v1';
   const jprov = document.createElement('input'); jprov.placeholder = 'jcode provider profile to run with (-p), e.g. viberoller (optional)'; jprov.maxLength = 80;
   const models = document.createElement('input'); models.placeholder = 'model ids, comma separated (optional for Claude)';
+  const pe = pairsEditor([]); pe.el.hidden = true; // OpenRouter: the allow-list of model + provider pairs
   const shared = document.createElement('label'); shared.className = 'chk'; const shc = document.createElement('input'); shc.type = 'checkbox'; shared.append(shc, ' share with the team');
   const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
   const msg = document.createElement('span'); msg.className = 'status';
   const sync = () => {
-    secret.hidden = kind.value === 'claude-cli' || kind.value === 'jcode'; where.hidden = kind.value === 'anthropic'; jprov.hidden = kind.value !== 'jcode';
+    secret.hidden = kind.value === 'claude-cli' || kind.value === 'jcode'; where.hidden = kind.value === 'anthropic' || kind.value === 'openrouter'; jprov.hidden = kind.value !== 'jcode';
+    models.hidden = kind.value === 'openrouter'; pe.el.hidden = kind.value !== 'openrouter'; secret.placeholder = kind.value === 'openrouter' ? 'OpenRouter API key (sk-or-…; kept on the hub, never shown again)' : 'API key';
     where.placeholder = kind.value === 'openai' ? 'base URL, e.g. https://api.example.com/v1' : kind.value === 'jcode' ? 'the jcodepgm binary on the host: a path, or just jcodepgm when it is on PATH' : 'folder on the host, e.g. D:\\claude-logins\\sponge or /home/host/claude-logins/sponge (the host runs `claude login` once with CLAUDE_CONFIG_DIR set to it)';
     models.placeholder = kind.value === 'jcode' ? 'model ids jcode may be asked for, comma separated (empty = jcode\'s own default)' : 'model ids, comma separated (optional for Claude)';
   };
@@ -5405,14 +5851,15 @@ async function renderProviders() {
     if (kind.value !== 'claude-cli' && kind.value !== 'jcode') body.apiKey = secret.value;
     if (kind.value === 'openai') body.baseUrl = where.value; if (kind.value === 'claude-cli') body.configDir = where.value;
     if (kind.value === 'jcode') { body.command = where.value; body.provider = jprov.value; }
+    if (kind.value === 'openrouter') body.pairs = pe.get();
     try { await json('/api/providers/add', { method: 'POST', body: JSON.stringify(body) }); label.value = secret.value = where.value = jprov.value = models.value = ''; msg.textContent = 'Added.'; renderProviders(); renderApiAccess(); refreshProviders(); }
     catch (e) { msg.textContent = e.message; }
   };
-  form.append(kind, label, secret, where, jprov, models, shared, add, msg); box.append(form);
+  form.append(kind, label, secret, where, jprov, models, pe.el, shared, add, msg); box.append(form);
 }
-function sysSettings(t) { $('setMsg').textContent = t; $('setMsg').className = 'status'; }
-// ── Settings → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
-const SRC_KINDS = { host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host, Jcode PGM' };
+function sysSettings(t) { const el = $('aiAdmin').hidden ? $('setMsg') : $('aiMsg'); el.textContent = t; el.className = 'status'; } // AI Admin's own groups say it on their own line (T-379)
+// ── AI Admin → AI source: which provider (an AI host's Claude, this hub's Claude, one of My AIs) and which model ──
+const SRC_KINDS = { openrouter: 'OpenRouter (Jcode PGM on the server)', host: 'this hub\'s Claude', 'host-claude': 'AI host, Claude', 'host-codex': 'AI host, ChatGPT / Codex (API and Unity)', 'host-openai': 'AI host, local model', anthropic: 'Anthropic key', 'claude-cli': 'Claude Code login', openai: 'endpoint', jcode: 'Jcode PGM', 'host-jcode': 'AI host, Jcode PGM' };
 async function renderSource() {
   const box = $('srcBox'); if (!box) return;
   let d; try { d = await json('/api/check'); } catch (e) { box.textContent = e.message; return; }
@@ -5437,7 +5884,7 @@ async function renderSource() {
   box.append(note);
   LOCALAI.line(box, d.providers, localAiOpts());
 }
-// ── Settings → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
+// ── AI Admin → My AI hosts, monitor and control (5.12.0): a live line per host (refreshed every 10 s while the panel is open) and Pause / Resume / Restart / Update now / Show log; an older host shows what the hub knows and a note ──
 const hostAgo = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' days'; };
 function hostLiveText(h, now) {
   const st = h.status || {}, bits = [];
@@ -5515,7 +5962,7 @@ async function refreshHostLive() {
   }
 }
 setInterval(() => { const b = $('hostBox'); if (b && b.offsetParent !== null) refreshHostLive(); }, 10000);
-// ── Settings → My AI hosts: this person's own hosts (UUID + nickname), their providers and who may use them ──
+// ── AI Admin → My AI hosts: this person's own hosts (UUID + nickname), their providers and who may use them ──
 async function renderHosts() {
   const box = $('hostBox'); if (!box) return;
   let d; try { d = await json('/api/hosts'); } catch (e) { box.textContent = e.message; return; }
@@ -5622,23 +6069,28 @@ $('saveSettings').onclick = async () => {
     await refreshMembers(); selectConv(currentConv);
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
 };
-$('closeSettings').onclick = () => { const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; }); };
+$('closeSettings').onclick = () => { if ($('settings').classList.contains('asPage')) return; const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; if (!$('settingsPage').hidden) { settingsAs(true); $('settings').hidden = false; } }); };
 // T-318: every way out of Settings is the same one (Close, a click beside the box, Escape): it goes back into its button.
 // Escape first clears "Find a setting" (web/profile.js) and leaves a menu or a profile card open over it to close first.
-$('settings').onclick = (e) => { if (e.target.id === 'settings') $('closeSettings').click(); };
+$('settings').onclick = (e) => { if (e.target.id === 'settings' && !$('settings').classList.contains('asPage')) $('closeSettings').click(); };
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || e.defaultPrevented || $('settings').hidden || !$('profileCard').hidden || document.querySelector('.vrMenu')) return;
+  if (e.key !== 'Escape' || e.defaultPrevented || $('settings').hidden || $('settings').classList.contains('asPage') || !$('profileCard').hidden || document.querySelector('.vrMenu')) return;
   $('closeSettings').click();
 });
 let settingsFrom = null; // the button Settings came out of (it goes back into it)
 document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = () => { settingsFrom = b; openSettings(); genieOut($('settings').querySelector('.box'), b); }; });
-// ── Downloads (Settings → Downloads): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by the
-// hub from the code it runs. Every Download button (menu, Work's bar, the chat app) opens Settings on this tab. ──
+$('goSettings').onclick = () => { openSettings(true); showScreen('settingsPage'); }; // T-380: the main menu's Settings is a page
+// ── Downloads (T-378: a window of its own): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by
+// the hub from the code it runs, then Jcode PGM and the team's other products. Every Download button (menu, Work's bar,
+// the chat app) opens it; Close, a click beside it and Escape close it, back into its button. ──
+let downloadsFrom = null;
 function openDownloads() {
-  openSettings();
-  if (typeof PROFILE !== 'undefined') PROFILE.tab('downloads');
+  $('downloads').hidden = false;
   renderDownloads();
 }
+$('closeDownloads').onclick = () => { const from = downloadsFrom; downloadsFrom = null; genieIn($('downloads').querySelector('.box'), from, () => { $('downloads').hidden = true; }); };
+$('downloads').onclick = (e) => { if (e.target.id === 'downloads') $('closeDownloads').click(); };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.defaultPrevented && !$('downloads').hidden && !document.querySelector('.vrMenu')) $('closeDownloads').click(); });
 async function renderDownloads() {
   const box = $('dlBody'); if (!box) return;
   box.textContent = 'Loading…';
@@ -5662,7 +6114,7 @@ async function renderDownloads() {
   if (!d.items.length) note.textContent = 'Nothing is built on this hub yet (the admin runs sh native/build.sh).';
   const GROUPS = {
     native: ['VibeRoller: the native app', 'VibeRoller in its own window, plus what only an app on your computer can do: the Tools window (your projects folder, a real terminal, build & run, git with your Forgejo token, a local API proxy for tools on your computer) and the switch to share this computer\'s AI. Pre-built for Windows and Linux; runs from its folder or installs itself, and updates itself (signed releases).'],
-    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too) and puts vr-host on your PATH; run `vr-host` and everything is in there (setup, providers, settings, doctor, updates, start at boot). Updates itself from this hub. For your own host with its config inside: Settings → My AI hosts.'],
+    'native-host': ['VibeRoller AI Host: native', 'Makes a computer an AI host (its Claude / ChatGPT login, local models, Unity\'s engines) without sharing the computer itself. One pre-built program, no Node.js: "vr-host install" installs it or updates an earlier host (a JavaScript one too) and puts vr-host on your PATH; run `vr-host` and everything is in there (setup, providers, settings, doctor, updates, start at boot). Updates itself from this hub. For your own host with its config inside: AI Admin → My AI hosts.'],
   };
   for (const group of Object.keys(GROUPS)) {
     if (!d.items.some((i) => i.group === group)) continue;
@@ -5691,11 +6143,32 @@ async function renderDownloads() {
   }
   renderProducts(box, note); // the team's other products (T-250)
 }
+// T-378: what the Downloads show of the team's releases (/api/releases), worked out apart from the page so it can be
+// checked on its own: Jcode PGM and Jcode PGM Desktop (products jcode-*) get a section of their own with the newest
+// version first, its files for this platform up front (the rest under "Other platforms") and the older versions under
+// it; every other product stays in Products, as before.
+const JCODE_ABOUT = {
+  'jcode-pgm': 'The coding agent in your terminal, signed in with your VibeRoller account: its sessions are your Work sessions on this site too (through Jcode PGM Server).',
+  'jcode-pgm-desktop': 'Jcode PGM in a desktop window of its own: it installs, opens and updates Jcode PGM for you.',
+};
+function dlReleasePlan(c, mine) {
+  const out = { jcode: [], others: [] };
+  for (const p of (c && c.products) || []) {
+    if (!/^jcode/.test(p.product || '')) { out.others.push(p); continue; }
+    const rel = p.releases || [], latest = rel[0] || null, files = (latest && latest.assets) || [];
+    out.jcode.push({ product: p, label: p.label || p.product, about: JCODE_ABOUT[p.product] || '', error: p.error || '', latest,
+      mine: files.filter((a) => a.platform === mine), others: files.filter((a) => a.platform !== mine), older: rel.slice(1) });
+  }
+  return out;
+}
 // Products (T-250): every product and version the team has released, through the hub (the hub holds the Forgejo token).
 // This person's platform first; kept apart from the app's own platform detection.
 async function renderProducts(box, note) {
+  const jsec = document.createElement('div'); jsec.className = 'setSection'; jsec.id = 'dlJcode'; jsec.hidden = true;
+  const jh = document.createElement('b'); jh.textContent = 'Jcode PGM'; jsec.append(jh);
+  box.append(jsec);
   const sec = document.createElement('div'); sec.className = 'setSection'; sec.id = 'dlProducts';
-  const h = document.createElement('b'); h.textContent = 'Products'; sec.append(h);
+  const h = document.createElement('b'); h.textContent = 'Other products'; sec.append(h);
   const info = document.createElement('div'); info.className = 'status'; info.textContent = 'Loading the team\'s products…'; sec.append(info);
   box.append(sec);
   let c; try { c = await json('/api/releases'); } catch (e) { info.textContent = 'The products could not be listed: ' + e.message; return; }
@@ -5710,26 +6183,48 @@ async function renderProducts(box, note) {
     } catch (e) { note.textContent = e.message; }
     b.disabled = false;
   };
-  info.textContent = (c.products || []).some((p) => (p.releases || []).length) ? 'Every product and version the team has released. Your platform comes first.' : 'No product releases yet.';
-  for (const p of c.products || []) {
+  const fileBtn = (p, v, a) => {
+    const b = document.createElement('button'); b.type = 'button'; if (a.platform !== mine) b.className = 'ghost';
+    b.append(ic('download', 'lead'), document.createTextNode((a.platform ? a.platform + ' · ' : '') + a.name + ' (' + size(a.size) + ')'));
+    b.onclick = () => grabFile(p, v, a, b); return b;
+  };
+  const vline = (v) => { const vb = document.createElement('div'); vb.className = 'status'; vb.textContent = v.version + (v.prerelease ? ' · pre-release' : '') + (v.date ? ' · ' + v.date.slice(0, 10) : '') + (v.notes ? ' · ' + v.notes.split('\n')[0].slice(0, 120) : ''); return vb; };
+  const versionRows = (into, p, v) => { into.append(vline(v)); const row = document.createElement('div'); row.className = 'row'; for (const a of (v.assets || []).slice().sort((x, y) => (y.platform === mine) - (x.platform === mine))) row.append(fileBtn(p, v, a)); into.append(row); };
+  const plan = dlReleasePlan(c, mine);
+  // Jcode PGM: the newest version for this platform up front
+  for (const j of plan.jcode) {
+    jsec.hidden = false;
+    const card = document.createElement('div'); card.className = 'dlJcode';
+    const t = document.createElement('b'); t.textContent = j.label; card.append(t);
+    if (j.about) { const ab = document.createElement('div'); ab.className = 'status'; ab.textContent = j.about; card.append(ab); }
+    if (!j.latest) { const n = document.createElement('div'); n.className = 'status'; n.textContent = j.error ? 'Unavailable right now: ' + j.error : 'No release yet.'; card.append(n); jsec.append(card); continue; }
+    card.append(vline(j.latest));
+    const row = document.createElement('div'); row.className = 'row';
+    for (const a of j.mine) row.append(fileBtn(j.product, j.latest, a));
+    if (!j.mine.length) { const n = document.createElement('div'); n.className = 'status'; n.textContent = 'No ' + (mine || 'build for this platform') + (mine ? ' build of this version' : '') + (mine === 'macOS' || mine === 'Android' ? ' (builds are for Windows and Linux)' : '') + '.'; row.append(n); }
+    card.append(row);
+    if (j.others.length) {
+      const det = document.createElement('details'); det.open = !j.mine.length;
+      const sm = document.createElement('summary'); sm.textContent = j.mine.length ? 'Other platforms' : 'Platforms available'; det.append(sm);
+      const r2 = document.createElement('div'); r2.className = 'row'; for (const a of j.others) r2.append(fileBtn(j.product, j.latest, a)); det.append(r2); card.append(det);
+    }
+    if (j.older.length) {
+      const det = document.createElement('details');
+      const sm = document.createElement('summary'); sm.textContent = 'Older versions (' + j.older.length + ')'; det.append(sm);
+      for (const v of j.older) versionRows(det, j.product, v);
+      card.append(det);
+    }
+    jsec.append(card);
+  }
+  info.textContent = plan.others.some((p) => (p.releases || []).length) ? 'Every version of the team\'s other products. Your platform comes first.' : 'No other product releases yet.';
+  for (const p of plan.others) {
     const d = document.createElement('details'); const s = document.createElement('summary');
     s.textContent = (p.label || p.product) + (p.releases && p.releases.length ? ' · ' + p.releases[0].version + ' (' + p.releases.length + ' version' + (p.releases.length === 1 ? '' : 's') + ')' : p.error ? ' · unavailable' : ' · no releases'); d.append(s);
-    if (p.releases && p.releases.length) d.open = p === c.products.find((x) => x.releases && x.releases.length);
-    for (const v of p.releases || []) {
-      const vb = document.createElement('div'); vb.className = 'status'; vb.textContent = v.version + (v.date ? ' · ' + v.date.slice(0, 10) : '') + (v.notes ? ' · ' + v.notes.split('\n')[0].slice(0, 120) : ''); d.append(vb);
-      const row = document.createElement('div'); row.className = 'row';
-      for (const a of (v.assets || []).slice().sort((x, y) => (y.platform === mine) - (x.platform === mine))) {
-        const b = document.createElement('button'); b.type = 'button'; if (a.platform !== mine) b.className = 'ghost';
-        b.append(ic('download', 'lead'), document.createTextNode((a.platform ? a.platform + ' · ' : '') + a.name + ' (' + size(a.size) + ')'));
-        b.onclick = () => grabFile(p, v, a, b); row.append(b);
-      }
-      d.append(row);
-    }
+    for (const v of p.releases || []) versionRows(d, p, v);
     sec.append(d);
   }
 }
-document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = () => { settingsFrom = b; openDownloads(); genieOut($('settings').querySelector('.box'), b); }; });
-document.querySelector('[data-settab="downloads"]').addEventListener('click', renderDownloads);
+document.querySelectorAll('[data-downloads]').forEach((b) => { b.onclick = () => { downloadsFrom = b; openDownloads(); genieOut($('downloads').querySelector('.box'), b); }; });
 window.addEventListener('resize', () => { if (me && !$('roomFloat').hidden) applyLayout(); });
 
 // ── Shared Work sessions: share yours (watch-only for others), watch theirs in their own windows ──
@@ -5882,7 +6377,12 @@ function watchContext() {
   return `[Automatic context, not written by ${USER_NAME}: summaries of teammates' shared VibeRoller Work sessions ${USER_NAME} is watching. They work in their own worktrees; use this only to stay in sync, do not act on their behalf.]\n\n` + parts.join('\n\n');
 }
 
-// ── Admin: accounts + hub controls; the hub checks the admin flag on every call ──
+// ── Site admin (T-379; was Admin): accounts + roles + site-wide settings + hub controls; the hub checks the permission on
+// every call. siteCan(): what /api/check's site.perms say this person may do (ADMINISTRATOR is all); an older hub sends no
+// site: its admin flag stands for every permission. ──
+const SITE_ADMIN_PERMS = ['VIEW_ACCOUNTS', 'MANAGE_ACCOUNTS', 'MANAGE_ROLES', 'MANAGE_HUB', 'VIEW_HEALTH', 'VIEW_SECURITY_LOG'];
+function siteCan(perm) { const s = me && me.site; if (!s || !Array.isArray(s.perms)) return !!(me && me.admin); return s.perms.includes('ADMINISTRATOR') || s.perms.includes(perm); }
+function siteAdminAny() { return SITE_ADMIN_PERMS.some(siteCan); }
 const adminOut = (t) => { $('adminOut').textContent = t; };
 async function adminCall(path, body, done) {
   try { const d = await json('/api/admin/' + path, { method: 'POST', body: JSON.stringify(body || {}) }); if (done) done(d); loadAdmin(); }
@@ -5943,39 +6443,35 @@ async function loadAudit() {
 $('auditRefresh').onclick = loadAudit;
 $('auditAction').onkeydown = (e) => { if (e.key === 'Enter') loadAudit(); };
 async function loadAdmin() {
-  loadHealth();
-  loadAudit();
-  try {
+  const roles = await SITEADMIN.load(); // web/siteadmin.js (T-379): the roles, and which groups this person may see
+  if (siteCan('VIEW_HEALTH')) loadHealth(); else $('healthBox').hidden = true;
+  if (siteCan('VIEW_SECURITY_LOG')) loadAudit(); else $('auditBox').hidden = true;
+  if (!$('saAccounts').hidden) try {
     const { accounts } = await json('/api/admin/accounts');
     const rows = $('adminRows'); rows.innerHTML = '';
+    const manage = siteCan('MANAGE_ACCOUNTS');
     for (const a of accounts) {
       const tr = document.createElement('tr');
       const td = (t) => { const c = document.createElement('td'); c.textContent = t; tr.append(c); return c; };
-      td(a.display + ' (' + a.username + ')' + (a.admin ? ' · admin' : ''));
+      td(a.display + ' (' + a.username + ')');
+      tr.append(SITEADMIN.roleCell(a, adminOut));
       td([a.locked ? (a.devices > 1 ? a.devices + ' devices' : 'device locked') + (a.allowNext ? ' (+1 allowed)' : '') : 'unclaimed', a.signedIn + ' signed in', a.busy ? 'Claude working' : '', a.chatKey ? 'chat key set' : 'no chat key', a.hasPassword ? '' : 'NO PASSWORD'].filter(Boolean).join(' · '));
       td(modelName(a.model));
       const actions = td('');
-      actions.append(
+      if (manage) actions.append(
         confirmButton('New password', () => adminCall('password', { username: a.username }, (d) => adminOut(`New password for ${d.username}:\n${d.password}\n\nTheir other devices are signed out. Chat history stays readable in browsers that already hold the key.`))),
         ...(a.locked ? [confirmButton('Allow one more device', () => adminCall('allow-device', { username: a.username }, () => { adminOut(`${a.username}: their next sign-in from a new device (the app, another computer) joins their devices; the ones they have keep working.`); }))] : []),
         confirmButton('Reset lock', () => adminCall('unlock', { username: a.username }, () => adminOut(`${a.username}: device lock cleared (all their devices). Their next sign-in claims the account.`))),
         confirmButton('Sign out', () => adminCall('signout', { username: a.username }, () => adminOut(`${a.username}: signed out everywhere.`))),
-        ...(!a.admin ? [confirmButton('Make admin', () => adminCall('set-admin', { username: a.username, admin: true }, () => adminOut(`${a.username} is an admin now (Admin, accounts, products, restarts).`)))]
-          : a.username !== me.username ? [confirmButton('Remove admin', () => adminCall('set-admin', { username: a.username, admin: false }, () => adminOut(`${a.username} is no longer an admin.`)))] : []),
       );
-      for (const [key, label] of [['pc', 'PC files'], ['code', 'Run code']]) { // Unity's own-computer tools for this account
-        const lab = document.createElement('label'); lab.style.cssText = 'font-size:.75rem;margin:0 .3rem;white-space:nowrap';
-        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.style.width = 'auto'; cb.checked = key === 'pc' ? a.unityPc : a.unityCode;
-        cb.title = 'Unity may ' + (key === 'pc' ? 'read and change files in the folder this person opened on their own PC' : 'run code in the browser of this person');
-        cb.onchange = () => adminCall('unity-tools', { username: a.username, [key]: cb.checked }, (d) => adminOut(`${d.username}: Unity PC files ${d.pc ? 'on' : 'off'}, run code ${d.code ? 'on' : 'off'}.`));
-        lab.append(cb, ' Unity: ' + label); actions.append(lab);
-      }
-      if (a.busy) actions.append(confirmButton('Stop Claude', () => adminCall('stop', { username: a.username }, () => adminOut(`${a.username}: Claude stopped.`))));
-      if (a.username !== me.username) actions.append(confirmButton('Delete', () => adminCall('delete', { username: a.username }, () => adminOut(`${a.username}: deleted (files kept in bridge/profiles-deleted/).`))));
+      if (!roles) actions.append(...(!a.admin ? [confirmButton('Make admin', () => adminCall('set-admin', { username: a.username, admin: true }, () => adminOut(`${a.username} is an admin now (Admin, accounts, products, restarts).`)))] // an older hub: no roles, the admin flag
+        : a.username !== me.username ? [confirmButton('Remove admin', () => adminCall('set-admin', { username: a.username, admin: false }, () => adminOut(`${a.username} is no longer an admin.`)))] : []));
+      if (manage && a.busy) actions.append(confirmButton('Stop Claude', () => adminCall('stop', { username: a.username }, () => adminOut(`${a.username}: Claude stopped.`))));
+      if (manage && a.username !== me.username) actions.append(confirmButton('Delete', () => adminCall('delete', { username: a.username }, () => adminOut(`${a.username}: deleted (files kept in bridge/profiles-deleted/).`))));
       rows.append(tr);
     }
   } catch (err) { adminOut('Error: ' + err.message); }
-  loadGateway();
+  if (siteCan('MANAGE_HUB')) loadGateway(); else $('gwBox').hidden = true;
 }
 // PGM Gateway products (the Rust hub's; without it the box stays hidden)
 async function loadGateway() {
@@ -5999,8 +6495,9 @@ $('gwAdd').onclick = () => adminCall('gateway/products', { id: $('gwId').value.t
   adminOut(`${d.product.id}: added. Its secret is in ${d.product.secretFile} on this server (owner only); point the product's config there.${d.product.path ? ` It is served at ${d.product.path}.` : ''}`);
   $('gwId').value = ''; $('gwName').value = ''; $('gwPort').value = ''; $('gwAi').checked = false;
 });
-$('createUser').onclick = () => adminCall('create', { username: $('newUser').value.trim().toLowerCase(), display: $('newDisplay').value.trim(), admin: $('newAdmin').checked }, (d) => {
+$('createUser').onclick = () => adminCall('create', { username: $('newUser').value.trim().toLowerCase(), display: $('newDisplay').value.trim(), admin: !SITEADMIN.has() && $('newAdmin').checked }, async (d) => {
   adminOut(`Account created.\nUsername: ${d.username}\nPassword: ${d.password}\nAddress: ${location.origin}${location.pathname}`);
+  await SITEADMIN.afterCreate(d.username, adminOut);
   $('newUser').value = ''; $('newDisplay').value = ''; $('newAdmin').checked = false;
 });
 $('adminRefresh').onclick = loadAdmin;
@@ -6012,7 +6509,7 @@ $('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminC
 // (api() signs out then); any other failure keeps it and shows the sign-in page with what went wrong.
 // Never a black page: when no screen at all is showing and something failed (or opening takes over 20 s), the sign-in
 // form comes back and says what went wrong (the session is kept; it is also in the browser console).
-const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows'];
+const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'aiAdmin', 'settingsPage', 'board', 'cal', 'assist', 'notes', 'library', 'workflows'];
 function nothingShown() { return SCREENS.every((id) => !$(id) || $(id).hidden); }
 function bootTrouble(msg) {
   if (!nothingShown()) return;
@@ -6044,6 +6541,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 <script src="guild-settings.js"></script>
 <!-- profiles: Settings tabs (Profile / App settings / Connections), the profile editor and profile cards: web/profile.js -->
 <script src="profile.js"></script>
+<!-- Site admin's roles and site-wide settings, and AI Admin (T-379) -->
+<script src="siteadmin.js"></script>
+<script src="aiadmin.js"></script>
 <script src="notes.js"></script>
 <script src="library.js"></script>
 <!-- the visual editor foundation (T-205): the core logic, the SVG view, the Hyper Workflows plugin, a stub page-elements plugin, and the Workflows screen -->

@@ -52,19 +52,32 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
         _ => {}
     }
     if !p.starts_with("/api/admin/") || !matches!(p, "/api/admin/accounts" | "/api/admin/create" | "/api/admin/delete" | "/api/admin/restart" | "/api/admin/stop" | "/api/admin/set-admin") { return None; }
-    if !a.admin { return Some(answer(403, json!({ "error": "Admins only." }))); }
+    // each one its site permission (T-379); acting on an account also needs your role above theirs
+    use pgm_identity_internal::siteroles as sr;
+    let perm = match p { "/api/admin/accounts" => sr::VIEW_ACCOUNTS, "/api/admin/restart" => sr::MANAGE_HUB, "/api/admin/set-admin" => sr::MANAGE_ROLES, _ => sr::MANAGE_ACCOUNTS };
+    if let Some(x) = super::siteadmin::need(hub, &a.username, perm) { return Some(x); }
     let au = &hub.mods.auth; let b = r.json();
     let target = || b["username"].as_str().and_then(|u| au.account(u));
     Some(match p {
-        "/api/admin/accounts" if get => answer(200, json!({ "accounts": au.accounts().iter().map(|x| summary(hub, x)).collect::<Vec<_>>(), "me": a.username })),
+        "/api/admin/accounts" if get => {
+            // each account's role too (add-only)
+            let s = au.site_roles();
+            answer(200, json!({ "accounts": au.accounts().iter().map(|x| { let mut v = summary(hub, x); v["role"] = s.role_of(&x.username).brief(); v }).collect::<Vec<_>>(), "me": a.username }))
+        }
         "/api/admin/create" if post => {
+            // the new account's role: Admin when asked for (as before), else the site's newAccountRole; only one below yours
+            let s = au.site_roles();
+            let role_id = if super::unity::truthy(&b["admin"]) { "admin".to_string() } else { sr::settings(&hub.root)["newAccountRole"].as_str().unwrap_or("member").to_string() };
+            let role = s.get(&role_id).unwrap_or_else(|| s.get("member").expect("member"));
+            if let Err(e) = s.may_handle(&a.username, &role) { return Some(answer(403, json!({ "error": format!("A new account would get the role {}: {e}", role.name) }))); }
             let u = b["username"].as_str().unwrap_or("").trim().to_lowercase();
             if !super::auth::valid_username(&u) { return Some(answer(400, json!({ "error": "Usernames use lowercase letters, digits and dashes (max 32)." }))); }
             let dir = hub.root.join("profiles").join(&u);
             if au.account(&u).is_some() || dir.exists() { return Some(answer(400, json!({ "error": "That username is taken." }))); }
             let _ = std::fs::create_dir_all(&dir);
             let display = { let d: String = b["display"].as_str().unwrap_or("").trim().chars().take(40).collect(); if d.is_empty() { let mut x = u.clone(); if let Some(f) = x.get_mut(0..1) { f.make_ascii_uppercase(); } x } else { d } };
-            let mut cfg = json!({ "user": display }); if super::unity::truthy(&b["admin"]) { cfg["admin"] = json!(true); }
+            // a Member is written as before (no siteRole); any other role by name, with the admin flag that goes with it
+            let mut cfg = json!({ "user": display }); if role.id != "member" { cfg["siteRole"] = json!(role.id); } if role.admin_flag() { cfg["admin"] = json!(true); }
             super::unity::write_json(&dir.join("config.json"), &cfg);
             let pw = super::auth::new_password();
             super::unity::write_json(&dir.join("auth.json"), &super::auth::hash_password(&pw)); vr_core::settings::private(&dir.join("auth.json"));
@@ -72,11 +85,12 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             accounts_changed(hub).await;
             answer(200, json!({ "username": u, "password": pw }))
         }
-        "/api/admin/stop" if post => { let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) }; hub.mods.work.stop(&**hub, &t.username); hub.mods.api.stop(&t.username); hub.mods.unity.stop(&t.username); answer(200, json!({ "ok": true })) }
+        "/api/admin/stop" if post => { let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) }; if let Some(x) = super::siteadmin::may_act(hub, &a.username, &t.username, true) { return Some(x); } hub.mods.work.stop(&**hub, &t.username); hub.mods.api.stop(&t.username); hub.mods.unity.stop(&t.username); answer(200, json!({ "ok": true })) }
         "/api/admin/delete" if post => {
             let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) };
             if t.username == a.username { return Some(answer(400, json!({ "error": "You cannot delete your own account." }))); }
             if t.dir == hub.root { return Some(answer(400, json!({ "error": format!("The \"{}\" account lives in bridge/ itself and cannot be deleted here.", t.username) }))); }
+            if let Some(x) = super::siteadmin::may_act(hub, &a.username, &t.username, false) { return Some(x); }
             let (w, c) = (&hub.mods.work, &hub.mods.chat); let u = &t.username;
             w.stop(&**hub, u); hub.mods.unity.stop(u); au.drop_sessions(u); au.unlock(u); w.share_stop(u); w.forget(u); super::chat::calls_leave(&**hub, u);
             let us: Vec<(String, String, bool)> = au.accounts().into_iter().map(|x| (x.username, x.display, x.admin)).collect();
@@ -90,25 +104,21 @@ pub async fn route(hub: &Arc<Hub>, r: &Req, a: &Account) -> Option<Routed> {
             answer(200, json!({ "ok": true }))
         }
         "/api/admin/restart" if post => { let _ = std::fs::write(hub.root.join(".restart"), format!("{}\n", super::auth::iso_now())); answer(200, json!({ "ok": true, "supervised": std::env::var("MILLS_SUPERVISED").is_ok() })) }
-        // an account made an admin, or not (never yourself: there is always one left). A profile's flag goes into its
-        // config.json; the default account's into config.local.json (its own settings stay out of the tracked config.json),
-        // which keeps its permissions (it holds the hosts' secrets).
+        // an account made an admin, or not (never yourself: there is always one left): since T-379 the site role Admin, or
+        // Member, given as /api/admin/roles/assign gives it (your role above theirs, the role below yours). The flag goes
+        // with the role into a profile's config.json (the default account's config.local.json, its permissions kept).
         "/api/admin/set-admin" if post => {
             let Some(t) = target() else { return Some(answer(400, json!({ "error": "No such account." }))) };
             let on = b["admin"] == json!(true);
             if t.username == a.username && !on { return Some(answer(400, json!({ "error": "You cannot remove your own admin: another admin can." }))); }
-            let f = if t.dir == hub.root { hub.root.join("config.local.json") } else { t.dir.join("config.json") };
-            let mode = std::fs::metadata(&f).ok().map(|m| m.permissions());
-            let mut c = pgm_core_internal::json::read_json(&f).filter(Value::is_object).unwrap_or_else(|| json!({}));
-            if on { c["admin"] = json!(true); } else if let Some(m) = c.as_object_mut() { m.remove("admin"); }
-            super::unity::write_json(&f, &c);
-            if let Some(m) = mode { let _ = std::fs::set_permissions(&f, m); } else if t.dir == hub.root { vr_core::settings::private(&f); }
-            println!("[vr-hub] {} {} \"{}\"{}.", a.username, if on { "made" } else { "removed" }, t.username, if on { " an admin" } else { " as admin" });
-            accounts_changed(hub).await;
-            answer(200, json!({ "username": t.username, "admin": au.is_admin(&t.username) }))
+            if let Some(x) = super::siteadmin::may_act(hub, &a.username, &t.username, false) { return Some(x); }
+            let s = au.site_roles(); let role = s.get(if on { "admin" } else { "member" }).expect("builtin role");
+            if let Err(e) = s.may_handle(&a.username, &role) { return Some(answer(403, json!({ "error": e }))); }
+            if let Err(e) = super::siteadmin::give(hub, &a.username, &t.username, &role).await { return Some(answer(400, json!({ "error": e }))); }
+            answer(200, json!({ "username": t.username, "admin": au.is_admin(&t.username), "role": role.id }))
         }
         _ => answer(404, json!({ "error": "Unknown admin endpoint" })),
     })
 }
 /// The JavaScript hub (still answering a few routes) reads the accounts again.
-async fn accounts_changed(hub: &Hub) { crate::front::internal(hub, "/internal/front/accounts-changed", "{}".into()).await; }
+pub(crate) async fn accounts_changed(hub: &Hub) { crate::front::internal(hub, "/internal/front/accounts-changed", "{}".into()).await; }

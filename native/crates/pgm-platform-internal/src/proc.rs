@@ -93,7 +93,7 @@ pub fn spawn_detached(exe: &str, args: &[String], dir: &Path, log: &Path) -> std
     let mut c = { #[allow(unused_mut)] let mut c = std::process::Command::new(exe); #[cfg(windows)] { { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }; } /* CREATE_NO_WINDOW */ c };
     c.args(args).current_dir(dir).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log);
     #[cfg(windows)]
-    { use std::os::windows::process::CommandExt; c.creation_flags(CREATE_NO_WINDOW | 0x0000_0008 /* DETACHED_PROCESS */); }
+    { use std::os::windows::process::CommandExt; c.creation_flags(CREATE_NO_WINDOW | 0x0000_0200 /* CREATE_NEW_PROCESS_GROUP: a hidden console of its own, not DETACHED_PROCESS (no console at all), so the console programs it starts (ollama runners, nvidia-smi, python helpers) never pop a window */); }
     #[cfg(unix)]
     { use std::os::unix::process::CommandExt; c.process_group(0); }
     c.spawn().map(|_| ())

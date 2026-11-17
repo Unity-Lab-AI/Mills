@@ -188,7 +188,7 @@ pub fn install_to(args: &[&str], say: &mut dyn FnMut(String)) -> i32 {
         let gone = old_shortcuts();
         if gone > 0 { say(format!("Removed {gone} shortcut(s) of the earlier JavaScript host's separate start / stop programs.")); }
         log(format!("installed VibeRoller AI Host (native) {} into {}", crate::runner::VERSION, target.display()));
-        say(format!("Installed into {}{}.", target.display(), if fresh { " (no ai-node.json yet: run `vr-host` to set it up, or VibeRoller → Settings → My AI hosts makes one)" } else { "" }));
+        say(format!("Installed into {}{}.", target.display(), if fresh { " (no ai-node.json yet: run `vr-host` to set it up, or VibeRoller → AI Admin → My AI hosts makes one)" } else { "" }));
     }
     // vr-host on the PATH, and whatever else the installed program needs (see ensure_setup)
     match path_step(&home(), &target_exe) { Some((m, _)) => say(m), None => {} }

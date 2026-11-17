@@ -10,6 +10,10 @@
 //!   capped)
 //! - [`openai`]: providers (keys, endpoints, logins; admin-only kinds) and the inference APIs: OpenAI- and
 //!   Anthropic-compatible /v1 (plain + streaming, format conversion), per-person API keys
+//! - [`openrouter`]: the `openrouter` provider kind (pairs, OpenRouter's routing and usage on every request), the month budget per
+//!   person, and the split routing of Work (Jcode PGM on the server for the providers the hub calls itself, through the run relay)
+//! - [`gateway`], [`xlate`]: the API gateway's raw passthroughs (Anthropic `/v1/messages`, OpenAI `/v1/chat/completions`) and
+//!   the cross-format translation between the two (requests, answers, streams, tool calls)
 //! - [`work`]: AI coding runs (Claude Code here, relayed to a host's login, or on an older host), their log + attach /
 //!   follow, the MCP tool relays (pc / board / team), shared sessions, projects, past sessions
 //! - [`planner`]: planner mode's deterministic helpers (parse an idea list, find what already exists, roles and owners,
@@ -29,6 +33,8 @@
 //!   each stdout line onto the one hub event shape ([`harness::HubEvent`])
 //! - [`jcode`]: Jcode PGM as a Work harness (a `jcode` provider: `jcodepgm run --ndjson` in the worktree, a private
 //!   jcode home per person, its events mapped onto the page's event shape)
+//! - [`pgm_work`]: Work on a PGM session through the Jcode PGM Server next to the hub (T-376 stage 3): create, message, its
+//!   events onto the page's event shape, stop, its sessions in the list and opened from it
 
 pub mod agents;
 pub mod ai_hosts;
@@ -36,6 +42,7 @@ pub mod ai_peer;
 pub mod enhance;
 pub mod fj;
 pub mod gitpanel;
+pub mod gateway;
 pub mod harness;
 pub mod host;
 pub mod hub;
@@ -44,12 +51,15 @@ pub mod local_proxy;
 pub mod machine_jobs;
 pub mod machine_transfer;
 pub mod openai;
+pub mod openrouter;
+pub mod pgm_work;
 pub mod plan;
 pub mod planner;
 pub mod projects;
 pub mod questions;
 pub mod sessions;
 pub mod toolconv;
+pub mod transfer;
 pub mod unity;
 pub mod unity_brain;
 pub mod unity_routes;
@@ -57,3 +67,4 @@ pub mod unity_time;
 pub mod unity_web;
 pub mod usage;
 pub mod work;
+pub mod xlate;

@@ -7,6 +7,475 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.70.5 — 2026-11-17
+
+PATCH: **No more console windows popping up and stealing focus on Windows**, and the regression suite runs clean on Windows (from
+Gee: "it keeps opening cmd prompts or powershell or something, and when im in programs doing stuff it interrupts me and breaks
+what ever program im in"; "fix what failed and make sure its not old shit thats not suppose to work any more and fix the smoke
+test that u ran if it is out dated").
+
+### Fixed
+- The AI host started Ollama, the Python engines and its own background copy with no console at all (DETACHED_PROCESS), so every
+  console program those started (Ollama's llama-server / gpu-discover on each model load, nvidia-smi, Python helpers) opened a
+  console window of its own that flashed and took keyboard/mouse focus, in waves at start-up and on every model load/unload. They
+  now get a hidden console of their own (CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP), which their children share: no windows.
+  Native `proc::spawn_detached`, the hub's Ollama/engine starter and the desktop app's image-engine switch.
+- Tests that only worked on Linux now run on Windows too (Linux expectations unchanged): the linked-machines library tests
+  (Windows paths escaped in JSON, Linux-path tests say so), the Brain Modelfile test, the native host's update test (a local MSVC
+  build has no release to update to: said, not failed), its log (the host writes ai-node.log without a terminal), the control
+  app's private-file check (Windows has no Unix modes), the worktree renew (Git for Windows checks out CRLF), Files / attachments
+  (the stand-in passwd had a drive-letter colon; Windows refuses the execute bit by design). The Windows run of the
+  linked-machines tests is done (README).
+
+- A newly linked computer's folder is read with that computer's own path rules (the OS it names at linking), not the hub's: a
+  Windows computer's `C:\...` folder linked to the Linux hub (or a Linux one to a Windows hub) showed "nothing allowed" as its scope
+  summary. `pgm-identity-internal` devices.
+
+### Added
+- Regression check R643: nothing native starts a program with DETACHED_PROCESS again.
+## 5.70.4 — 2026-11-17
+
+PATCH: **the release summary: everything on dev since live 5.57.4** (no code change; the detail of each item is in its own
+section below). Live runs 5.57.5 (5.57.4 plus the Windows Tools hotfix); dev runs this.
+
+### Hotfix
+- **The Tools window opens on Windows** (5.57.5 on main, 5.70.2 on develop): the desktop app's Tools window came up pure
+  white and the app froze, because WebView2 was built inside the click's own handler. It now opens off that handler, and
+  the tray's "Desktop Unity" entry lands on its tab. Linux was never affected.
+
+### The API gateway (T-369, 5.58.0–5.60.0)
+- **Several named API keys per person**, each narrowable to providers and models, with an expiry and its own limit on
+  simultaneous requests; create, revoke and first daily use go into the security log.
+- **Model routing:** a `model` finds the right provider among everything you may use (your own and what others share);
+  `/v1/models` lists them all.
+- **All three API formats to every provider:** Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` pass through
+  untouched to the provider that speaks them; the Responses API `/v1/responses` (Codex) works too; mixed formats are
+  translated both ways, tools and streaming included. What cannot be translated faithfully is refused with the reason.
+  A Claude subscription login is never disguised as Claude Code for other tools (a plain 403 instead).
+- **Settings → API access:** the keys list, usage per key (per day, per model) and **Connect a tool** (copy-ready setups
+  for Claude Code, Codex, jcode, opencode, Cursor / Continue and curl).
+- **Fixed:** several Work sessions starting at once could fail with "Could not prepare your worktree" (one git worktree
+  cleanup could delete another session's half-made folder); worktree changes are now one at a time.
+
+### OpenRouter (T-370, T-372; 5.61.0–5.63.0)
+- **OpenRouter as a team provider:** an admin adds the team key and a list of model + provider pairs; only those are
+  offered.
+- **A monthly budget per person** (default $20, per-person caps): every answer's cost is counted; at the cap a clear
+  refusal names the cap and the reset date before OpenRouter is asked.
+- **Work on OpenRouter runs Jcode PGM on the server**, no PC involved; the key never enters the run (a private per-run
+  relay adds it and counts the cost).
+- **Opt-in fallback:** when your Claude host is offline or capped, your Work session can use an OpenRouter model, and the
+  transcript says so.
+- **Your own OpenRouter key:** paste, test, remove; stored owner-only and never shown back; "my OpenRouter" is offered only
+  to you; you pay OpenRouter directly (no hub budget, your spend still shown). An admin can switch personal keys off.
+
+### Jcode PGM and VibeRoller together (T-371, T-373/374, T-375, T-376; 5.64.0–5.67.0)
+- **Sign in to Jcode PGM from the browser:** jcode opens a VibeRoller page that asks "Link this device?"; Approve gives the
+  device its own token, listed and revocable under Signed-in devices (a one-time code with PKCE).
+- **Jcode PGM Desktop** holds the VibeRoller app in one program (a launcher with Jcode and VibeRoller, Exit to menu in
+  both); the hub page knows that window; Linux and Windows builds; it is in the Downloads.
+- **`/transfer` in Work:** a handoff (goal, done, state, decisions, next steps, the important files) from the session and
+  its worktree, then a fresh "(continued)" session in the same worktree that starts from it; the two are linked both
+  ways and board claims move over.
+- **Jcode PGM Server** next to the hub (dev: port 7783): every Jcode PGM gets the team's OpenRouter models, VibeRoller login
+  required, encrypted between jcode and the server, the same budgets and security log. **One session across the
+  website and jcode:** Work on OpenRouter runs through the server; a website message goes to your open jcode;
+  `/onserver` hands unfinished work to the server (commit + push first); jcode's sessions show in the website's list.
+
+### The menu, Settings, Downloads (T-377, T-378, T-380; 5.68.0, 5.69.0, 5.70.3)
+- **The main menu** in sections (Productivity two to a row, Utility, AI, Administration); "Also here" as rounded buttons;
+  an empty section hides itself; Settings and **Downloads** are small buttons under My status / Team now.
+- **Downloads is its own window** with a **Jcode PGM** section (Jcode PGM and Jcode PGM Desktop: newest first with your
+  platform's file, other platforms and older versions below).
+- **Settings** in five tabs: Profile, App, Work, Sound & voice, Connections, one Save bar for the ones that need it. From
+  the main menu it is **a page of its own**; from Work, chat or anywhere else it is the modal; one Settings moves between
+  the two, so the options are always the same.
+- **Desktop Unity is off by default** (website and desktop app); only Settings turns her on, never a chat order.
+
+### Site admin and AI Admin (T-379; 5.70.0, 5.70.1)
+- **Site roles on the chat servers' ladder:** Member, Moderator, Super Moderator, Admin, Super Admin, Co-owner, plus custom
+  roles in between, each a set of permissions (view / manage accounts, manage roles, manage the hub, view health, view the
+  security log, manage AI, view AI hosts, Administrator). Existing admins keep full permissions (Super Admin); the hub's
+  own account is Co-owner, above everyone. You change only people and roles below you and give only permissions you hold.
+  The hub checks every admin action and names the missing permission.
+- **Site admin** (was Admin): accounts with role pickers, the roles and permissions editor, **site-wide settings** (a
+  message on everyone's menu, the default theme, the role new accounts get), hub controls, health, the security log and
+  gateway products, each shown to the roles allowed it.
+- **AI Admin** (open to everyone): **Global** (Manage AI): the default AI for everyone (no restart needed), the team's
+  OpenRouter (key, models, the personal-keys switch, everyone's spend and caps), Unity's PC tools per person, and the AI
+  hosts on the hub (also View AI hosts). **Yours** under a line, moved out of Settings: AI source, My AIs, **My OpenRouter**
+  with **"Which key pays: the team's or my own"**, and My AI hosts.
+- Both admin pages scroll as a whole page, the scrollbar at the window edge.
+
+### Where it stands
+- Dev: VibeRoller 5.70.4; Jcode PGM 0.99.10 and Jcode PGM Desktop 0.8.3 published as pre-releases. Live: 5.57.5, until
+  Sponge has tried dev and says to go live.
+- Every step passed both suite modes with 0 failed and kept the JavaScript fallback hub working; about 80 new checks
+  (R560–R642).
+
+## 5.70.3 — 2026-11-16
+
+PATCH: **Settings is a page of its own from the main menu** (T-380, from Sponge). The main menu's Settings opens a screen like the
+others (← Menu, the whole page scrolls with the scrollbar at the window edge, the tabs stay on top and Save at the bottom).
+Settings in Work, the chat app, a profile card or /settings stays the modal. Both are the same Settings: the one element
+moves between the page and the modal (settingsAs()), so the options never differ. web/index.html 1.54.1, web/polish.css
+1.1.2. New check R642.
+
+## 5.70.2 — 2026-11-16
+
+PATCH: **the Tools window opens on Windows.** Opening it from the site's Tools tile or the tray built the WebView2
+window inside the click's own handler, which deadlocks on Windows: the window came up pure white and the app stopped
+answering. The command is now async and every tray entry opens the window on its own thread (`tauri-apps/wry#583`);
+a fresh window also opens the tab its address names (`tools.html#unity`), so the tray's Desktop Unity entry lands
+there. Linux was unaffected. `native/crates/vr-desktop/src/main.rs`, `ui/tools.js`. R165 holds that every way of
+opening the window stays off the event loop. (The same fix ships to main as 5.57.5.)
+
+## 5.70.1 — 2026-11-16
+
+PATCH: **Site admin and AI Admin scroll as a whole page** (T-379 follow-up, from Sponge on dev). The scrolling box was the centred
+1000px column itself, so the wheel only worked with the mouse over it and its scrollbar sat in the middle of the page next
+to the boxes. Now the screen's body spans the window and scrolls, its scrollbar at the window edge; the content stays a
+centred column by its padding. web/polish.css 1.1.1. R641 now checks it (it failed before the fix).
+
+## 5.70.0 — 2026-11-16
+
+MINOR: **Site admin with site roles, AI Admin, and a calmer menu** (T-379).
+
+- **Site roles** use the chat servers' ladder and model:
+  - The ladder: Member 10, Moderator 20, Super Moderator 30, Admin 40, Super Admin 50 and Co-owner 60, plus custom roles in between. Each role is a set of site permissions:
+    - **Accounts:** View accounts, Manage accounts, Manage roles.
+    - **Hub:** Manage hub, View health, View security log.
+    - **AI:** Manage AI, View AI hosts.
+    - **Advanced:** Administrator, which grants everything.
+  - The model lives in the library pgm-identity-internal (`siteroles.rs`); the routes are in vr-hub (`siteadmin.rs`).
+  - **Existing admins keep full permissions**: they are Super Admin. The hub's own account is Co-owner and ranks above every role.
+  - **Rank rules:** you change only people and roles strictly below your own, give only permissions you hold, and never change your own role.
+  - **The admin flag follows the role** (Super Admin, Co-owner, or Admin and up), so the JavaScript hub and older code keep working.
+  - **Every admin route checks its permission.** A refusal says which permission is missing.
+  - **Storage:** an account's role is stored add-only as `siteRole` in its config; custom roles are in `site-roles.json`. Both travel over the dev↔live data bridge.
+- **Site admin** (was Admin) has five groups:
+  - Accounts, each with a role picker.
+  - Roles and permissions: the ladder, each role's permissions, and making, changing and deleting custom roles.
+  - Site-wide settings: a message on everyone's menu, the default theme for people who never picked one, and the role new accounts get.
+  - The hub: restart and clear chat.
+  - Health, the security log and PGM Gateway, each shown to the roles allowed it.
+- **AI Admin** is open to everyone:
+  - **Global** (top, for Manage AI): Default AI for everyone, which is now changeable without a restart; Team OpenRouter (the team key and models, the personal-keys switch, everyone's month and caps); and Unity's own-computer tools per person.
+  - **AI hosts on this hub** is also in Global, for Manage AI or View AI hosts.
+  - **Yours** (under a line, moved out of Settings): AI source, My AIs, My OpenRouter, My AI hosts. My OpenRouter now chooses **which key pays**, the team's or your own.
+- **The menu:** Settings and Downloads (renamed from Download) are small buttons under My status / Team now, with no description lines. Productivity shows two tiles to a row. Administration holds Site admin and AI Admin.
+- **Settings** keeps five tabs: Profile, App (look, Desktop Unity), Work (Chat and Work, My projects, When the AI asks), Sound & voice, and Connections.
+- **Texts in the hub, the AI host and the desktop app** now point to AI Admin.
+- **Versions:** web/index.html 1.54.0, web/polish.css 1.1.0, web/localai.js 1.0.1, new web/siteadmin.js and web/aiadmin.js 1.0.0, the native programs with the project.
+- **Checks:**
+  - New R637 (site roles), R638 (custom roles), R639 (site settings; a theme id with an underscore was refused before this fix), R640 (AI admin) and R641 (the page: menu, who sees what).
+  - R142, R546, R634 and R635 follow the new layout.
+
+## 5.69.0 — 2026-11-16
+
+MINOR: **Settings in five tabs, Downloads in its own window, Desktop Unity off by default** (T-378).
+
+- **Settings is about your own account, in five tabs:**
+  - **Profile:** what others see.
+  - **App:** Appearance, Chat and Work, My projects, When the AI asks, Desktop Unity, the version.
+  - **Sound & voice:** Sounds, Read aloud, Calls and voice clips.
+  - **AI:** AI source, My AIs, OpenRouter budget, My AI hosts.
+  - **Connections:** API access, Signed-in devices, My machines, My Forgejo.
+- **One Save bar** at the bottom of the box saves App and Sound & voice. It shows only while one of those tabs is open, or while a search finds something there. The other tabs save as you go, as before.
+- **Downloads is a window of its own** and no longer a Settings tab. Every Download button opens it.
+  - Jcode PGM and Jcode PGM Desktop have their own section: the newest version with your platform's files first, then other platforms and older versions.
+  - The team's other products are listed below it.
+- **Desktop Unity is off until you turn her on** in Settings → App → Desktop Unity. This applies on the website and in the desktop app. A chat order ("show", a walk) never turns her on; `vr-desktop --companion show` on the PC still does.
+- web/index.html 1.53.0, web/polish.css 1.0.5, web/profile.js 1.2.0, web/deskunity.js 1.3.0, web/app.js 1.1.4, vr-desktop (with the project).
+- **Checks:**
+  - New R635 for Settings, Downloads and the website's Desktop Unity.
+  - New R636: the desktop app's unit test that she is off until turned on.
+  - R142 and R546 follow the new layout.
+
+## 5.68.0 — 2026-11-16
+
+MINOR: **the main menu in four sections** (T-377).
+
+- **Four headed sections of tiles:** Productivity (Work, Chat, Board, Calendar), Utility (Workflows, Files, Notes,
+  Tools), AI (Agents, Unity) and Administration (Settings, Download, Admin, Exit to menu). Settings and Download are
+  tiles in Administration now, no longer separate buttons below the menu; Sign out stays below on its own. A section
+  whose tiles are all hidden (no Admin, Agents off, …) hides itself and follows later changes.
+- **"Also here" as buttons:** the PGM products are rounded-rectangle buttons instead of links, with the same targets.
+- web/index.html 1.52.0, web/polish.css 1.0.4. New check R634; R142 now finds Download next to Settings in the
+  Administration section.
+
+## 5.67.0 — 2026-11-16
+
+MINOR: **one session across the website and jcode, through Jcode PGM Server** (T-376 stage 3, hub side; spec
+plans/jcode-pgm-server-stage3.md F.3, F.4, F.8; Jcode PGM 0.99.9 is the server and jcode side).
+
+- **Work on OpenRouter goes through the server.** When the hub has a Jcode PGM Server (`pgmServer`) and a Work session's
+  AI is the team's or your own OpenRouter, the run no longer starts `jcodepgm` itself: the hub creates a PGM session on
+  the server (its project, branch, model pair and worktree) and sends each message to it, passing the MCP tools and
+  prompt Work runs get; the server's events are drawn as an ordinary Work transcript, and Stop tells the server first.
+  The Work session keeps the PGM session's id (`pgm: {id}`, add-only). Without a server: the old engine, unchanged.
+- **Messages go where the work is.** If your jcode is open and running that session, a message from the website goes
+  to it ("sent to jcode on <device>") and jcode's own turns appear live. `/onserver` (or "continue on the server")
+  asks for the run to happen on the server: with jcode open, it first commits and pushes your unfinished work and
+  the server checks it out ("handed over from <device>: <branch> @ <commit>"); with jcode closed, the server continues
+  from your last push and says so; never pushed, a plain refusal.
+- **Your jcode sessions are in the list.** PGM sessions started in jcode show in the website's session list
+  ("running in jcode on <device>" / "on the server"); opening one shows its transcript live and sending continues it.
+- web/index.html 1.51.0, web/sessions.js 1.2.2. Checks R627–R633 (R633 runs the real `jcodepgm server` when
+  `VR_TEST_JCODEPGM` points at one).
+
+## 5.66.0 — 2026-11-16
+
+MINOR: **the hub side of Jcode PGM Server, stage 1** (T-376; spec plans/jcode-pgm-server.md; Sponge, 2026-11-16: a
+server variant of Jcode PGM next to the hub as the team's remote gateway: the team's OpenRouter models in every Jcode PGM
+through an OpenRouter-shaped `pgm` provider, encrypted between client and server, VibeRoller login required, backwards
+compatible from day 1). Jcode PGM 0.99.8 is the other half (`jcodepgm server`, the `pgm` provider, the `pgm-wire`
+protocol).
+
+- **`/pgm/*` forward** to the server (config `pgmServer.url`, loopback only): streamed both ways without reading the
+  body; every request needs a VibeRoller device token or page session except `GET /pgm/info`; linked-machine tokens are
+  refused; the client's `authorization`, `cookie`, `x-pgm-*` and `x-vr-*` headers are stripped and the hub adds
+  `x-pgm-hub-user` (who the person is, HMAC-signed with the shared secret). No server configured: a plain 404.
+- **`/__pgm/*`, the server's API** (from this machine only, no proxy headers, `x-pgm-secret` from
+  `bridge/pgm-server.secret`, made owner-only at start): `whoami`, `models` (the Work dropdown's OpenRouter pairs, team and
+  your own, and your month budget), `route` (the key for exactly one request; refused when not allowed or over the team
+  budget), `charge` (the same budget, usage and ledger records as the hub's own OpenRouter calls), `sessions/report`.
+  The hub never decrypts the client ⇄ server envelope. Every call is in the security log, never with a key or token.
+  `/__sync/*` now uses the same local gate.
+- **`/api/check`** gives `pgmServer: {url, signKey}` when a server is configured (the sign key from the server's
+  `server.json`, config `pgmServer.stateFile`, or `pgmServer.signKey`), so jcode pins the server's key from your login.
+- `bridge/pgm-server.secret` is hub data: gitignored, in the deploy snapshot, pack-data, restore and the handoff
+  (handoff.js 1.2.6). Config keys: `pgmServer.url`, `pgmServer.stateFile`, `pgmServer.signKey`. Checks R620–R626.
+
+## 5.65.0 — 2026-11-16
+
+MINOR: **`/transfer` in Work: a handoff and a fresh session that picks up where the last one left off** (T-375; Sponge,
+2026-11-16: the command Jcode PGM already has, "compacts the session + generates a fresh handoff, and will spawn a new
+session with the compacted information and handoff … account for selected projects, files, and everything else").
+
+- **What it does** (`POST /api/work/sessions/transfer {session, focus?, keepWorktree?}`; `/transfer [focus]` typed, or
+  from the Commands panel with a confirm and a focus box):
+  1. reads the session's worktree (branch, `git status`, the last commits) and the files its runs edited and read;
+  2. writes a **handoff** (goal, done, state, decisions, open problems, next steps, the important files) with a
+     throw-away model call through the session's own AI (Claude through `claude -p` and the relay, as the prompt enhancer
+     does; an OpenRouter / Jcode PGM session through its provider, key and budget); the exact git facts are appended;
+     if no such call is possible or it fails, a plain structured handoff is built without a model and says why;
+  3. makes a **new session** with the same project, provider, model, harness and mode, in the old session's folder,
+     titled "… (continued)", linked both ways (`transferredFrom` / `transferredTo`), working in **the same worktree** so
+     uncommitted work carries on (`keepWorktree: false` gives it a fresh one), with the old session's queued messages;
+  4. starts it with the handoff as its first message (`[transfer from session <title> · <date>]` and an instruction to
+     confirm where things stand and what it will do next, without redoing finished work; attachments still referenced
+     come along) and opens it; over the session limit, the handoff waits in its queue;
+  5. puts a handoff note on board tasks the old session's runs left claimed, naming the new session.
+- **The old session** stays in the list ("transferred → …"; a bar "Transferred to …" / "Continued from …" links the
+  two); its runs, Git-panel actions and merge-home are refused with the new session's name. Deleting it leaves the
+  worktree with the new session; deleting the new one returns it. Agent messages to a transferred session go to the one
+  it continued in. Add-only session fields `tree` / `treeGivenTo`. The handoff is kept in the new session, never written
+  into the worktree. Refused: a working session (409), one already transferred or being transferred (409), someone
+  else's (404), an empty one (400).
+- New module `transfer.rs`. web/index.html 1.50.0, web/sessions.js 1.2.1. Checks R614–R619.
+
+## 5.64.2 — 2026-11-16
+
+PATCH: **the hub page knows Jcode PGM Desktop's VibeRoller window** (T-373; Jcode PGM Desktop 0.7.0 merges the
+VibeRoller app into one program: a menu with "Jcode" and "VibeRoller", Exit to menu in both). That window shows this
+page in a native webview and offers its own small bridge, `window.__PGM_DESKTOP__` (exitToMenu, notify, openExternal);
+it is not Tauri. When the bridge is there (and has `exitToMenu`), the page shows an **Exit to menu** tile on its menu
+that goes back to the app's launcher, and sends its notifications (a mention while away, "user action required")
+through the app. In a browser and in the Tauri app nothing changes. The window signs the page in with the app's linked
+device token through the page's own session storage, so no page change was needed for that. web/index.html 1.49.1.
+Check R613.
+
+## 5.64.1 — 2026-11-16
+
+PATCH: **the Downloads offer Jcode PGM Desktop too.** With no `releases` in the config, the Products list now has five
+entries: ShaDow Chat, Hyper Prod Man, Prod Suit, Jcode PGM and **Jcode PGM Desktop** (its releases come from
+UnityAILab/Jcode-PGM-Desktop-releases, like Jcode PGM's from Jcode-PGM-releases). A unit test checks both Jcode products
+are on the default list.
+
+## 5.64.0 — 2026-11-16
+
+MINOR: **sign in to Jcode PGM from the browser** (T-371, hub side; plans/pgm-accounts-keys-app.md § 1; Sponge,
+2026-11-15: link our accounts onto Jcode PGM's TUI and Desktop by signing in to the hub, or through the browser). Jcode
+PGM 0.99.6 is the other half.
+
+- **The flow** (authorization code with PKCE and a loopback redirect): jcode opens `/app-signin?client&device&redirect
+  &state&challenge`; the page (the site's normal sign-in first if needed) asks "Link <device> to your account?";
+  Approve gives jcode a one-time code on its local callback, and jcode exchanges it with its PKCE verifier for a
+  per-device token: the same kind the device-code sign-in makes, listed under Settings → Signed-in devices by the
+  device's name and revocable there.
+- **Routes:** `GET /api/app-signin/check` (the page validates a request before showing it), `POST /api/app-signin/
+  authorize` (signed in; a linked-machine token may not) and `POST /api/app-signin/exchange` (no sign-in). Only
+  `http://127.0.0.1:<port>/cb` or `http://localhost:<port>/cb` are accepted as callbacks, and only the clients
+  `jcodepgm` and `jcodepgm-desktop`. A code is single-use, lives 120 s (`appSignin.codeSeconds`), is tied to the
+  person, challenge, callback, client and device, and is kept in memory only; a wrong verifier, callback, client or
+  device burns it, and a code used twice revokes the token it made. Rate-limited per address. The security log has
+  `app-signin.authorize`, `.exchange` and `.refused` (never the code, verifier, token or callback).
+- **The page** (`web/appsignin.html`, `web/appsignin.js` 1.0.0): plain, no inline script, not cached, no referrer;
+  Cancel sends jcode `error=access_denied` only after the request was validated. The device-code sign-in now shares its
+  token-making code with this flow. Checks R600–R605.
+
+## 5.63.0 — 2026-11-16
+
+MINOR: **a person's own OpenRouter key next to the team's** (T-372; plans/pgm-accounts-keys-app.md § 2; Sponge,
+2026-11-15: shared keys, and per-person keys as an option).
+
+- **Your own key.** Settings → OpenRouter budget has "My OpenRouter key": paste (or replace), Test (asks OpenRouter's key
+  endpoint), Remove. It is stored owner-only in your profile (`profiles/<you>/openrouter-key.json`, mode 0600), never
+  shown back (only `…abcd`), never used for anyone else, and never put into a run's command line or environment (a Work
+  run on it goes through the same per-run relay as the team's). Routes `GET/POST /api/openrouter/mykey`,
+  `POST …/mykey/remove` (or DELETE), `POST …/mykey/test`.
+- **"My OpenRouter"** is a provider only you see (`or-me:<you>`): in the Work picker's OpenRouter group, on `/v1/*` as
+  `my/<pair id>` (a plain model id goes to the team's pairs first, then to yours), in `/v1/models` and in the
+  opt-in fallback pick-list. Its pairs are the team's unless you list your own ("My own models").
+- **No hub budget on it**: you pay OpenRouter directly. Your use is still counted for your information
+  (`months[YYYY-MM].mine`, shown as "Your own key" next to the team key's spend). If OpenRouter refuses your key you are
+  told "Your own OpenRouter key was refused" and nothing falls back to the team key.
+- **Admin switch**: `openrouter.personalKeys` (default on; `POST /api/openrouter/personal {on}` from the budget group,
+  admins only, in the security log). Off: no new keys, and existing ones are not offered. Checks R606–R612.
+
+## 5.62.0 — 2026-11-15
+
+MINOR: **OpenRouter Work sessions run Jcode PGM on the server, with an opt-in fallback and the page** (T-370 stage 3;
+plans/split-routing.md). With 5.61.0's provider and budget this completes the split: Claude through an AI host as
+before, or OpenRouter through Jcode PGM with no PC involved.
+
+- **The engine follows the provider.** A Claude provider (an AI host's Claude login, the hub's own Claude, an Anthropic
+  key, claude-cli) runs Claude Code exactly as before. A session on an `openrouter` provider runs `<jcode.command> [jcode.args]
+  run --ndjson --no-update -p openrouter -m <the pair's model> [--resume id] <message>` in the session's worktree, with
+  the same team tools (board, notes, chat, agents) the host-side jcode Work already sets up (shared code, no copy). Config
+  `jcode.command` (empty = off: then the provider is greyed in Work with the reason, not hidden) is read on each use, so
+  an admin needs no restart. `openai` and `host-openai` providers still refuse Work.
+- **The key never enters the run.** jcode gets a per-run relay address (`JCODE_OPENROUTER_API_BASE=http://127.0.0.1:
+  <port>/or-relay/<run token>`, loopback only, forgotten when the run ends) and a dummy key; the relay sends the request
+  through the gateway's chat passthrough with the real key, adds the pair's `provider: {order, allow_fallbacks}`,
+  `usage: {include: true}`, `HTTP-Referer` and `X-Title`, counts the cost against the person's month and refuses at the
+  cap. The environment also sets `JCODE_OPENROUTER_PROVIDER_ORDER`, `JCODE_OPENROUTER_ALLOW_FALLBACKS` and
+  `JCODE_PGM_PROXY_SHARED=off` (one person's cached answer never reaches another's session). Stop kills the process.
+- **Opt-in fallback** (`POST /api/openrouter/fallback {on, provider, pair}`, default off): when the session's Claude host is
+  offline and the person turned it on, the run uses their pair through Jcode PGM and the transcript says so in one
+  line; skipped if `jcode.command` is off or the month cap is reached.
+- **The page.** Settings → My AIs: an admin adds an OpenRouter provider (key field, pairs editor). The Work picker has two
+  groups, "Claude (<host>)" and "OpenRouter". Settings → Connections has an "OpenRouter budget" group: your month with a
+  meter and the fallback switch; admins see everyone's month and set caps. (web/index.html 1.48.0.)
+- To use it on a server: install `jcodepgm` 0.99.5 or newer and set `jcode.command`; add the OpenRouter provider with
+  the key and pairs, and share it; optionally `openrouter.monthlyUsd` and per-person caps. Checks R595–R599 (a fake
+  `jcodepgm` and fake OpenRouter); R546 expects nine groups in Connections now.
+
+## 5.61.0 — 2026-11-15
+
+MINOR: **OpenRouter as a shared provider, with a monthly budget per person** (T-370 stages 1 and 2; plans/split-routing.md;
+Sponge, 2026-11-15: set up OpenRouter next to Gee's Claude so the team's daily load needn't sit on one subscription).
+The Work engine on the server (Jcode PGM) and the page parts follow in the next release.
+
+- **The `openrouter` provider kind** (admin-only, Settings → AI providers' data side): `{kind: "openrouter", apiKey,
+  pairs: [{id, label, model, providers, allowFallbacks}]}`, base URL fixed to openrouter.ai. The key is stored and only
+  `hasKey` is ever shown. Only the **pairs** an admin lists are offered and routed (the pair id is what people pick,
+  also as `model` on `/v1/*`; any other model gets a plain 404). Every request, through the gateway's raw OpenAI
+  passthrough, the Anthropic and Responses translations, tools and streaming, and the hub's own text paths, goes through
+  one function that sends the pair's `provider: {order, allow_fallbacks}`, `usage: {include: true}`, `HTTP-Referer` and
+  `X-Title`.
+- **A month budget per person** (UTC calendar month): the cost is read from `usage.cost` in each answer (streamed or
+  not) and kept in `profiles/<user>/openrouter.json` (Rust-only). At or over the cap (config `openrouter.monthlyUsd`,
+  default 20, an admin can set another per person) the next request is refused with a 429 in the caller's API shape
+  naming the cap and the reset date, before OpenRouter is asked. `GET /api/openrouter/budget` (your month),
+  `GET /api/openrouter/budget/all` and `POST /api/openrouter/budget/cap {username, capUsd|null}` (admins).
+- Config `openrouter.baseUrl` exists only so the regression runner can point at a fake. Checks R591–R594.
+- The regression runner gives every suite process its own window of 400 ports (it picks many ports some time before
+  it listens on them, and two suites running at once collided: R539 failed once in a while).
+
+## 5.60.0 — 2026-11-12
+
+MINOR: **the API gateway speaks the Responses API (Codex), and each key shows its usage** (T-369 slice G5; with this
+the gateway of plans/api-gateway.md is complete).
+
+- **`POST /v1/responses`** (what Codex uses with `wire_api = "responses"`), routed by `model` like the other
+  endpoints:
+  - a provider that speaks it natively (an `openai` provider on api.openai.com, one marked with the new optional
+    provider field `responses: true`, or the host's ChatGPT / Codex login) gets it raw, the answer byte for byte (only
+    the model is swapped; `store` is forced off, since nothing is kept);
+  - any other OpenAI-compatible provider gets it translated to chat completions, and an Anthropic provider (an API
+    key, a host's Claude login) translated to Messages; the answer streams back as Responses events
+    (`response.created`, the message and `function_call` items with their text and argument deltas, numbered by
+    `sequence_number`, then `response.completed`, or `response.incomplete` at the output limit, or `response.failed`);
+  - refused with a 400 in OpenAI's error shape: anything that needs stored state (`previous_response_id`,
+    `conversation`, `background`, item references: "this hub keeps no response state; send the whole input"), and on
+    translated paths hosted tools (web search, file search, computer use, code interpreter, MCP, image generation) and
+    file inputs. A Claude subscription login's refusal is the same plain 403 as elsewhere.
+- **Each key's usage**: `GET /api/apikey/usage?days=N` (1–90, default 30) gives the caller's own keys with calls and
+  tokens per day and per model; kept per person in `profiles/<user>/apikey-usage.json` (120 days). Settings → API
+  access has a Usage toggle on each key (bars per day, a table by day and by model).
+- The Codex setup in Connect a tool uses `wire_api = "responses"` now. web/index.html 1.47.0, web/apisetup.js 1.0.1.
+- Checks R586–R590 (R568 and R570 follow the page).
+
+## 5.59.0 — 2026-11-12
+
+MINOR: **the API gateway speaks both formats to every provider, and several Work sessions starting at once no longer
+fail now and then** (T-369 slice G3; T-333).
+
+- **OpenAI chat, raw (G3).** `POST /v1/chat/completions` to an OpenAI-speaking provider (an OpenAI-compatible endpoint,
+  an Ollama host) is forwarded as it is, with only the model alias swapped for the real id and the provider's own auth
+  put on: tools, tool_choice, response_format and the rest arrive intact, the SSE comes back byte for byte, errors keep
+  their status (a 429 with retry-after too). `stream_options.include_usage` is asked for unless the caller sent
+  `false` (retried once without it if the endpoint objects), so usage reaches the ledger and the key's counters
+  (`tokensIn`, `tokensOut`). An endpoint that answers JSON to a streaming request is re-streamed as chunks.
+- **Across formats, with tools and streaming (G3).** An OpenAI request to an Anthropic provider (an API key, or a host's
+  Claude login) is translated and streamed back as `chat.completion.chunk` events with `delta.tool_calls` (arguments
+  arriving in pieces) and the right `finish_reason`; system messages, images, tool calls and tool results are carried.
+  An Anthropic request to an OpenAI provider is translated and streamed back as Anthropic SSE (text and `tool_use`
+  blocks with `input_json_delta`, `stop_reason`, usage). What would change meaning is refused with a 400 that names it
+  (`n` above 1, logprobs, audio, files, `json_schema` response format, document blocks, server tools, MCP servers);
+  what is harmless is dropped (`cache_control`, thinking blocks to an OpenAI provider, penalties, `seed`). A Claude
+  subscription login's refusal of another harness is the same plain 403 as in the Anthropic direction, in the caller's
+  error shape; nothing makes another harness pass as Claude Code. New module `xlate.rs` (table-driven, both
+  directions); `gateway.rs` has the three flows on one stream pump (G2's Anthropic path runs on it too). Checks R580–R585.
+- **A real race in starting sessions (T-333).** The flaky check R280 turned out to be a hub bug: preparing a session's
+  worktree ran `git worktree prune` before every `git worktree add`, so when many first messages arrived at once (a
+  page restore, an agent wave) one add could delete another's half-made folder, and a session could answer "Could not
+  prepare your worktree" at random (sending again worked). Worktree registry changes are now one at a time per hub,
+  the prune runs only when git says something is prunable, and the git work runs off the async threads (it could also
+  stall other calls, host polls included). A unit test starts 17 sessions at once, six rounds.
+
+## 5.58.0 — 2026-11-11
+
+MINOR: **the API gateway, first slices: several keys, model routing across providers, concurrent requests, and a setup
+page** (T-369; Sponge, 2026-11-10: "someone running an AI host, the team or the individual users that can use the AI …
+should be able to hook that into anything"; plan: team note plans/api-gateway.md). Slices G1 and G4; G2 (raw Anthropic
+passthrough), G3 (OpenAI passthrough, cross-format) and G5 (Responses API) are next.
+
+- **Keys (G1).** A person can make several named keys (`POST /api/apikey/create {label, expiresDays, providers?,
+  models?, maxConcurrent?}`, shown once, `mills_` prefix; `POST /api/apikey/revoke {id}`; `GET /api/apikey` lists them,
+  never a secret). A key can only be narrowed below what its person may use. Add-only data: the legacy key stays the
+  "default" key in `api-keys.json[user]` and the named ones go in a `keys` array the frozen JavaScript hub ignores.
+  Create, revoke and the first use of a key each day go to the security log (`apikey.create`, `apikey.revoke`,
+  `apikey.use`; never the secret).
+- **Model routing (G1).** `model` resolves across every provider the person may use for the API (their own and what
+  others share with the API use and model scope), narrowed by the key: a plain id goes to the first usable provider
+  offering it (the key's providers, then the person's own, then shared; online and uncapped first), `<provider>/<model>`
+  picks one; `GET /v1/models` lists every model once with its provider (and the alias where two providers offer the
+  same id), in both list shapes. The default key keeps answering from its bound provider and model as before.
+- **Concurrency (G1).** The one-request-at-a-time rule is a per-key limit now (`maxConcurrent`, config
+  `api.maxConcurrent`, default 8, at most 64); over it 429 with `retry-after`. A person's stop cancels all their API
+  answers.
+- **Settings → API access (G4).** A keys list with Create and Revoke, and a **Connect a tool** panel with copy-ready
+  setups filled with the hub's address, the key and a model: Claude Code (bash and PowerShell), Codex, jcode, opencode,
+  Cursor / Continue / any OpenAI client, and curl, with a note that a Claude subscription login serves Claude Code
+  only. The setups are `web/apisetup.js` 1.0.0 (pure functions); the old single-key section works as before against an
+  older hub.
+- **Raw Anthropic passthrough (G2).** `POST /v1/messages` to an Anthropic-speaking provider (an Anthropic API key, or a
+  host's Claude login through the relay) is forwarded as it is, not flattened to text: tools, tool_choice, thinking,
+  images, documents, cache_control, system arrays and the `anthropic-beta` headers arrive intact, with only the model
+  alias swapped for the real id and the provider's own auth put on; the answer (JSON or the SSE stream, byte for byte)
+  and Anthropic's errors (a real 429 with retry-after too) come back unchanged. Usage is read from the stream for the
+  ledger and the key's counters (`tokensIn`, `tokensOut`, add-only). The key's concurrency slot is held for the stream
+  and a caller hanging up frees it and closes the upstream. A Claude **subscription** login serves Claude Code only: its
+  refusal of another harness becomes a plain 403 ("this provider is a Claude subscription login: it serves Claude
+  Code; use Claude Code with this key, or pick a provider that has an API key"); nothing makes another harness pass
+  as Claude Code. Other provider kinds keep the text path until G3. New module gateway.rs; config
+  `api.anthropicBase` (a test hook). Checks R575–R579.
+- Checks R560–R565 (keys, limits, routing, the default key, concurrency, the security log) and R568–R570 (the setups,
+  the page, the keys list code; numbered R565–R567 on their branch).
+
 ## 5.57.5 — 2026-11-16
 
 PATCH: the Tools window opens on Windows.

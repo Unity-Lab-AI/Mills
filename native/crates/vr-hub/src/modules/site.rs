@@ -76,7 +76,8 @@ fn public_url(hub: &Hub) -> String {
 /// GET of anything that is not /api/: web/<path> (index.html for /).
 pub fn page(hub: &Arc<Hub>, path: &str) -> Routed {
     let web = hub.root.join("..").join("web");
-    let rel = if path == "/" { "index.html".to_string() } else { path.trim_start_matches('/').to_string() };
+    // /app-signin (T-371): the browser sign-in page for Jcode PGM, one small file of its own (never cached, never a referrer)
+    let rel = if path == "/" { "index.html".to_string() } else if path == "/app-signin" { "appsignin.html".to_string() } else { path.trim_start_matches('/').to_string() };
     let nf = || Routed::Answer(crate::front::json(404, &json!({ "error": "Not found" })));
     // inside web/ only: no "..", no empty part, no drive letter or stream name (on Windows "C:…" would be a path of its own)
     if rel.contains(':') || rel.split(['/', '\\']).any(|c| c == ".." || c.is_empty()) { return nf(); }
@@ -101,7 +102,8 @@ pub fn page(hub: &Arc<Hub>, path: &str) -> Routed {
         return Routed::Answer(hyper::Response::builder().status(200).header("content-type", "text/html").header("cache-control", "no-cache, no-store, must-revalidate").body(crate::front::full(html)).expect("response"));
     }
     let ext = f.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    match std::fs::read(&f) { Ok(b) => Routed::Answer(hyper::Response::builder().status(200).header("content-type", mime(&ext)).header("cache-control", "no-cache").body(crate::front::full(b)).expect("response")), Err(_) => nf() }
+    let cache = if name == "appsignin.html" { "no-store" } else { "no-cache" };
+    match std::fs::read(&f) { Ok(b) => Routed::Answer(hyper::Response::builder().status(200).header("content-type", mime(&ext)).header("cache-control", cache).header("referrer-policy", "no-referrer").body(crate::front::full(b)).expect("response")), Err(_) => nf() }
 }
 /// /api/check: who this is, their choices, what there is.
 pub fn check(hub: &Arc<Hub>, a: &Account) -> Value {
@@ -109,10 +111,15 @@ pub fn check(hub: &Arc<Hub>, a: &Account) -> Value {
     let st = w.state(a); let prefs = std::fs::read_to_string(a.dir.join("state.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|v| v["prefs"].clone()).filter(Value::is_object).unwrap_or(json!({}));
     let (build, mods) = hub.mods.build.get(hub);
     let s = |k: &str| st[k].as_str().unwrap_or("").to_string();
-    json!({ "ok": true, "username": a.username, "display": a.display, "admin": a.admin, "models": hub.cfg.get("models").cloned().unwrap_or(json!([])), "model": s("model"), "defaultModel": w.default_model_of(a),
+    let mut v = json!({ "ok": true, "username": a.username, "display": a.display, "admin": a.admin, "models": hub.cfg.get("models").cloned().unwrap_or(json!([])), "model": s("model"), "defaultModel": w.default_model_of(a),
         "project": w.project_of(a), "projects": w.project_list(), "prefs": prefs, "share": w.share_of(&a.username),
         "provider": if s("provider").is_empty() { "host".to_string() } else { s("provider") }, "effectiveProvider": w.effective(ai, &a.username, &s("provider")).map(|p| p["id"].clone()).unwrap_or(json!("")),
         "defaultProvider": w.default_for(ai, &a.username).map(|p| p["id"].clone()).unwrap_or(json!("")), "hubClaude": hub.cfg.get("hubClaude") != Some(&json!(false)),
         "providers": super::work::providers_list(&**hub, &a.username), "version": build.split('+').next().unwrap_or(""), "build": build, "versions": mods,
-        "instance": hub.mods.instance.name(), "aiHost": !hub.root.join("ai-host.off").exists(), "aiNodes": ai.status(), "pcHost": ai.pc_host_for(&a.username) })
+        "instance": hub.mods.instance.name(), "aiHost": !hub.root.join("ai-host.off").exists(), "aiNodes": ai.status(), "pcHost": ai.pc_host_for(&a.username) });
+    // T-376: where the Jcode PGM Server is and the key its hello is signed with (absent when there is none)
+    if let Some(p) = super::pgm::check_field(hub) { v["pgmServer"] = p; }
+    // T-379: the person's site role and permissions, the message of the day, the default theme (add-only)
+    v["site"] = super::siteadmin::check_field(hub, a);
+    v
 }

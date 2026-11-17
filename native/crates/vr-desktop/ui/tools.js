@@ -110,7 +110,7 @@ $('gCloneBtn').onclick = () => { const u = $('gClone').value.trim(); if (u) git(
 async function hostRefresh() {
   const s = await call('host_status').catch((e) => ({ error: String(e) }));
   const box = $('hostState'); box.textContent = '';
-  if (s.configured === false) { box.append(el('span', 'bad', 'Not set up on this computer yet.'), ' On the hub: Settings → My AI hosts → Run on this PC.'); return; }
+  if (s.configured === false) { box.append(el('span', 'bad', 'Not set up on this computer yet.'), ' On the hub: AI Admin → My AI hosts → Run on this PC.'); return; }
   if (s.error) { box.append(el('span', 'bad', s.error)); return; }
   box.append(el('b', '', s.nickname || 'AI host'), ' · ', el('span', s.running ? (s.paused ? '' : 'ok') : 'bad', s.running ? (s.paused ? 'paused' : s.connected ? 'running, connected to ' + (s.hub || 'the hub') : 'running, not connected yet') : 'not running'), ' · start at boot: ' + (s.boot || 'off') + ' · version ' + (s.version || '?'));
   if (s.lastError) box.append(el('div', 'bad', s.lastError));

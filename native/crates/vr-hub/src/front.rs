@@ -102,7 +102,7 @@ async fn guarded(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Res
     if dev { out.headers_mut().insert("x-robots-tag", hyper::header::HeaderValue::from_static("noindex, nofollow")); }
     if let Ok(v) = hyper::header::HeaderValue::from_str(&rid) { out.headers_mut().insert("x-request-id", v); }
     let (ms, status) = (t0.elapsed().as_secs_f64() * 1000.0, out.status().as_u16());
-    let route = if p.starts_with("/api/") || p.starts_with("/llm") || p.starts_with("/v1/") || p.starts_with("/node/") || p.starts_with("/__sync/") || p == "/metrics" { pgm_core_internal::obs::route_of(&p) } else { "(page)".into() };
+    let route = if p.starts_with("/api/") || p.starts_with("/llm") || p.starts_with("/v1/") || p.starts_with("/node/") || p.starts_with("/__sync/") || p.starts_with("/__pgm/") || p.starts_with("/pgm/") || p == "/metrics" { pgm_core_internal::obs::route_of(&p) } else { "(page)".into() };
     let class = format!("{}xx", status / 100);
     pgm_core_internal::obs::count("vr_http_requests", &[("route", &route), ("status", &class)]);
     pgm_core_internal::obs::observe_ms("vr_http", &[("route", &route)], ms);
@@ -112,10 +112,16 @@ async fn guarded(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Res
 }
 
 async fn handle(hub: Arc<Hub>, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {
+    // the Jcode PGM Server (T-376): streamed both ways, so before the body is read
+    if req.uri().path() == "/pgm" || req.uri().path().starts_with("/pgm/") {
+        let mut r = modules::pgm::forward(&hub, req, peer).await;
+        r.headers_mut().insert("x-vr-by", hyper::header::HeaderValue::from_static("rust"));
+        return with_front(r);
+    }
     let (r, parts) = match kit::read(req, peer, MAX_BODY).await { Ok(x) => x, Err(too_big) => return with_front(too_big) };
     // the page's own origins only (bridge/server.js does the same for what it answers): another site's page gets 403;
     // the APIs with their own keys (/v1, /node, /llm) and the internal ones are not for pages
-    let cors = if ["/internal/", "/node/", "/v1", "/llm/", "/llm-relay/", "/__front/"].iter().any(|x| r.path.starts_with(x)) { None } else { r.header("origin").map(String::from) };
+    let cors = if ["/internal/", "/node/", "/v1", "/llm/", "/llm-relay/", "/or-relay/", "/__front/"].iter().any(|x| r.path.starts_with(x)) { None } else { r.header("origin").map(String::from) };
     if let Some(o) = &cors {
         if !hub.allowed_origin(o) { return with_front(json(403, &serde_json::json!({ "error": "Origin not allowed" }))); }
         if r.method == hyper::Method::OPTIONS { return with_front(kit::preflight(o)); }

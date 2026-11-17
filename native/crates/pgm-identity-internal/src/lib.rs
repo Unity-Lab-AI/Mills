@@ -11,9 +11,13 @@
 //! - sign-in limits per address: 5 wrong for one name from one address → that address waits 15 minutes for it; 20
 //!   from one address → it waits; at most 3 sign-ins at once from one address
 //! - the caller's address behind Cloudflare (CF-Connecting-IP) or nginx (X-Real-IP / X-Forwarded-For)
+//! - site roles (siteroles.rs, T-379): the hub's own ladder of roles and permissions (the chat servers' model), custom
+//!   roles, the site-wide settings
 //! On its first start it takes over an older hub's sessions (`<root>/hub-state.json`) and locks (each account's
 //! state.json `lockedDevice`), so nobody is signed out or loses a device by the move.
 pub mod devices;
+pub mod appsignin;
+pub mod siteroles;
 use pgm_core_internal::json::{read_json, write_json_private as write_json};
 use pgm_core_internal::now_ms;
 use pgm_core_internal::audit;
@@ -55,6 +59,10 @@ pub fn lock_devices(l: &Value) -> Vec<String> {
     v.extend(l["devices"].as_array().map(|a| a.iter().filter_map(|d| d["device"].as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default());
     v
 }
+
+/// Who a bare token is ([`Auth::token_who`]): a person (page session or device token), a linked machine's token, nobody.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TokenWho { User { user: String, device_id: String, kind: &'static str }, Machine, Unknown }
 
 /// How a sign-in went: an answer to give (status, JSON), or signed in (the token for the page, who, the client's
 /// description it sent, its address).
@@ -121,6 +129,12 @@ impl Auth {
 
     /// Is that account an admin? (what accounts() says, for one name)
     pub fn is_admin(&self, user: &str) -> bool { admin_in(&self.root, &self.default_user, user) }
+    /// The site roles (T-379): who may do what on this hub.
+    pub fn site_roles(&self) -> siteroles::SiteRoles { siteroles::SiteRoles::new(&self.root, &self.default_user) }
+    /// Does that account hold that site permission?
+    pub fn may(&self, user: &str, perm: &str) -> bool { self.site_roles().has(user, perm) }
+    /// The default account (the hub's own: the owner).
+    pub fn default_user(&self) -> &str { &self.default_user }
     /// The accounts: the default one (`root` itself) and every profile with a config.json or an auth.json.
     pub fn accounts(&self) -> Vec<Account> {
         let profile = |dir: PathBuf, username: String| -> Account {
@@ -159,6 +173,21 @@ impl Auth {
     /// Who a page session (not a device token) belongs to. An expired / orphaned session is dropped.
     pub fn page_session_user(&self, r: &Req) -> Option<String> {
         let tok = r.header("authorization").and_then(|a| a.strip_prefix("Bearer "))?;
+        self.page_session_of(tok)
+    }
+    /// Who a bare token is (another program on this machine asking, e.g. the Jcode PGM Server's whoami): a page session
+    /// (`deviceId` = `s-` and the first 16 hex of the token's sha256) or a device token (its record id); a linked machine's
+    /// token is never a login.
+    pub fn token_who(&self, tok: &str) -> TokenWho {
+        if tok.is_empty() { return TokenWho::Unknown; }
+        if let Some(user) = self.page_session_of(tok) { return TokenWho::User { user, device_id: format!("s-{}", &token_key(tok)[..16]), kind: "session" }; }
+        if self.devices.is_machine_token(tok) { return TokenWho::Machine; }
+        match (self.devices.user_of(tok), self.devices.id_of(tok)) {
+            (Some(u), Some(id)) if self.account(&u).is_some() => TokenWho::User { user: u, device_id: id, kind: "device" },
+            _ => TokenWho::Unknown,
+        }
+    }
+    fn page_session_of(&self, tok: &str) -> Option<String> {
         let k = token_key(tok);
         let mut s = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let rec = s.get(&k)?.clone();

@@ -38,7 +38,7 @@ fn what(r: &Req) -> Option<(&'static str, String, Value)> {
     use hyper::Method;
     let (post, get) = (r.method == Method::POST, r.method == Method::GET);
     let p = r.path.as_str();
-    let b = if post && ["/api/admin/", "/api/hosts/", "/api/providers/", "/api/device", "/api/guilds/server/password"].iter().any(|x| p.starts_with(x)) { r.json() } else { Value::Null };
+    let b = if post && ["/api/admin/", "/api/hosts/", "/api/providers/", "/api/apikey/", "/api/device", "/api/guilds/server/password"].iter().any(|x| p.starts_with(x)) { r.json() } else { Value::Null };
     let user = || sv(&b, "username").to_lowercase();
     Some(match p {
         "/api/logout" if post => ("signout", String::new(), json!({})),
@@ -50,6 +50,12 @@ fn what(r: &Req) -> Option<(&'static str, String, Value)> {
         "/api/admin/unlock" if post => ("device.reset", user(), json!({})),
         "/api/admin/allow-device" if post => ("device.allow", user(), json!({})),
         "/api/admin/restart" if post => ("hub.restart", String::new(), json!({})),
+        // T-379: site roles, the site-wide settings, the default AI
+        "/api/admin/roles/assign" if post => ("roles.assign", user(), json!({ "role": sv(&b, "role") })),
+        "/api/admin/roles/save" if post => ("roles.save", { let i = sv(&b, "id"); if i.is_empty() { sv(&b, "name") } else { i } }, json!({ "name": sv(&b, "name"), "position": b["position"], "perms": b["perms"] })),
+        "/api/admin/roles/delete" if post => ("roles.delete", sv(&b, "id"), json!({})),
+        "/api/admin/site-settings" if post => ("site.settings", String::new(), json!({ "motd": b["motd"], "defaultTheme": b["defaultTheme"], "newAccountRole": b["newAccountRole"] })),
+        "/api/admin/ai/default" if post => ("ai.default", sv(&b, "defaultProvider"), json!({})),
         "/api/admin/unity-tools" if post => ("delegation.unityTools", user(), json!({ "pc": b["pc"], "code": b["code"] })),
         "/api/admin/gateway/products" if post => ("gateway.product", sv(&b, "id"), json!({ "name": sv(&b, "name"), "ai": b["ai"] == json!(true) })),
         "/api/admin/gateway/products/remove" if post => ("gateway.productRemove", sv(&b, "id"), json!({})),
@@ -65,7 +71,8 @@ fn what(r: &Req) -> Option<(&'static str, String, Value)> {
         "/api/providers/update" if post => ("provider.update", sv(&b, "id"), if b.get("shared").is_some() { json!({ "shared": truthy(&b["shared"]) }) } else { json!({}) }),
         "/api/providers/remove" if post => ("provider.remove", sv(&b, "id"), json!({})),
         "/api/apikey/rotate" if post => ("apikey.new", String::new(), json!({})),
-        "/api/apikey/revoke" if post => ("apikey.revoke", String::new(), json!({})),
+        "/api/apikey/create" if post => ("apikey.create", sv(&b, "label"), json!({ "label": sv(&b, "label"), "expiresDays": b["expiresDays"], "providers": b["providers"], "models": b["models"], "maxConcurrent": b["maxConcurrent"] })),
+        "/api/apikey/revoke" if post => ("apikey.revoke", { let i = sv(&b, "id"); if i.is_empty() { "default".to_string() } else { i } }, json!({})),
         "/api/forgejo/connect" if post => ("forgejo.connect", String::new(), json!({})),
         "/api/forgejo/disconnect" if post => ("forgejo.disconnect", String::new(), json!({})),
         "/api/guilds/server/password" if post => ("guild.password", sv(&b, "server"), json!({})),
@@ -93,10 +100,10 @@ pub fn note(hub: &Hub, r: &Req, actor: &str, status: u16) {
     }
 }
 
-/// GET /api/admin/audit?since=<seq>&limit=<n>&action=<family>: admins only.
+/// GET /api/admin/audit?since=<seq>&limit=<n>&action=<family>: the View security log permission (T-379).
 pub fn route(hub: &Hub, r: &Req, user: Option<&str>) -> Routed {
     let Some(u) = user else { return answer(401, json!({ "error": "Not signed in." })) };
-    if !hub.mods.auth.account(u).map(|a| a.admin).unwrap_or(false) { return answer(403, json!({ "error": "Admins only." })); }
+    if !hub.mods.auth.may(u, pgm_identity_internal::siteroles::VIEW_SECURITY_LOG) { return answer(403, json!({ "error": pgm_identity_internal::siteroles::needs(pgm_identity_internal::siteroles::VIEW_SECURITY_LOG) })); }
     let Some(l) = audit::global() else { return answer(503, json!({ "error": "The security log is not open." })) };
     let since = r.param("since").and_then(|x| x.parse().ok()).unwrap_or(0u64);
     let limit = r.param("limit").and_then(|x| x.parse().ok()).unwrap_or(200usize).clamp(1, 1000);

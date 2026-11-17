@@ -35,7 +35,7 @@ const LOCALAI = (() => {
   // the model list: this computer's models, shown and never selectable
   function group(sel, provs, o) {
     if (!(localOllama.found && localOllama.models.length && !ownProvider(provs, o && o.user))) return;
-    const g = document.createElement('optgroup'); g.label = 'Local (this computer) · not for Work: lend it through your AI host (Settings → AI source)';
+    const g = document.createElement('optgroup'); g.label = 'Local (this computer) · not for Work: lend it through your AI host (AI Admin → AI source)';
     for (const m of localOllama.models) { const op = document.createElement('option'); op.value = 'local-ollama|' + m; op.textContent = m; op.disabled = true; g.append(op); }
     sel.append(g);
   }
@@ -60,7 +60,7 @@ const LOCALAI = (() => {
           const b = document.createElement('button'); b.textContent = 'Start this computer\'s AI host';
           b.onclick = async () => { b.disabled = true; try { const st = await native.call('host_status'); if (!st || !st.configured) how.textContent = 'Set it up first: My AI hosts → "Run on this PC".'; else { await native.call('host_act', { what: 'start' }); how.textContent = 'Starting the AI host; the models appear in a moment.'; if (typeof o.refresh === 'function') setTimeout(o.refresh, 5000); } } catch (e) { how.textContent = String(e.message || e); } b.disabled = false; };
           how.append(b);
-        } else how.append(document.createTextNode('Settings → My AI hosts (download vr-host, or use the desktop app).'));
+        } else how.append(document.createTextNode('AI Admin → My AI hosts (download vr-host, or use the desktop app).'));
       }
       wrap.append(how);
     });

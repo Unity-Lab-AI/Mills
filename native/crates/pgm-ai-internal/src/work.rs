@@ -45,7 +45,9 @@ struct Run { /** the session's journal (T-331): every event also goes there */ j
     machines: Vec<Value>,
     /// The session's worktree (T-266: an automatic handoff counts its uncommitted changes) and the board tasks this run
     /// claimed and has not completed or released yet (what it still holds when it ends).
-    dir: String, tasks: Vec<String> }
+    dir: String, tasks: Vec<String>,
+    /// The PGM session this run follows on the Jcode PGM Server (T-376 stage 3, crate::pgm_work: "ps-…"); "" = a run of its own here.
+    pgm: String }
 /// Who a tool call is, as the hub's own records say (never a header the caller typed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
@@ -138,6 +140,8 @@ pub struct Work {
     pub busy_changed: Notify,
     /// agent to agent (T-296): threads, waits, the delivery pump (crate::agents)
     pub agents: crate::agents::Agents,
+    /// the default AI for everyone (config defaultProvider: "" or "host:<owner>"), changed by AI Admin without a restart (T-379)
+    default_pick: Mutex<String>,
 }
 use pgm_core_internal::json::{read_json, s, write_json};
 /// The freshness note's key: the person's worktree of a project, or one of their sessions'.
@@ -149,7 +153,7 @@ fn iso() -> String { pgm_core_internal::time::iso_now() }
 
 impl Work {
     pub fn new(root: &Path, cfg: &Config) -> Work {
-        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: cfg.get("workSecret").and_then(Value::as_str).filter(|s| s.len() >= 24).map(String::from).unwrap_or_else(|| pgm_core_internal::crypto::random_hex(24)), legacy_noted: Mutex::default(), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new(), agents: crate::agents::Agents::default() }
+        Work { root: root.to_path_buf(), mills: root.join(".."), cfg: cfg.clone(), secret: cfg.get("workSecret").and_then(Value::as_str).filter(|s| s.len() >= 24).map(String::from).unwrap_or_else(|| pgm_core_internal::crypto::random_hex(24)), legacy_noted: Mutex::default(), wt: Worktrees::new(root, cfg), states: Mutex::default(), runs: Mutex::default(), ended: Mutex::default(), llm: Mutex::default(), fresh: Mutex::default(), shares: Mutex::default(), asks: Mutex::default(), plans: Mutex::default(), projects: Mutex::new((0, json!([]))), shares_changed: Notify::new(), busy_changed: Notify::new(), agents: crate::agents::Agents::default(), default_pick: Mutex::new(cfg.get("defaultProvider").and_then(Value::as_str).unwrap_or("").to_string()) }
     }
     // ---------- each person's Work state ----------
     fn state_file(a: &Account) -> PathBuf { a.dir.join("work.json") }
@@ -309,7 +313,7 @@ impl Work {
     pub fn session_wt(&self, a: &Account, sx: &Sx) -> Result<Wt, String> {
         if self.is_none(a, sx) { return self.wt.scratch(&a.username); }
         let pj = self.project_in(a, sx);
-        if !sx.own { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.hex(), &pj) }
+        if !sx.own { self.wt.ensure(&a.username, &pj) } else { self.wt.ensure_session(&a.username, sx.tree(), &pj) }
     }
     pub fn project_of(&self, a: &Account) -> String { let st = self.state(a); if st["noProject"] == json!(true) { return NO_PROJECT.into(); } let p = s(&st, "project"); self.wt.project(&p).map(|p| p.name).unwrap_or_else(|_| HUB_PROJECT.into()) }
     pub fn project_list(&self) -> Value {
@@ -324,13 +328,23 @@ impl Work {
     fn hub_claude(&self) -> bool { self.cfg.get("hubClaude") != Some(&json!(false)) }
     fn host_entry(&self) -> Value { json!({ "id": "host", "kind": "host", "label": "Host Claude (default)", "owner": "", "shared": true, "models": self.model_ids() }) }
     /// bridge/providers.json; a custom endpoint (openai) or a Claude config folder on this machine (claude-cli) counts
-    /// only while its owner is an admin (only admins with an AI host of their own may make one: openai.rs)
+    /// only while its owner is an admin (only admins with an AI host of their own may make one: openai.rs); an OpenRouter
+    /// one while its owner holds the Manage AI permission (T-379)
     fn own_providers(&self) -> Vec<Value> {
         let def = self.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
         read_json(&self.root.join("providers.json")).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default().into_iter()
-            .filter(|p| !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, p["owner"].as_str().unwrap_or(""))).collect()
+            .filter(|p| { let o = p["owner"].as_str().unwrap_or(""); if p["kind"] == json!(crate::openrouter::KIND) { pgm_identity_internal::siteroles::has_perm(&self.root, &def, o, pgm_identity_internal::siteroles::MANAGE_AI) } else { !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, o) } }).collect()
+    }
+    /// The team's OpenRouter provider (the first shared one with pairs): the pairs a person's own key uses unless they list their own (T-372).
+    pub fn team_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !crate::openrouter::pairs_of(p).is_empty()) }
+    /// A person's own OpenRouter provider `or-me:<user>` (their key; None without a key, with personal keys off, or without pairs).
+    pub fn personal_for(&self, user: &str) -> Option<Value> {
+        if user.is_empty() { return None; }
+        let team = self.team_provider();
+        crate::openrouter::personal_provider(&self.root, team.as_ref(), user)
     }
     pub fn provider_get(&self, ai: &crate::ai_hosts::AiHosts, id: &str, user: &str) -> Option<Value> {
+        if id.starts_with("or-me:") { return if !user.is_empty() && id == crate::openrouter::personal_id(user) { self.personal_for(user) } else { None }; } // only that person's own
         if id.is_empty() || id == "host" { return if self.hub_claude() { Some(self.host_entry()) } else { None }; }
         if id.starts_with("h:") { return ai.provider(id, user); }
         self.own_providers().into_iter().find(|p| p["id"] == json!(id)).filter(|p| user.is_empty() || p["shared"] == json!(true) || p["owner"] == json!(user))
@@ -340,12 +354,16 @@ impl Work {
     pub fn default_for(&self, ai: &crate::ai_hosts::AiHosts, user: &str) -> Option<Value> {
         let claudes: Vec<Value> = ai.providers_for(user).into_iter().filter(|p| p["kind"] == json!("host-claude")).collect();
         let usable = |p: &&Value| p["online"] == json!(true) && p["capped"].as_str().unwrap_or("").is_empty();
-        if let Some(w) = self.cfg.get("defaultProvider").and_then(Value::as_str).and_then(|d| d.strip_prefix("host:")) {
+        if let Some(w) = self.default_setting().strip_prefix("host:") {
             if let Some(p) = claudes.iter().filter(|x| x["owner"] == json!(w)).find(usable).or_else(|| claudes.iter().find(|x| x["owner"] == json!(w))) { return Some(p.clone()); }
         }
         if self.hub_claude() { return Some(self.host_entry()); }
         claudes.iter().find(usable).or(claudes.first()).cloned()
     }
+    /// The default AI as set ("" = the built-in order, "host:<owner>").
+    pub fn default_setting(&self) -> String { self.default_pick.lock().unwrap_or_else(|e| e.into_inner()).clone() }
+    /// AI Admin changed it (already saved in config.local.json): it counts from the next call on, no restart.
+    pub fn set_default_setting(&self, v: &str) { *self.default_pick.lock().unwrap_or_else(|e| e.into_inner()) = v.to_string(); }
     pub fn effective(&self, ai: &crate::ai_hosts::AiHosts, user: &str, chosen: &str) -> Option<Value> { (if chosen.is_empty() { None } else { self.provider_get(ai, chosen, user) }).or_else(|| self.default_for(ai, user)) }
     /// What a run's `claude` gets for that provider (None: not Claude Code).
     pub(crate) fn claude_env(p: &Value) -> Option<Vec<(String, String)>> {
@@ -353,9 +371,10 @@ impl Work {
     }
     /// Which coding harness runs Work for that provider: "claude" (Claude Code), "jcode" (Jcode PGM), None (neither:
     /// an OpenAI endpoint or a ChatGPT login answers the API and the Unity section, not Work).
-    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
+    pub fn harness_kind(p: &Value) -> crate::harness::HarnessKind { if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) || p["kind"] == json!(crate::openrouter::KIND) { crate::harness::HarnessKind::Jcode } else { crate::harness::HarnessKind::Claude } }
     pub fn harness_of(p: &Value) -> Option<&'static str> {
-        if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) { return Some(crate::jcode::HARNESS); }
+        // the router (T-370): the engine follows the provider; an OpenRouter one runs Jcode PGM on this server (openrouter.rs)
+        if p["kind"] == json!(crate::jcode::KIND) || p["kind"] == json!(HOST_JCODE) || p["kind"] == json!(crate::openrouter::KIND) { return Some(crate::jcode::HARNESS); }
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
     }
     fn usage_source(&self, ai: &crate::ai_hosts::AiHosts, a: &Account) -> String { match self.effective(ai, &a.username, &s(&self.state(a), "provider")) { Some(p) if p["kind"] == json!("host-claude") => s(&p, "id"), _ => "hub".into() } }
@@ -369,7 +388,7 @@ impl Work {
     }
 
     // ---------- the person's Forgejo token (bridge/forgejo.js keeps it) ----------
-    fn forgejo_url(&self) -> String { read_json(&self.root.join("forgejo.json")).and_then(|c| c["url"].as_str().map(String::from)).or_else(|| self.cfg.get("forgejoUrl").and_then(Value::as_str).map(String::from)).unwrap_or_else(|| "https://git.unityailab.com".into()).trim_end_matches('/').to_string() }
+    pub(crate) fn forgejo_url(&self) -> String { read_json(&self.root.join("forgejo.json")).and_then(|c| c["url"].as_str().map(String::from)).or_else(|| self.cfg.get("forgejoUrl").and_then(Value::as_str).map(String::from)).unwrap_or_else(|| "https://git.unityailab.com".into()).trim_end_matches('/').to_string() }
     fn forgejo_rec(&self, u: &str) -> Option<Value> { read_json(&self.root.join("forgejo-users.json")).and_then(|v| v["users"].get(u).cloned()).filter(Value::is_object) }
     pub fn forgejo_login(&self, u: &str) -> Option<String> { self.forgejo_rec(u).map(|r| s(&r, "login")).filter(|l| !l.is_empty()) }
     pub fn work_env(&self, u: &str) -> Vec<(String, String)> {
@@ -530,7 +549,7 @@ impl Work {
     /// A wait of this session's run (an agent's answer) keeps it alive for the liveness check, as a question does.
     pub(crate) fn keep_alive_key(&self, key: &str) { self.keep_alive(key) }
     fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); journal(r, &ev); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
-    fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
+    pub(crate) fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
         // fields as they came plus the `hub` object the page reads first (harness.rs, WORKPLAN 9b)
         let ev = crate::harness::wire(ev);
@@ -560,11 +579,14 @@ impl Work {
         if self.shares_session(&a.username, &sx.sid) { self.share_event(&a.username, &ev); } // only the session that is shared (plans/multi-session.md § 7)
         self.emit(&sx.key, ev);
     }
-    fn finish(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, run_id: &str, code: Value) {
+    pub(crate) fn finish(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, run_id: &str, code: Value) {
         let run = { let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner()); if runs.get(&sx.key).map(|r| r.id == run_id).unwrap_or(false) { runs.remove(&sx.key) } else { None } };
         let Some(mut r) = run else { return };
         // it ends still holding board tasks (T-266): each gets one automatic handoff from what the hub knows of the run
         if !r.tasks.is_empty() {
+            // the session remembers them (T-375: a /transfer adds a handoff note to those it still holds, naming the new session)
+            let held = r.tasks.clone();
+            sessions::touch(a, &sx.sid, |m| { let mut l: Vec<Value> = m.get("heldTasks").and_then(Value::as_array).cloned().unwrap_or_default(); for t in &held { if !l.contains(&json!(t)) { l.push(json!(t)); } } let n = l.len(); if n > 20 { l.drain(0..n - 20); } m.insert("heldTasks".into(), json!(l)); });
             let reply = last_reply(&r.ev.events);
             hub.run_left_claims(json!({ "account": a.username, "run": r.id, "session": sx.sid, "project": r.project, "branch": r.branch, "dir": r.dir, "tasks": r.tasks, "reply": reply, "code": code }));
         }
@@ -615,10 +637,53 @@ impl Work {
     }
     /// Stops the person's run: the process here, or the host is told.
     pub fn stop(&self, hub: &dyn AiHub, u: &str) {
-        let (pid, remote) = match self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(u) { Some(r) => (r.pid, r.remote.clone()), None => return };
+        let (pid, remote, pgm, run, account) = match self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(u) { Some(r) => (r.pid, r.remote.clone(), r.pgm.clone(), r.id.clone(), r.account.clone()), None => return };
+        // a run that follows a PGM session (T-376 stage 3): the server is told to stop, and the run ends here
+        if !pgm.is_empty() { crate::pgm_work::stop(hub, &account, &pgm, &run); return; }
         if !remote.is_empty() { hub.ai().cancel_work(&remote); return; }
         if let Some(pid) = pid { kill_pid(pid); }
     }
+    // ---------- runs that follow a PGM session on the Jcode PGM Server (T-376 stage 3, crate::pgm_work) ----------
+    /// A run for session `sx` that follows the PGM session `pgm` (its events come from the server). When a run of that same
+    /// PGM session is going already, it is joined: its stream goes to the new caller from now on (Some((id, rx, false))).
+    /// None = the session runs something else (a run of its own here).
+    /// Also the run's own secret (its MCP relays' credentials, T-308: the server's run gets the hub's MCP servers with it).
+    pub(crate) fn pgm_begin(&self, a: &Account, sx: &Sx, prov: &str, project: &str, branch: &str, dir: &str, pgm: &str, started_by: &str) -> Option<(String, mpsc::UnboundedReceiver<Result<Bytes, String>>, bool, String)> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(r) = runs.get_mut(&sx.key) {
+            if r.pgm != pgm || r.pgm.is_empty() { return None; }
+            r.tx = tx; r.last = now_ms();
+            return Some((r.id.clone(), rx, false, r.secret.clone()));
+        }
+        let (id, secret) = (pgm_core_internal::crypto::random_hex(8), pgm_core_internal::crypto::random_hex(24));
+        runs.insert(sx.key.clone(), Run { journal: Some(sessions::journal_file(a, sx)), id: id.clone(), tx, pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: prov.into(), project: project.into(), branch: branch.into(), started: now_ms(), secret: secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if sx.primary { String::new() } else { sx.sid.clone() }, started_by: started_by.into(), machines: Vec::new(), dir: dir.into(), tasks: Vec::new(), pgm: pgm.into() });
+        drop(runs);
+        self.busy_changed.notify_one();
+        Some((id, rx, true, secret))
+    }
+    /// What a run on the Jcode PGM Server gets as the hub's own Work runs do: the MCP servers (board, team, PC tools, with the
+    /// run's own secret) and the system prompt (the laws, the person's lines, the worktree).
+    pub(crate) fn pgm_extras(&self, a: &Account, sx: &Sx, wd: &Wt, secret: &str) -> (Value, String) { (self.mcp_json(a, sx, secret), self.system_prompt(a, wd, None)) }
+    /// The PGM session the run of this session follows ("" = none, or a run of its own).
+    pub(crate) fn pgm_run_of(&self, key: &str) -> String { self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(key).map(|r| r.pgm.clone()).unwrap_or_default() }
+    /// The liveness check of a run (as `chat` starts for its own runs): a ping every 15 s, and a run silent for stallAfter ends.
+    pub(crate) fn watch_liveness(hub: &Arc<dyn AiHub>, a: &Account, sx: &Sx, run: &str) {
+        let (h, u, id, sid, a2) = (hub.clone(), sx.key.clone(), run.to_string(), sx.sid.clone(), a.clone()); let stall = hub.work().stall_after();
+        tokio::spawn(async move { loop {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            let last = h.work().runs.lock().unwrap_or_else(|e| e.into_inner()).get(&u).filter(|r| r.id == id).map(|r| r.last);
+            let Some(last) = last else { return };
+            if now_ms().saturating_sub(last) > stall {
+                h.work().emit(&u, json!({ "type": "bridge_error", "text": format!("The run sent nothing for {} minutes, so it was ended (stalled). Send again to go on.", stall / 60_000) }));
+                sessions::touch(&a2, &sid, |m| { m.insert("ended".into(), json!({ "why": "silent", "at": now_ms() })); });
+                h.work().stop(&*h, &u); return;
+            }
+            h.work().emit(&u, json!({ "type": "ping" }));
+        } });
+    }
+    /// The stream a run's caller reads (its events as ndjson lines).
+    pub(crate) fn stream_of(rx: mpsc::UnboundedReceiver<Result<Bytes, String>>) -> Resp { ndjson(rx) }
 
     // ---------- the AI asks its person (T-245; team note plans/question-protocol.md) ----------
     /// An open question keeps its run alive for the liveness check (a person may take longer than stallAfter).
@@ -858,22 +923,28 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let b = r.json();
     // the session it goes to (plans/multi-session.md; none named = the first one, as older pages send it)
     let Some(sx) = sessions::resolve(a, &sessions::wanted(r, &b)) else { return answer(404, json!({ "error": "No such session." })) };
-    if w.busy_key(&sx.key) { return answer(409, json!({ "error": "Claude is already working. Stop it first." })); }
+    // (a run that only follows a PGM session on the Jcode PGM Server takes the next message: crate::pgm_work, T-376 stage 3)
+    if w.busy_key(&sx.key) && w.pgm_run_of(&sx.key).is_empty() { return answer(409, json!({ "error": "Claude is already working. Stop it first." })); }
+    // T-375: a session being transferred runs nothing meanwhile; one that handed its worktree on runs no more (the new one works there)
+    if crate::transfer::busy(&sx.key) { return answer(409, json!({ "error": "This session is being transferred to a new one right now: wait a moment, then go on there." })); }
+    if sx.gave { return answer(409, json!({ "error": format!("This session was transferred to \"{}\", which works in its worktree now: go on there (the list shows it).", crate::transfer::to_title(a, &sx.sid)), "transferred": true })); }
     // a requested restart wins the gap between two replies (the page retries a 503 by itself)
     if std::env::var("MILLS_SUPERVISED").is_ok() && hub.root().join(".restart").exists() { return answer(503, json!({ "error": "VibeRoller is restarting; your message goes through in a moment." })); }
     let Some(message) = b["message"].as_str().filter(|m| !m.is_empty()).map(String::from) else { return answer(400, json!({ "error": "Empty message." })) };
     let context: String = b["context"].as_str().unwrap_or("").chars().take(20000).collect();
     let fresh = b["fresh"].as_bool().unwrap_or(false) || (b["fresh"].is_number() && b["fresh"] != json!(0)) || b["fresh"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
-    if fresh { sessions::supdate(w, a, &sx, |m| { m.remove("claudeSessionId"); m.remove("ctx"); }); }
+    // (a fresh conversation on a PGM session is a new PGM session on the Jcode PGM Server, T-376 stage 3)
+    if fresh { sessions::supdate(w, a, &sx, |m| { m.remove("claudeSessionId"); m.remove("ctx"); m.remove("pgm"); }); }
     if w.shares_session(&a.username, &sx.sid) { w.share_line(&a.username, "user", &message); }
     let pj = w.project_in(a, &sx);
     // each session its own worktree (T-292): the first one the person's, the others <user>.<id> on work/<user>.<id>
     let none = pj == NO_PROJECT;
-    let wd = match w.session_wt(a, &sx) { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
+    // (git work, one registry change at a time: off the async threads, so a wave of first messages never stalls the hub's other calls)
+    let wd = match { let (w2, a2, sx2) = (w.clone(), a.clone(), sx.clone()); tokio::task::spawn_blocking(move || w2.session_wt(&a2, &sx2)).await.unwrap_or_else(|e| Err(e.to_string())) } { Ok(wd) => wd, Err(e) => return one_line(json!({ "type": "bridge_error", "text": format!("Could not prepare your worktree: {e} (switch to the shared folder or ask the host).") })) };
     sessions::supdate(w, a, &sx, |m| { m.insert("lastRunAt".into(), json!(now_ms())); });
     // a new message answers whatever the session waited for (T-288)
     { let (path, branch) = (wd.dir.display().to_string(), wd.branch.clone()); sessions::touch(a, &sx.sid, |m| { m.insert("worktree".into(), json!({ "path": path, "branch": branch, "project": wd.project })); m.insert("lastActivityAt".into(), json!(now_ms())); m.remove("ended"); m.remove("waiting"); }); }
-    if none { } else if !sx.own { w.check_fresh(a); } else { w.check_fresh_in(a, &pj, Some(sx.hex())); }
+    if none { } else if !sx.own { w.check_fresh_in(a, &pj, None); } else { w.check_fresh_in(a, &pj, Some(sx.tree())); }
     let st = sessions::sstate(w, a, &sx);
     let permission_mode: String = hub.cfg().get("permissionMode").and_then(Value::as_str).unwrap_or("default").into();
     let run_secret = pgm_core_internal::crypto::random_hex(24); // this run's own secret for its MCP relays (T-308)
@@ -889,13 +960,24 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let model = { let m = s(&st, "model"); if m.is_empty() { w.default_model_of(a) } else { m } };
     let ai = hub.ai();
     // (on the dev hub while live does not lend its hosts, T-335: "… (live's AI hosts are not reachable from dev right now)")
-    let Some(prov) = w.effective(ai, &a.username, &s(&st, "provider")) else { return one_line(json!({ "type": "bridge_error", "text": ai.with_peer_note("No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings.") })) };
+    // opt-in fallback (T-370): the session's Claude (an AI host) is offline or at its cap and the person chose to use OpenRouter then
+    let mut prov_o = w.effective(ai, &a.username, &s(&st, "provider"));
+    let (mut fb_pair, mut fb_line): (Option<String>, Option<String>) = (None, None);
+    if let Some((fp, pair, line)) = crate::openrouter::fallback_for(&**hub, &a.username, prov_o.as_ref()) { prov_o = Some(fp); fb_pair = Some(pair); fb_line = Some(line); }
+    let model = fb_pair.clone().unwrap_or(model);
+    let Some(prov) = prov_o else { return one_line(json!({ "type": "bridge_error", "text": ai.with_peer_note("No AI is available for Work: this hub has no Claude of its own and no AI host offering one is connected. Ask the person whose AI host it is to start it (the heart), or hook up an AI of your own in Settings.") })) };
     let Some(harness) = Work::harness_of(&prov) else { return one_line(json!({ "type": "bridge_error", "text": "Your chosen AI provider can run neither Claude Code nor Jcode PGM, so it cannot run Work. Pick a Claude or a Jcode PGM model in the dropdown." })) };
     let prov_env = Work::claude_env(&prov).unwrap_or_default();
     let kind = s(&prov, "kind");
     if (kind == "host" || kind == "claude-cli") && hub.root().join("ai-host.off").exists() { return one_line(json!({ "type": "bridge_error", "text": AI_OFF_TEXT })); }
     // a provider shared with a scope: Work must be among its uses and the model among its models (the owner names what is allowed)
     if let Err(m) = ai.scope_check(&a.username, &s(&prov, "id"), "work", &model) { return one_line(json!({ "type": "bridge_error", "text": format!("{m} Pick another AI or model in the dropdown.") })); }
+    // an OpenRouter model runs Jcode PGM on this server (config jcode.command); refused here, in plain words, when that is off or the month's budget is used up
+    let state_model0 = fb_pair.clone().unwrap_or_else(|| s(&st, "model"));
+    // with a Jcode PGM Server next to the hub (T-376 stage 3, F.4) an OpenRouter session is a PGM session: the server runs it
+    let pgm_srv = if kind == crate::openrouter::KIND { hub.pgm_server() } else { None };
+    if pgm_srv.is_none() && w.busy_key(&sx.key) { return answer(409, json!({ "error": "Claude is already working. Stop it first." })); }
+    let or_plan = if kind == crate::openrouter::KIND && pgm_srv.is_none() { match crate::openrouter::work_plan(&**hub, &a.username, &prov, &state_model0) { Ok(p) => Some(p), Err(e) => return one_line(json!({ "type": "bridge_error", "text": e })) } } else { None };
     let owner = s(&prov, "owner"); let nick = s(&prov, "nickname");
     let host_id = s(&prov, "hostId"); let prov_id = s(&prov, "id").split_once('/').map(|x| x.1.to_string()).unwrap_or_default();
     let hjcode = kind == HOST_JCODE;
@@ -921,7 +1003,17 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         if used >= max_u { return answer(429, json!({ "error": format!("{where_}: {used} of {max_u} sessions working. Wait for one, stop one, or use another AI host."), "limit": { "host": host, "used": used, "max": max_u } })); }
         if used_p >= max_p { return answer(429, json!({ "error": format!("{where_} / {pfull}: {used_p} of {max_p} sessions working on it. Wait for one, stop one, or pick another AI."), "limit": { "host": host, "used": used_p, "max": max_p, "provider": pfull } })); }
       } }
-    let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else { String::new() };
+    if let Some(srv) = pgm_srv {
+        let ctx = context.clone();
+        let text = if ctx.is_empty() { message.clone() } else { format!("{message}
+
+---
+{ctx}") };
+        // target "server" = continue on the server even while jcode on the person's computer has it (it hands its work over first)
+        let target = if s(&b, "target") == "server" { "server" } else { "auto" };
+        return crate::pgm_work::chat(hub, a, &sx, &prov, &state_model0, &wd, &text, target, fb_line.as_deref(), &test_started_by(&b).unwrap_or_else(|| a.username.clone()), srv).await;
+    }
+    let source = if kind == "host" { "hub".to_string() } else if kind == "host-claude" { s(&prov, "id") } else if kind == crate::openrouter::KIND { "openrouter".to_string() } else { String::new() };
     // a Claude session lives where it ran (relayed runs run here, on this hub); a Jcode PGM host's, on that host
     let wher = if (kind == "host-claude" && s(&prov, "remoteKind") == "claude-cli-work") || hjcode { host_id.clone() } else { "hub".to_string() };
     // a session is resumed only where it ran and by the harness that made it (a Jcode PGM session id means nothing to Claude Code)
@@ -940,7 +1032,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let jf = sessions::journal_file(a, &sx);
     if std::fs::metadata(&jf).map(|m| m.len() > sessions::JOURNAL_MAX).unwrap_or(false) { pgm_core_internal::store::global().flush(); let _ = std::fs::rename(&jf, jf.with_extension("old.jsonl")); pgm_core_internal::store::forget_hot(&jf); }
     pgm_core_internal::store::global().append_line(&jf, &json!({ "run": run_id, "at": now_ms(), "user": message, "fresh": fresh }));
-    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { journal: Some(jf), id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()), machines: Vec::new(), dir: wd.dir.display().to_string(), tasks: Vec::new() });
+    w.runs.lock().unwrap_or_else(|e| e.into_inner()).insert(sx.key.clone(), Run { journal: Some(jf), id: run_id.clone(), tx: tx.clone(), pid: None, remote: String::new(), pending: HashMap::new(), ev: RunLog::default(), last: now_ms(), answered: false, prov: s(&prov, "id"), project: wd.project.clone(), branch: wd.branch.clone(), started: now_ms(), secret: run_secret.clone(), account: a.username.clone(), sid: sx.sid.clone(), sess_env: if !sx.primary || planner { sx.sid.clone() } else { String::new() }, started_by: test_started_by(&b).unwrap_or_else(|| a.username.clone()), machines: Vec::new(), dir: wd.dir.display().to_string(), tasks: Vec::new(), pgm: String::new() });
     // its id first, so the page can join it again after a reload (/api/work/attach); older pages ignore it
     w.emit(&sx.key, json!({ "type": "bridge_run", "id": run_id, "session": sx.sid }));
     pgm_core_internal::obs::count("vr_runs_started", &[("harness", harness), ("kind", &kind)]);
@@ -1003,14 +1095,23 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     // `claude`, the message on stdin), or Jcode PGM (the provider's binary, `run --ndjson`, the message as the last
     // argument, a private jcode home with the hub's MCP servers and the system prompt as its overlay)
     let hkind = Work::harness_kind(&prov);
-    let mut hx = crate::harness::harness_for(hkind, &prov, &s(&st, "model"));
+    // an OpenRouter run: Jcode PGM on this server, pointed at this hub's relay for the run (no key in its arguments or environment)
+    let hprov = or_plan.as_ref().map(|p| p.prov.clone()).unwrap_or_else(|| prov.clone());
+    let mut or_tok: Option<String> = None;
+    if let Some(pl) = &or_plan {
+        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed);
+        relay_env = crate::openrouter::relay_env(hub.cfg().port, &tok); relay_env.extend(pl.env.iter().cloned());
+        or_tok = Some(tok);
+        if let Some(l) = &fb_line { w.emit(&sx.key, json!({ "type": "bridge_info", "text": l })); }
+    }
+    let mut hx = crate::harness::harness_for(hkind, &hprov, &fb_pair.clone().unwrap_or_else(|| s(&st, "model")));
     let mcp_json = if hkind == crate::harness::HarnessKind::Jcode { w.mcp_json(a, &sx, &run_secret) } else { Value::Null };
     let sid = s(&st, "claudeSessionId");
     let claude_command = hub.cfg().get("claudeCommand").and_then(Value::as_str).unwrap_or("claude").to_string();
     let mut claude_args: Vec<String> = hub.cfg().get("claudeArgs").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     if planner { claude_args.extend(["--disallowedTools".to_string(), PLANNER_DENIED.to_string()]); } // deny beats allow and any permission mode
-    let state_model = s(&st, "model");
-    let spec = hx.command(&crate::harness::RunContext { prov: &prov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
+    let state_model = fb_pair.clone().unwrap_or_else(|| s(&st, "model"));
+    let spec = hx.command(&crate::harness::RunContext { prov: &hprov, input: &input, resume: if resume { Some(sid.as_str()) } else { None }, model: &model, state_model: &state_model, acct_dir: &a.dir, cwd: &wd.dir,
         system_prompt: &system_prompt, mcp_json: &mcp_json, mcp_config: &mcp_config, permission_mode: &permission_mode, allowed_tools: &tools, add_dirs: &add_dirs, claude_command: &claude_command, claude_args: &claude_args });
     if let Some(b) = hx.banner() { w.emit(&sx.key, json!({ "type": "bridge_info", "text": b })); }
     let (command, harness_env, input) = (spec.program.clone(), spec.env.clone(), spec.stdin.clone());
@@ -1027,7 +1128,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         let w = h.work();
         let mut child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => { w.emit(&sx2.key, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&*h, &a2, &sx2, &id, json!(-2)); return; }
+            Err(e) => { if let Some(t) = &or_tok { crate::openrouter::relay_forget(t); } w.emit(&sx2.key, json!({ "type": "bridge_error", "text": format!("Could not start {command}: {e}") })); w.finish(&*h, &a2, &sx2, &id, json!(-2)); return; }
         };
         if let Some(r) = w.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&sx2.key) { r.pid = child.id(); }
         if let Some(mut stdin) = child.stdin.take() { let inp = input.clone(); tokio::spawn(async move { let _ = stdin.write_all(inp.as_bytes()).await; let _ = stdin.shutdown().await; }); }
@@ -1042,6 +1143,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
         }
         let code = child.wait().await.ok().and_then(|s| s.code()).map(|c| json!(c)).unwrap_or(Value::Null);
         if let Some(t) = err_task { let _ = t.await; }
+        if let Some(t) = &or_tok { crate::openrouter::relay_forget(t); } // the run's relay dies with it
         w.finish(&*h, &a2, &sx2, &id, code);
     });
     ndjson(rx)
@@ -1191,8 +1293,18 @@ pub fn providers_list(hub: &dyn AiHub, user: &str) -> Vec<Value> {
     for p in w.own_providers() { if p["shared"] == json!(true) || p["owner"] == json!(user) {
         let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(&p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
         for k in ["baseUrl", "configDir"] { if !s(&p, k).is_empty() { v[k] = p[k].clone(); } }
+        if p["kind"] == json!(crate::openrouter::KIND) {
+            v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) };
+            if let Some(why) = crate::openrouter::work_off(hub, &p) { v["workOff"] = json!(why); } // Work needs Jcode PGM on the server: why it is not offered
+        }
         out.push(v);
     } }
+    // T-372: their own OpenRouter key as the provider "my OpenRouter" (theirs alone; no key in this view)
+    if let Some(p) = w.personal_for(user) {
+        let mut v = crate::openrouter::personal_public(&p);
+        if let Some(why) = crate::openrouter::work_off(hub, &p) { v["workOff"] = json!(why); }
+        out.push(v);
+    }
     out.extend(hub.ai().providers_for(user));
     out
 }
@@ -1309,8 +1421,11 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let w = hub.work(); let u = &a.username;
     let (get, post) = (r.method == hyper::Method::GET, r.method == hyper::Method::POST);
     let p = r.path.as_str();
+    // /transfer (T-375): a handoff, then a fresh session that goes on from it (crate::transfer); before the sessions' own routes
+    if p == "/api/work/sessions/transfer" && post { return Some(crate::transfer::route(hub, a, r).await); }
     if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
     if let Some(resp) = crate::gitpanel::route(hub, r, a).await { return Some(resp); }
+    if p == "/api/openrouter/mykey/test" && post { return Some(crate::openrouter::test_mykey(hub, u).await); } // T-372: the optional "test my key" call (async)
     if let Some(resp) = crate::projects::route(hub, r, a).await { return Some(resp); }
     // the session a request names (plans/multi-session.md; none = the first one, as older pages send it)
     let sess = |b: &Value| sessions::resolve(a, &sessions::wanted(r, b));
@@ -1339,6 +1454,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let prov = if !want.is_empty() && want != "host" { w.provider_get(ai, &want, u) } else { w.default_for(ai, u).or_else(|| w.provider_get(ai, "host", "")) };
             let Some(prov) = prov else { return Some(answer(400, json!({ "error": "Unknown provider." }))) };
             if Work::harness_of(&prov).is_none() { return Some(answer(400, json!({ "error": "That provider cannot run Work: it is neither Claude Code nor Jcode PGM. Use it for the API or the Unity section instead." }))); }
+            if let Some(why) = crate::openrouter::work_off(&**hub, &prov) { return Some(answer(400, json!({ "error": why, "workOff": true }))); } // OpenRouter without Jcode PGM on this server
             let ids: Vec<String> = if prov["kind"] == json!("host") { w.model_ids() } else { prov["models"].as_array().map(|m| m.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() };
             let Some(model) = b["model"].as_str().map(String::from) else { return Some(answer(400, json!({ "error": "Unknown model." }))) };
             // a jcode provider without a model list takes any model id (jcode resolves it; empty = jcode's default)
@@ -1417,7 +1533,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             let pj = match w.wt.project(&want) { Ok(p) => p, Err(e) => return Some(answer(400, json!({ "error": e }))) };
             let Some(sx) = sess(&b) else { return Some(no_session()) };
             if w.busy_key(&sx.key) { return Some(answer(409, json!({ "error": "Wait for the current reply (or stop it) before switching." }))); }
-            let wd = match if !sx.own { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.hex(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
+            let wd = match if !sx.own { w.wt.ensure(u, &pj.name) } else { w.wt.ensure_session(u, sx.tree(), &pj.name) } { Ok(x) => x, Err(e) => return Some(answer(500, json!({ "error": format!("Could not prepare your worktree: {e}") }))) };
             let switched = w.project_in(a, &sx) != pj.name;
             sessions::supdate(w, a, &sx, |m| { m.remove("noProject"); if switched { m.remove("claudeSessionId"); } if pj.hub { m.remove("project"); } else { m.insert("project".into(), json!(pj.name)); } });
             w.check_fresh(a);
@@ -1659,8 +1775,9 @@ pub fn start(hub: &Arc<dyn AiHub>) {
             // and the worktrees of their sessions used that day
             let Some(ix) = sessions::index_if_any(&a) else { continue };
             for (sid, m) in ix["sessions"].as_object().cloned().unwrap_or_default() {
-                if (sid == s(&ix, "primary") && m["ownTree"] != json!(true)) || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
-                h.work().check_fresh_in(&a, &s(&m["worktree"], "project"), Some(sid.trim_start_matches("s-")));
+                let sx = sessions::sx_in(&a, &ix, &sid); // its worktree (T-375: one a transfer handed it; none once it gave it on)
+                if !sx.own || sx.gave || !m["worktree"].is_object() || now_ms().saturating_sub(m["lastActivityAt"].as_u64().unwrap_or(0)) > 86_400_000 { continue; }
+                h.work().check_fresh_in(&a, &s(&m["worktree"], "project"), Some(sx.tree()));
             }
         }
     } });
@@ -1760,7 +1877,7 @@ mod tests {
     fn put_run(w: &Work, key: &str, account: &str, sid: &str, sess_env: &str, secret: &str, id: &str, remote: &str) {
         let (tx, _rx) = mpsc::unbounded_channel();
         w.runs.lock().unwrap().insert(key.into(), Run { journal: None, id: id.into(), tx, pid: None, remote: remote.into(), pending: HashMap::new(), ev: RunLog::default(), last: 0, answered: false, prov: String::new(), project: String::new(), branch: String::new(), started: 0,
-            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new(), dir: String::new(), tasks: Vec::new() });
+            secret: secret.into(), account: account.into(), sid: sid.into(), sess_env: sess_env.into(), started_by: account.into(), machines: Vec::new(), dir: String::new(), tasks: Vec::new(), pgm: String::new() });
     }
     /// T-308: the per-run secret names the run; the account and session come from the run record; a header that disagrees is refused;
     /// the deprecated shared secret still works (and says so); nothing else is ours.

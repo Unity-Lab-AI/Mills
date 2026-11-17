@@ -106,10 +106,68 @@ header b { font-weight: 750; letter-spacing: .01em; }
 #menu .choices button.tile:hover .ic { background: var(--grad-accent); color: var(--on-accent); }
 #menu .badge { background: var(--grad-accent); color: var(--on-accent); box-shadow: 0 2px 10px var(--accent-glow); top: .5rem; right: .5rem; }
 .menuFoot { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: center; }
-/* the Download row sits above Settings / Sign out: Vibe Roller Desktop + Vibe Roller AI Host (Windows + Linux) */
-.menuFoot.menuDl { margin-bottom: -.3rem; }
-.menuFoot.menuDl button { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--accent); background: var(--accent-soft); }
-.menuFoot.menuDl button:hover { background: var(--grad-accent); color: var(--on-accent); border-color: transparent; }
+/* T-377: the menu in four sections (Productivity, Utility, AI, Administration), each a heading over its own grid of tiles */
+#menu .menuSections { display: flex; flex-direction: column; gap: 1.1rem; width: min(900px, 94vw); }
+#menu .menuSec { display: flex; flex-direction: column; gap: .5rem; }
+#menu .menuSec[hidden] { display: none; }
+#menu .menuSec > h2 { margin: 0; padding: 0 .2rem; text-align: left; font-size: .78rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: .6rem; }
+#menu .menuSec > h2::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+#menu .menuSec .choices { width: 100%; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); } /* a full section (4) fits one row */
+/* T-379: Productivity two to a row; Settings / Downloads under My status / Team now, the same small buttons; the site-wide message */
+#menu .menuSec[data-menusec="productivity"] .choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#menu .menuQuick { margin-top: -.1rem; }
+#menu .menuQuick .ic { width: 1em; height: 1em; }
+.menuMotd { max-width: min(900px, 94vw); padding: .6rem .9rem; border-radius: var(--r-m); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft); white-space: pre-wrap; text-align: center; font-size: .9rem; }
+.menuMotd[hidden] { display: none; }
+/* T-379: Site admin and AI Admin, a column of groups like Settings; AI Admin's Global part, a line, then Yours */
+.adminPage { display: flex; flex-direction: column; gap: 1rem; box-sizing: border-box; }
+/* the whole screen scrolls (the wheel works anywhere, the scrollbar sits at the window edge); the padding keeps the content a
+   centred column of at most 1000px. By id: #adminBody's own rule in index.html would win over a class. */
+/* T-380: Settings as a page (from the main menu): the same #settings, laid in its screen; the whole screen scrolls like the
+   admin pages, the tabs stay on top and the Save bar at the bottom while it does; no title or Close (the header has them) */
+#settingsPageBody { flex: 1; min-height: 0; display: flex; }
+#settings.asPage { position: static; inset: auto; z-index: auto; display: block; flex: 1; min-height: 0; overflow-y: auto; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; padding: 0 max(1rem, calc((100% - 900px) / 2)); }
+#settings.asPage[hidden] { display: none; }
+#settings.asPage .setBox { width: 100%; height: auto; max-height: none; max-width: none; margin: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; animation: none; }
+#settings.asPage .setBox > .bar { padding: .75rem 0 0; border: 0; }
+#settings.asPage .setBox > .bar > span, #settings.asPage #closeSettings { display: none; }
+#settings.asPage .setTabs { position: sticky; top: 0; z-index: 3; background: var(--bg); padding-left: 0; padding-right: 0; }
+#settings.asPage .setBody { overflow: visible; padding: 1rem 0 0; }
+#settings.asPage .setNav { top: 3.4rem; }
+#settings.asPage .setSave { position: sticky; bottom: 0; border-radius: 0; margin: 0; }
+#adminBody.adminPage, #aiAdminBody.adminPage { flex: 1; min-height: 0; width: 100%; margin: 0; overflow-y: auto; padding: 1rem max(1rem, calc((100% - 1000px) / 2)); }
+.adminPart { display: flex; flex-direction: column; gap: 1rem; }
+.adminPart[hidden], .adminPage .setGroup[hidden] { display: none; }
+.adminPartHead { margin: .2rem 0 0; font-size: 1.05rem; display: flex; flex-direction: column; gap: .15rem; }
+.adminPartHead small { font-size: .8rem; font-weight: 400; color: var(--muted); }
+.adminSplit { border: 0; border-top: 2px solid var(--hairline); margin: .4rem 0; width: 100%; }
+.adminSplit[hidden] { display: none; }
+.adminPage .setGroup { padding: .9rem 1rem; border: 1px solid var(--hairline); border-radius: var(--r-m); background: var(--panel); }
+.adminPage table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.adminPage th, .adminPage td { border-bottom: 1px solid var(--line); padding: .4rem; text-align: left; vertical-align: middle; }
+.adminPage .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.adminPage label.setRow { display: grid; grid-template-columns: 1fr minmax(11rem, 24rem); gap: .4rem 1rem; align-items: center; }
+.adminPage label.setRow small, .adminPage label.chk small { display: block; color: var(--muted); font-size: .78rem; }
+.adminPage label.chk { display: grid; grid-template-columns: auto 1fr; gap: .5rem; align-items: start; }
+.roleRow { display: flex; flex-direction: column; gap: .35rem; padding: .55rem 0; border-bottom: 1px dashed var(--line); }
+.roleHead { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; } .roleHead small { color: var(--muted); }
+.roleCell { display: inline-flex; align-items: center; white-space: nowrap; }
+.roleChip { display: inline-flex; align-items: center; gap: .35rem; font-weight: 600; }
+.roleDot { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; flex: none; margin-right: .25rem; }
+.rolePerms { display: flex; flex-wrap: wrap; gap: .3rem; }
+.permChip { font-size: .75rem; padding: .1rem .5rem; border-radius: 999px; background: var(--surface-sunk); border: 1px solid var(--hairline); }
+.permChip.all { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+.roleForm { display: flex; flex-direction: column; gap: .6rem; padding: .6rem 0; }
+.permSet { border: 1px solid var(--hairline); border-radius: var(--r-s); padding: .5rem .7rem; display: flex; flex-direction: column; gap: .4rem; }
+.permSet legend { font-size: .8rem; font-weight: 700; color: var(--muted); padding: 0 .3rem; }
+.orWhich { display: flex; flex-direction: column; gap: .4rem; margin: .4rem 0; }
+.orWhich label.chk { display: grid; grid-template-columns: auto 1fr; gap: .5rem; align-items: start; }
+.orWhich small { display: block; color: var(--muted); font-size: .78rem; }
+@media (max-width: 560px) { .adminPage label.setRow { grid-template-columns: 1fr; } .adminPage table { display: block; overflow-x: auto; white-space: nowrap; } }
+/* "Also here": the PGM products as rounded-rectangle buttons (same links) */
+.menuProducts { align-items: center; }
+.menuProducts .prodBtn { display: inline-flex; align-items: center; padding: .45rem .9rem; border-radius: var(--r-m); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: .9rem; text-decoration: none; transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .12s ease; }
+.menuProducts .prodBtn:hover, .menuProducts .prodBtn:focus-visible { background: var(--grad-accent); color: var(--on-accent); border-color: transparent; transform: translateY(-1px); }
 #dlBody .setSection + .setSection { margin-top: .7rem; }
 #dlBody .row { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
 #appUser button.tiny { flex: none; }
@@ -136,8 +194,7 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .setSave { background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top-color: var(--hairline); }
 #setFind { background-color: var(--surface-sunk); }
 /* the cards the page builds itself (Downloads) look like the groups around them */
-#settings .setSection { padding: .85rem .95rem .95rem; }
-#dlBody { display: flex; flex-direction: column; gap: .9rem; } #dlBody .setSection + .setSection { margin-top: 0; }
+#settings .setSection, #downloads .setSection { padding: .85rem .95rem .95rem; }#dlBody { display: flex; flex-direction: column; gap: .9rem; } #dlBody .setSection + .setSection { margin-top: 0; }
 #dlBody .setSection > b:first-child { font-size: .95rem; padding-bottom: .5rem; border-bottom: 1px solid var(--hairline); }
 .swatches button { border-radius: 50%; box-shadow: var(--sh-1); }
 .swatches button.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }

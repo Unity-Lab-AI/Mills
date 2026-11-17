@@ -529,7 +529,7 @@ impl AiHosts {
         self.usage.note_windows(&format!("h:{host}/{pid}"), &rec);
         self.changed();
     }
-    /// The account the hub registered a host to (Settings → My AI hosts), "" for none. Never the name a host says it has.
+    /// The account the hub registered a host to (AI Admin → My AI hosts), "" for none. Never the name a host says it has.
     fn registered_owner(r: &Value) -> String { r["user"].as_str().unwrap_or("").to_string() }
     /// A machine the caller NAMED (its id or nickname), for the account that is calling (T-308, plans/linked-machines.md
     /// section 4.3): only that machine's registered owner may use it. Another person's machine is refused with 403 and no
@@ -705,7 +705,7 @@ impl AiHosts {
                 let engines: Vec<String> = match &b["engines"] { Value::Array(a) => a.iter().filter_map(|e| e.as_str().map(String::from)).collect(), Value::Object(m) => m.keys().cloned().collect(), _ => vec![] };
                 let engines: Vec<String> = engines.into_iter().filter(|e| ENGINES.contains(&e.as_str())).collect();
                 let user = { let u = r["user"].as_str().unwrap_or(""); if u.is_empty() { b["user"].as_str().unwrap_or("").to_string() } else { u.to_string() } };
-                // its computer (PC tools) only for the owner the hub registered it to (Settings → My AI hosts / "Run on
+                // its computer (PC tools) only for the owner the hub registered it to (AI Admin → My AI hosts / "Run on
                 // this PC"), never for a name a host says it belongs to: only Gee works on Gee's computer
                 let pc = b["pc"] == json!(true) && !r["user"].as_str().unwrap_or("").is_empty();
                 let hello = json!({ "at": now_ms(), "nickname": r["nickname"], "user": user, "providers": Self::clean_providers(&b["providers"], &caps), "engines": engines, "version": b["version"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "os": b["os"].as_str().unwrap_or("").chars().take(20).collect::<String>(), "pc": pc, "caps": caps, "sessionLimits": clean_limits(&b["sessionLimits"]) });
@@ -810,7 +810,7 @@ impl AiHosts {
         if files.is_empty() { None } else { Some(json!({ "version": v, "commit": c, "files": files })) }
     }
 
-    // ---------- Settings → My AI hosts ----------
+    // ---------- AI Admin → My AI hosts ----------
     fn pub_host(&self, r: &Value) -> Value {
         let id = r["id"].as_str().unwrap_or("");
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner()); let n = live.get(id);
@@ -909,7 +909,7 @@ impl AiHosts {
     pub fn config_for(&self, user: &str, id: &str, hub: &str, models: Vec<String>) -> Result<Value, String> {
         let r = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].get(id).cloned().filter(|r| r["user"] == json!(user)).ok_or("Not your host.")?;
         let nick = r["nickname"].as_str().unwrap_or("");
-        Ok(json!({ "_": format!("VibeRoller AI Host \"{nick}\" of {user}: made in Settings → My AI hosts. Keep this file private: the token is this host's key to the hub."), "hub": hub, "id": r["id"], "nickname": nick, "user": user, "token": r["secret"],
+        Ok(json!({ "_": format!("VibeRoller AI Host \"{nick}\" of {user}: made in AI Admin → My AI hosts. Keep this file private: the token is this host's key to the hub."), "hub": hub, "id": r["id"], "nickname": nick, "user": user, "token": r["secret"],
             "providers": [{ "id": "claude", "kind": "claude-relay", "label": format!("{user}'s Claude"), "models": models, "max5h": 90, "max7d": 90, "shareWithGroup": true, "allowedUsers": [] },
                 { "id": "codex", "kind": "codex-relay", "label": format!("{user}'s ChatGPT / Codex"), "models": ["gpt-5.5"], "shareWithGroup": true, "allowedUsers": [] }],
             "engines": { "ollama": "http://127.0.0.1:11434", "image": "http://127.0.0.1:5124", "voice": "http://127.0.0.1:5123", "speech": "http://127.0.0.1:5125" },
@@ -921,9 +921,35 @@ impl AiHosts {
     /// The person's own hosts as the monitoring panel shows them: the latest status the host reported, online / since,
     /// the usage windows, and who is using it now (the hub knows its jobs in flight: the kind, and for a Work run the
     /// person and project; never what was asked).
+    /// The jobs in flight: (host id, what it is used for).
+    fn in_use(&self) -> Vec<(String, Value)> {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).values().map(|p| (p.host.clone(), { let mut u = use_of(&p.kind, &p.account, &p.display, &p.project, p.started, p.picked); if !p.via.is_empty() { u["via"] = json!(p.via); if u["person"].as_str().is_some_and(|x| !x.is_empty()) { u["person"] = json!(format!("{} (via {})", u["person"].as_str().unwrap_or(""), p.via)); } } u })).collect()
+    }
+    /// Every AI host on this hub as AI Admin sees it (T-379): owner, state, version, last seen, what uses it now, and who
+    /// may use it (every person its providers are shared with).
+    pub fn overview(&self) -> Vec<Value> {
+        let pend = self.in_use();
+        self.all_records().iter().map(|r| {
+            let id = r["id"].as_str().unwrap_or(""); let base = self.pub_host(r);
+            let mut users: Vec<String> = base["providers"].as_array().into_iter().flatten().flat_map(|p| p["allowedUsers"].as_array().cloned().unwrap_or_default()).filter_map(|u| u.as_str().map(String::from)).collect();
+            users.sort(); users.dedup();
+            json!({ "id": id, "nickname": r["nickname"], "owner": self.owner_of(r), "online": base["online"], "paused": base["paused"], "version": base["version"], "seen": base["seen"],
+                "inUse": pend.iter().filter(|(h, _)| h == id).map(|(_, v)| v.clone()).collect::<Vec<_>>(), "users": users })
+        }).collect()
+    }
+    /// The people whose AI host offers a Claude login (a `host-claude` provider), each once: the default AI can be one of theirs.
+    pub fn claude_owners(&self) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        for r in self.all_records() {
+            let claude = self.live.lock().unwrap_or_else(|e| e.into_inner()).get(r["id"].as_str().unwrap_or("")).and_then(|n| n.hello.as_ref().map(|h| h["providers"].as_array().into_iter().flatten().any(|p| Self::hub_kind(p["kind"].as_str().unwrap_or("")) == "host-claude"))).unwrap_or(false);
+            let o = self.owner_of(&r);
+            if claude && !o.is_empty() && !out.contains(&o) { out.push(o); }
+        }
+        out.sort(); out
+    }
     pub fn status_for(&self, user: &str) -> Vec<Value> {
         let recs: Vec<Value> = self.db.lock().unwrap_or_else(|e| e.into_inner())["hosts"].as_object().map(|m| m.values().filter(|r| r["user"] == json!(user) && !user.is_empty()).cloned().collect()).unwrap_or_default();
-        let pend: Vec<(String, Value)> = self.pending.lock().unwrap_or_else(|e| e.into_inner()).values().map(|p| (p.host.clone(), { let mut u = use_of(&p.kind, &p.account, &p.display, &p.project, p.started, p.picked); if !p.via.is_empty() { u["via"] = json!(p.via); if u["person"].as_str().is_some_and(|x| !x.is_empty()) { u["person"] = json!(format!("{} (via {})", u["person"].as_str().unwrap_or(""), p.via)); } } u })).collect();
+        let pend = self.in_use();
         let was = self.was_up.lock().unwrap_or_else(|e| e.into_inner()).clone();
         recs.iter().map(|r| {
             let id = r["id"].as_str().unwrap_or("");

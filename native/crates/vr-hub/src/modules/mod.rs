@@ -16,6 +16,7 @@ pub mod ai_hosts;
 pub mod profile;
 pub mod re;
 pub mod site;
+pub mod siteadmin;
 pub mod sync;
 mod traits;
 pub mod auth;
@@ -31,6 +32,7 @@ pub mod machines;
 pub mod guilds;
 pub mod hyperwork;
 pub mod perms;
+pub mod pgm;
 pub mod native_releases;
 pub mod notes;
 pub mod openai;
@@ -111,6 +113,8 @@ pub struct Modules {
     pub instance: Instance,
     /// the data bridge to the other hub on this machine (T-324), when config sync names one
     pub sync: std::sync::OnceLock<Arc<sync::Bridge>>,
+    /// the Jcode PGM Server next to this hub (T-376): the shared secret and the /pgm/ forward
+    pub pgm: pgm::Pgm,
     mills: std::path::PathBuf,
 }
 impl Modules {
@@ -126,7 +130,7 @@ impl Modules {
         let users: Vec<(String, String, bool)> = accounts.into_iter().map(|a| (a.username, a.display, a.admin)).collect();
         let chat = Arc::new(chat::Chat::new(&mills, root, cfg, &users));
         Ok(Modules { front_secret, auth, api, chat, unity: unity::Unity::new(root, cfg), unity_room: Default::default(), build: Default::default(), downloads: downloads::Downloads::new(root), releases: releases::Releases::new(), board: Arc::new(board::Board::new(mills.join("Board"))), mirror: Arc::new(forgejo::Mirror::new(root.to_path_buf(), cfg)), notes: notes::Notes::new(mills.join("Notes")),
-            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), instance: Instance::from_cfg(cfg), sync: Default::default(), mills })
+            files: files::Files::new(&mills, root, cfg), ai, native: native_releases::Releases::new(root), work: Arc::new(work::Work::new(root, cfg)), gateway: gateway::Gateway::new(root), re: Arc::new(re::Re::new(&mills, cfg)), hyperwork: Default::default(), instance: Instance::from_cfg(cfg), sync: Default::default(), pgm: pgm::Pgm::new(root), mills })
     }
     pub fn mills_dir(&self) -> std::path::PathBuf { self.mills.clone() }
     /// config publicUrl when it is an https address, else this machine (bridge/server.js PUBLIC_URL)
@@ -227,6 +231,29 @@ pub fn run_left_claims(hub: &Hub, end: Value) {
             h.mods.board.auto_handoff(id, &key, "run ended (automatic)", &marker, &make);
         }
     });
+}
+/// A Work session was transferred to a new one (T-375, `AiHub::session_handoff`): each task the old session's runs left
+/// claimed that its person's Claude still holds gets one handoff note naming the new session (done so far: the transfer and
+/// its handoff; state: branch, uncommitted changes, both sessions; next: go on in the new session). The claim is left as it
+/// is. Once per transfer and task. The tasks noted.
+pub fn session_handoff(hub: &Hub, v: Value) -> Vec<String> {
+    let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+    let key = format!("{}#agent", s("account")); let marker = format!("transfer {}", s("to"));
+    let mut state: Vec<String> = vec![];
+    if s("project").is_empty() { state.push("No project (the session's scratch folder)".into()); } else if s("branch").is_empty() { state.push(format!("Project {}", s("project"))); } else { state.push(format!("Branch `{}` of {}", s("branch"), s("project"))); }
+    if let Some(n) = v["changes"].as_u64() { state.push(if n == 0 { "no uncommitted changes in the worktree".to_string() } else { format!("{n} uncommitted change{} in the worktree (git status)", if n == 1 { "" } else { "s" }) }); }
+    state.push(format!("the work goes on in session {} (\"{}\"), continued from session {}", s("to"), s("toTitle"), s("from")));
+    let state = state.join("; ") + ".";
+    let mut out = vec![];
+    for id in v["tasks"].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
+        let make = |_t: &Value| board::Handoff {
+            done: format!("The Work session \"{}\" was transferred to a fresh session, \"{}\": it wrote a handoff of where things stand (goal, what is done, the state of the worktree, decisions, open problems, next steps), and the new session started from it.", s("fromTitle"), s("toTitle")),
+            state: state.clone(),
+            next: format!("Go on in the Work session \"{}\": it has the handoff{}. The claim was left as it was: renew it from there, or claim the task again once it lapses.", s("toTitle"), if v["sameTree"] == json!(true) { " and the same worktree" } else { "" }),
+            questions: String::new() };
+        if hub.mods.board.auto_handoff(id, &key, "session transferred", &marker, &make) { out.push(id.to_string()); }
+    }
+    out
 }
 /// A person went offline (and is not working): every claim they (or their Claude) hold gets one short automatic handoff,
 /// unless a handoff was left since that claim began. How many were added.
@@ -383,6 +410,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if p == "/__vr-front" { return Routed::Answer(jresp(200, &json!({ "front": "vr-hub", "version": crate::VERSION, "modules": native_modules(), "alone": hub.alone() }))); }
     // the data bridge's hub-to-hub routes (T-324): the other hub on this machine only, with the shared secret
     if let Some(rest) = p.strip_prefix("/__sync/") { return sync::route(hub, r, rest).await; }
+    // the Jcode PGM Server asking this hub (T-376): this machine only, never through a proxy, with the shared secret
+    if let Some(rest) = p.strip_prefix("/__pgm/") { return pgm::api(hub, r, rest).await; }
     // the JavaScript hub asking a module of this one (with the front's secret, from this machine only)
     if let Some(rest) = p.strip_prefix("/__front/") {
         if !from_front(hub, r) { return answer(403, json!({ "ok": false, "error": "forbidden" })); }
@@ -456,6 +485,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     if let Some(rest) = p.strip_prefix("/p/") { return gateway::serve(hub, r, rest).await; }
     if p.starts_with("/llm/") { return work::llm(hub, r).await; }
     if p.starts_with("/llm-relay/") { return work::llm_relay(hub, r).await; } // the same, through Headroom (5.36.0)
+    if p.starts_with("/or-relay/") { return work::or_relay(hub, r).await; } // a Work run's Jcode PGM to OpenRouter (T-370)
     // Hyper Workflows (T-212): webhooks (signed, no session) and this machine's own events
     if let Some(id) = p.strip_prefix("/hooks/hyperwork/") { return if r.method == hyper::Method::POST { hyperwork::webhook(hub, r, id) } else { answer(405, json!({ "error": "POST only" })) }; }
     if p == "/internal/hyperwork/event" && r.method == hyper::Method::POST { return hyperwork::event(hub, r); }
@@ -506,6 +536,18 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             Err((s, e)) => answer(s, json!({ "error": e })),
         };
     }
+    // browser sign-in for Jcode PGM (T-371): the page asks `check` who is asking; the tool trades its code for a device token
+    if p == "/api/app-signin/check" && r.method == hyper::Method::GET {
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let q = |k: &str| r.param(k).unwrap_or_default();
+        return match a.devices.app_check(&ip, &q("client"), &q("device"), &q("redirect"), &q("state"), &q("challenge")) { Ok(v) => answer(200, v), Err((s, e)) => answer(s, json!({ "error": e })) };
+    }
+    if p == "/api/app-signin/exchange" && r.method == hyper::Method::POST {
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let b = r.json();
+        let s = |k: &str| b[k].as_str().unwrap_or("").to_string();
+        return match a.devices.app_exchange(&ip, &s("code"), &s("verifier"), &s("redirect"), &s("client"), &s("device")) { Ok(v) => answer(200, v), Err((s, e)) => answer(s, json!({ "error": e })) };
+    }
     // the public download routes are gone (4.0.0): downloads and updates need an account
     if let Some(x) = downloads::gone(r) { return x; }
     let user = a.session_user(r);
@@ -542,6 +584,14 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             _ => answer(405, json!({ "error": "Method not allowed." })),
         };
     }
+    // browser sign-in (T-371): the signed-in person (a page session or a device token, never a linked machine's) makes the code
+    if p == "/api/app-signin/authorize" && r.method == hyper::Method::POST {
+        let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
+        let ip = { let i = a.outside_ip(r); if i.is_empty() { "local".to_string() } else { i } };
+        let b = r.json();
+        let s = |k: &str| b[k].as_str().unwrap_or("").to_string();
+        return match a.devices.app_authorize(&u, &ip, &s("client"), &s("device"), &s("redirect"), &s("state"), &s("challenge")) { Ok(v) => answer(200, v), Err((s, e)) => answer(s, json!({ "error": e })) };
+    }
     // linked machines (T-309): the owner's list / rename / unlink, the admin's count, the machine's own poll and signed replies
     if p.starts_with("/api/machine") || p == "/api/device/peek" || p == "/api/transfers" || p.starts_with("/api/transfers/") { if let Some(x) = machines::route(hub, r).await { return x; } }
     // what the JavaScript hub learns with every request: who it is, and the notes' version (its chat poll carries it)
@@ -566,9 +616,15 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = agents::route(hub, r, &acc).await { return x; } // agent to agent (T-296): the Rust hub's only
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
+            // clearing the chat's history is the Manage hub permission's (T-379); the chat library still asks for an admin
+            if p == "/api/admin/room/clear" && r.method == hyper::Method::POST {
+                if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::MANAGE_HUB) { return x; }
+                if let Some(x) = chat::route(hub, r, &auth::Account { admin: true, ..acc.clone() }).await { return x; }
+            }
             if let Some(x) = chat::route(hub, r, &acc).await { return x; } // the chat, servers, calls, presence
             if let Some(x) = unity_routes::route(hub, r, &acc).await { return x; } // Unity's section
             if p == "/api/check" && r.method == hyper::Method::GET { return answer(200, site::check(hub, &acc)); }
+            if let Some(x) = siteadmin::route(hub, r, &acc).await { return x; } // Site admin's roles and settings, AI Admin (T-379)
             if p == "/api/version" && r.method == hyper::Method::GET { let b = hub.mods.build.get(hub).0; return answer(200, json!({ "version": b.split('+').next().unwrap_or(""), "build": b })); }
             if let Some(x) = profile::route(hub, r, &acc) { return x; } // profiles, prefs, pictures
             if let Some(x) = admin::route(hub, r, &acc).await { return x; } // the admin's accounts, My Forgejo
@@ -576,8 +632,8 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(x) = gateway::admin(hub, r, &acc) { return x; } // the admin's gateway products
             if let Some(x) = downloads::route(hub, r, &acc.username) { return x; } // the Download panel
             if let Some(x) = releases::route(hub, r).await { return x; } // the products' releases (T-250)
-            if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // the admin switches Unity's own-computer tools for one account
-                if !acc.admin { return answer(403, json!({ "error": "Admins only." })); }
+            if p == "/api/admin/unity-tools" && r.method == hyper::Method::POST { // AI Admin switches Unity's own-computer tools for one account
+                if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::MANAGE_AI) { return x; }
                 let b = r.json();
                 let Some(t) = b["username"].as_str().and_then(|x| a.account(x)) else { return answer(400, json!({ "error": "No such account." })) };
                 let u = &hub.mods.unity;
@@ -586,7 +642,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             }
         }
     }
-    // ----- Settings → My AI hosts, monitor and control (5.12.0): the person's own hosts, how they are doing, pause / resume / restart / update / log -----
+    // ----- AI Admin → My AI hosts, monitor and control (5.12.0): the person's own hosts, how they are doing, pause / resume / restart / update / log -----
     if p == "/api/hosts/status" && r.method == hyper::Method::GET {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         return answer(200, json!({ "hosts": hub.mods.ai.status_for(&u), "now": pgm_core_internal::now_ms() }));
@@ -597,7 +653,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
         let (id, action) = (b["id"].as_str().unwrap_or("").to_string(), b["action"].as_str().unwrap_or("").to_string());
         return match hub.mods.ai.control(&u, &id, &action, &b["limits"]).await { Ok(v) => answer(200, v), Err(e) => answer(e.status, json!({ "error": e.msg })) };
     }
-    // ----- Settings → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
+    // ----- AI Admin → My AI hosts (the list itself, GET /api/hosts, is the JavaScript hub's: it adds the default provider) -----
     if r.method == hyper::Method::POST && matches!(p, "/api/hosts/new" | "/api/hosts/rename" | "/api/hosts/remove" | "/api/hosts/share" | "/api/hosts/scope" | "/api/hosts/config") {
         let Some(u) = user.clone() else { return answer(401, json!({ "error": "Not signed in." })) };
         let (ai, b) = (&hub.mods.ai, r.json());
@@ -619,7 +675,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // Health (T-331 § 4): the hub's metrics, its write buffer, and one run's trace (every log line about it), for admins
     if r.method == hyper::Method::GET && matches!(p, "/api/admin/metrics" | "/api/admin/trace") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
-        if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
+        if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::VIEW_HEALTH) { return x; }
         if p == "/api/admin/metrics" {
             return Routed::Answer(jresp(200, &json!({ "version": crate::VERSION, "instance": if hub.is_dev() { "dev" } else { "live" }, "uptimeSec": pgm_core_internal::obs::uptime_s(),
                 "metrics": pgm_core_internal::obs::snapshot(), "store": pgm_core_internal::store::global().stats(), "sync": hub.mods.sync.get().map(|b| b.summary()) })));
@@ -631,10 +687,11 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
     // the admin's account switches that are this module's (the JavaScript hub keeps making / deleting accounts)
     if r.method == hyper::Method::POST && matches!(p, "/api/admin/password" | "/api/admin/unlock" | "/api/admin/allow-device" | "/api/admin/signout") {
         let Some(u) = &user else { return Routed::Answer(jresp(401, &json!({ "error": "Not signed in." }))) };
-        if !a.account(u).map(|x| x.admin).unwrap_or(false) { return Routed::Answer(jresp(403, &json!({ "error": "Admins only." }))); }
+        if let Some(x) = siteadmin::need(hub, u, pgm_identity_internal::siteroles::MANAGE_ACCOUNTS) { return x; }
         let keep_machines = r.json()["keepMachines"].as_bool() == Some(true);
         let target = r.json()["username"].as_str().and_then(|t| a.account(t));
         let Some(t) = target else { return Routed::Answer(jresp(400, &json!({ "error": "No such account." }))) };
+        if let Some(x) = siteadmin::may_act(hub, u, &t.username, true) { return x; } // T-379: only accounts below yours (and your own)
         return Routed::Answer(match p {
             "/api/admin/password" => {
                 let pw = auth::new_password();
@@ -889,6 +946,7 @@ pub fn after(hub: &Hub, r: &Req, status: u16, body: Option<&[u8]>) -> Option<Vec
             v["providers"] = json!(work::providers_list(hub, &acc.username));
             v["defaultProvider"] = json!(w.default_for(&hub.mods.ai, &acc.username).map(|p| s_of(&p, "id")).unwrap_or_default());
             v["hubClaude"] = json!(hub.cfg.get("hubClaude") != Some(&json!(false)));
+            v["site"] = siteadmin::check_field(hub, &acc); // T-379 (add-only)
             Some(v.to_string().into_bytes())
         }
         _ => None,

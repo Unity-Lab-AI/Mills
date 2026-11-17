@@ -131,6 +131,55 @@ impl Backend {
     }
 }
 
+/// Headers a proxy adds (nginx, Cloudflare): a call carrying one did not come straight from a program on this machine.
+pub const PROXIED: [&str; 5] = ["x-forwarded-for", "x-real-ip", "cf-connecting-ip", "forwarded", "x-forwarded-host"];
+/// Why [`local_gate`] refused a call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused { NotLocal, Proxied, Secret }
+/// The gate of routes that only another program on this machine may call, with a secret both share (the hub's /__sync/
+/// and /__pgm/): from this machine (loopback), not through a proxy (no forwarding header, whatever else it carries), and
+/// the secret in `secret_header`, compared in constant time. An empty `secret` lets nobody in.
+pub fn local_gate(peer: SocketAddr, header: &dyn Fn(&str) -> Option<String>, secret_header: &str, secret: &str) -> Result<(), Refused> {
+    if !peer.ip().is_loopback() { return Err(Refused::NotLocal); }
+    if PROXIED.iter().any(|h| header(h).is_some()) { return Err(Refused::Proxied); }
+    let given = header(secret_header).unwrap_or_default();
+    if !pgm_core_internal::crypto::same(secret.as_bytes(), given.as_bytes()) { return Err(Refused::Secret); }
+    Ok(())
+}
+
+/// A program on this machine that requests are passed to streamed both ways: the request's body goes on as it arrives
+/// and the answer comes back as it is made, neither read nor kept (a long SSE stream, a big upload). Dropping the answer
+/// (the caller hung up) closes the connection to the program, so it sees the hang-up too.
+pub struct Stream { client: Client<HttpConnector, Body> }
+impl Stream {
+    /// `connect`: how long connecting may take.
+    pub fn new(connect: Duration) -> Stream {
+        let mut conn = HttpConnector::new(); conn.set_nodelay(true); conn.set_connect_timeout(Some(connect));
+        Stream { client: Client::builder(TokioExecutor::new()).pool_idle_timeout(Duration::from_secs(30)).build(conn) }
+    }
+    /// The request to `url` (http://…, path and query included). `keep(header)` says which of the caller's headers go
+    /// along (the hop headers never do); `extra` are added. `head_wait`: how long the answer's status and headers may take
+    /// (the body after them has no limit). Err((status, why)): 502 / 503 / 504 with a plain reason.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send(&self, url: &str, method: hyper::Method, headers: &hyper::HeaderMap, keep: impl Fn(&str) -> bool, extra: &[(String, String)], body: Body, head_wait: Duration) -> Result<Response<Body>, (u16, String)> {
+        let mut b = Request::builder().method(method).uri(url);
+        for (k, v) in headers { if !HOP.contains(&k.as_str()) && k.as_str() != "host" && keep(k.as_str()) { b = b.header(k, v); } }
+        for (k, v) in extra { b = b.header(k.as_str(), v.as_str()); }
+        let req = b.body(body).map_err(|e| (502, format!("bad request: {e}")))?;
+        match tokio::time::timeout(head_wait, self.client.request(req)).await {
+            Err(_) => Err((504, "it did not answer in time".into())),
+            Ok(Err(e)) => Err((if e.is_connect() { 503 } else { 502 }, if e.is_connect() { "it is not running (nothing answers on its port)".into() } else { e.to_string() })),
+            Ok(Ok(resp)) => {
+                let (mut p, inc) = resp.into_parts();
+                for h in HOP { p.headers.remove(*h); }
+                Ok(Response::from_parts(p, inc.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>).boxed()))
+            }
+        }
+    }
+}
+/// A request's own body as a [`Body`] to pass on (at most `max` bytes: past that the stream ends in an error).
+pub fn stream_body(inc: Incoming, max: usize) -> Body { Limited::new(inc, max).boxed() }
+
 /// Resolves when the program is asked to stop (Ctrl+C; SIGTERM on Unix).
 pub async fn shutdown_signal() {
     #[cfg(unix)]

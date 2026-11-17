@@ -33,17 +33,29 @@ const MAX_SESSIONS: usize = 200;
 
 /// One session as a run sees it: its id, its run key, whether it is the primary one, and whether it works in its own
 /// <user>.<id> worktree (`own`: every session but a first one without one; a promoted first session keeps its own, T-341).
+/// `tree`: the <hex> of the session worktree it works in when `own` (its own id's, or the one a /transfer handed it, T-375);
+/// `gave`: it handed its worktree on to the session it was transferred to (it runs no more; deleting it leaves the tree).
 #[derive(Clone, Debug)]
-pub struct Sx { pub sid: String, pub key: String, pub primary: bool, pub own: bool }
+pub struct Sx { pub sid: String, pub key: String, pub primary: bool, pub own: bool, pub tree: String, pub gave: bool }
 impl Sx {
-    /// The session's id without "s-" (its worktree / branch name: <user>.<hex>).
+    /// The session's id without "s-" (its own name: the MCP runtime file; its worktree / branch <user>.<hex> unless it took another's).
     pub fn hex(&self) -> &str { self.sid.trim_start_matches("s-") }
+    /// The <hex> of the session worktree it works in (work/<user>.<tree>): its own id's, or the one a transfer handed it (T-375).
+    pub fn tree(&self) -> &str { &self.tree }
 }
+/// A session worktree's name (an id's hex: 12 lowercase hex digits).
+pub(crate) fn valid_tree(x: &str) -> bool { x.len() == 12 && x.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) }
+/// meta `tree` (T-375): "home" = it works in the person's own worktree (work/<user>), a hex = in that session worktree;
+/// none = as before (its own, or for a plain first session the person's own).
+pub(crate) const HOME_TREE: &str = "home";
 
 /// The session `sid` of the list `v`, as a run sees it.
 pub(crate) fn sx_in(a: &Account, v: &Value, sid: &str) -> Sx {
     let primary = sid == s(v, "primary");
-    Sx { key: if primary { a.username.clone() } else { format!("{}#{sid}", a.username) }, sid: sid.to_string(), primary, own: !primary || v["sessions"][sid]["ownTree"] == json!(true) }
+    let m = &v["sessions"][sid]; let t = s(m, "tree");
+    let own = t != HOME_TREE && (!primary || m["ownTree"] == json!(true) || valid_tree(&t));
+    let tree = if valid_tree(&t) { t } else { sid.trim_start_matches("s-").to_string() };
+    Sx { key: if primary { a.username.clone() } else { format!("{}#{sid}", a.username) }, sid: sid.to_string(), primary, own, tree, gave: m["treeGivenTo"].is_string() }
 }
 /// The list's ids in their order (newest first), then any the order lost.
 fn ids_of(v: &Value) -> Vec<String> {
@@ -163,6 +175,9 @@ fn ext_report(a: &Account, b: &Value, now: u64) -> Resp {
     let n = out.len(); m.insert(key, (now + ttl, out));
     answer(200, json!({ "ok": true, "accepted": n, "ttlSec": ttl / 1000 }))
 }
+/// A report made for a person by another program on this machine (the Jcode PGM Server, T-376): the same as theirs, the
+/// source fixed by the caller.
+pub fn report_for(a: &Account, b: &Value, source: &str) -> Resp { let mut b = if b.is_object() { b.clone() } else { json!({}) }; b["source"] = json!(source); ext_report(a, &b, now_ms()) }
 /// The live external sessions of a person (expired reports are dropped).
 pub(crate) fn ext_live(user: &str, now: u64) -> Vec<Value> {
     let mut m = ext_store().lock().unwrap();
@@ -189,7 +204,37 @@ fn summary(w: &Work, a: &Account, v: &Value, sid: &str, now: u64) -> Value {
     if queued > 0 { out["queued"] = json!(queued); }
     if m["ended"].is_object() { out["ended"] = m["ended"].clone(); }
     if m["waiting"].is_object() { out["waiting"] = m["waiting"].clone(); } // what it waits for (T-288): {kind, at, tools?}
+    // a /transfer (T-375): the links both ways, {id, title (as it is now), at, gone (deleted since)}; and that it gave its worktree on
+    for k in ["transferredTo", "transferredFrom"] { if m[k].is_object() { out[k] = link_view(v, &m[k]); } }
+    if sx.gave { out["gaveTree"] = json!(true); }
+    // a PGM session on the Jcode PGM Server (T-376 stage 3): its id (the list adds where it runs, crate::pgm_work)
+    if st["pgm"]["id"].is_string() { out["pgm"] = json!({ "id": st["pgm"]["id"] }); }
     out
+}
+/// A new session (not on screen unless `open`) with this state and meta title / worktree (T-376 stage 3: a PGM session opened
+/// from the list). Err = the plain reason.
+pub(crate) fn create(a: &Account, title: &str, state: Value, worktree: Value, open: bool) -> Result<String, String> {
+    let sid = new_sid();
+    save_file(a, &sid, &json!({ "state": state, "current": {} }));
+    let r = with_index(a, |v| {
+        if v["sessions"].as_object().map(|o| o.len()).unwrap_or(0) >= MAX_SESSIONS { return Err(format!("You have {MAX_SESSIONS} sessions; delete some first.")); }
+        let mut meta = meta_new(&one_line(&json!(title), 120));
+        if worktree.is_object() { meta["worktree"] = worktree.clone(); }
+        v["sessions"][&sid] = meta;
+        let mut order = vec![json!(sid)]; order.extend(v["order"].as_array().cloned().unwrap_or_default()); v["order"] = json!(order);
+        if open { v["current"] = json!(sid); }
+        Ok(())
+    });
+    match r { Ok(()) => Ok(sid), Err(e) => { let _ = std::fs::remove_file(session_file(a, &sid)); Err(e) } }
+}
+/// The session open on screen now.
+pub(crate) fn set_current(a: &Account, sid: &str) { with_index(a, |v| { if v["sessions"].get(sid).is_some() { v["current"] = json!(sid); } }); }
+/// The ids of the person's sessions, in the list's order.
+pub(crate) fn ids(a: &Account) -> Vec<String> { ids_of(&index(a)) }
+/// A transfer link as the list shows it: the other session's title as it is now (the stored one when it is gone).
+fn link_view(v: &Value, l: &Value) -> Value {
+    let id = s(l, "id"); let there = &v["sessions"][&id];
+    json!({ "id": id, "title": if there.is_object() { there["title"].clone() } else { l["title"].clone() }, "at": l["at"], "gone": !there.is_object() })
 }
 /// GET /api/work/sessions: the list, the folders, what is running.
 fn list(w: &Work, ai: &crate::ai_hosts::AiHosts, a: &Account, archived: bool) -> Value {
@@ -255,7 +300,7 @@ fn take_over_files(a: &Account, sid: &str) -> Value {
     let f = file_of(a, sid);
     let mut cur = crate::work::current_of(&f["current"]);
     crate::work::save_work_current(a, &mut cur);
-    let from = journal_file(a, &Sx { sid: sid.to_string(), key: String::new(), primary: false, own: true });
+    let from = journal_file(a, &Sx { sid: sid.to_string(), key: String::new(), primary: false, own: true, tree: sid.trim_start_matches("s-").to_string(), gave: false });
     let to = a.dir.join("work-journal.jsonl");
     move_over(&from, &to); move_over(&from.with_extension("old.jsonl"), &to.with_extension("old.jsonl"));
     let _ = std::fs::remove_file(session_file(a, sid));
@@ -266,6 +311,13 @@ fn fresh_state(old: &Value) -> Value {
     let mut m = Map::new();
     for k in ["provider", "model", "project", "noProject"] { if !old[k].is_null() { m.insert(k.into(), old[k].clone()); } }
     Value::Object(m)
+}
+/// Does a session that is promoted to first keep a worktree of its own (T-341)? Its own id's, by its branch, or the session
+/// worktree a transfer handed it (meta tree, T-375); never one that works in the person's own ("home").
+fn promoted_owns_tree(m: &Value, user: &str, sid: &str) -> bool {
+    let t = s(m, "tree");
+    if t == HOME_TREE { return false; }
+    valid_tree(&t) || m["worktree"]["branch"] == json!(format!("work/{user}.{}", sid.trim_start_matches("s-")))
 }
 /// Deletes the first session's data (its run stopped and its journal gone already) and puts the next one in its place, or
 /// a fresh empty one (§ 4a). The person's own worktree is not touched. Returns (the first session now, the promoted one).
@@ -280,12 +332,65 @@ fn delete_first(w: &Work, a: &Account, sx: &Sx) -> (String, Option<String>) {
         Some(n) => take_over_files(a, n),
         None => { let mut c = crate::work::current_of(&json!({})); crate::work::save_work_current(a, &mut c); fresh_state(&old) }
     };
-    let own_tree = next.as_ref().map(|n| v["sessions"][n]["worktree"]["branch"] == json!(format!("work/{}.{}", a.username, n.trim_start_matches("s-")))).unwrap_or(false);
+    // its own worktree: its own id's, or one a transfer handed it (meta tree = that hex, T-375); "home" = the person's own (none of its own)
+    let own_tree = next.as_ref().map(|n| promoted_owns_tree(&v["sessions"][n], &a.username, n)).unwrap_or(false);
     let first = first_replaced(&mut v, &sx.sid, next.as_deref(), &new_sid(), own_tree);
     w.update_state(a, |m| { m.clear(); if let Some(o) = state.as_object() { m.extend(o.clone()); } });
     write_json(&index_file(a), &v);
     if let Some(n) = &next { w.forget_ended(&format!("{}#{n}", a.username)); }
     (first, next)
+}
+
+/// The session that goes on for `sx` (T-375): a session that handed its worktree on with /transfer runs no more, so what
+/// was meant for it (an agent message) goes to the session it was transferred to (along a chain; itself otherwise).
+pub fn follow_transfer(a: &Account, sx: Sx) -> Sx {
+    let mut cur = sx;
+    for _ in 0..10 {
+        if !cur.gave { break; }
+        let v = index(a); let to = s(&v["sessions"][&cur.sid]["transferredTo"], "id");
+        if v["sessions"].get(&to).is_none() { break; }
+        cur = sx_in(a, &v, &to);
+    }
+    cur
+}
+/// A transferred session's title (T-375): "<title> (continued)", then "(continued 2)", "(continued 3)" … for a chain.
+pub(crate) fn continued_title(old: &str) -> String {
+    let t = one_line(&json!(old), 120); let t = if t.is_empty() { "Session".to_string() } else { t };
+    if let Some(base) = t.strip_suffix(" (continued)") { return format!("{base} (continued 2)"); }
+    if let Some((base, n)) = t.strip_suffix(')').and_then(|x| x.rsplit_once(" (continued ")).and_then(|(b, n)| n.parse::<u32>().ok().map(|n| (b.to_string(), n))) { return format!("{base} (continued {})", n + 1); }
+    format!("{t} (continued)")
+}
+/// What a /transfer makes of the list (T-375): the new session `to` (its title, `state`, an empty conversation, the old
+/// one's folder and mode, at the top and open on screen, linked to `from`), and `from` linked to it. `tree`: the new
+/// session's meta tree (a hex or "home" when it takes over the old one's worktree, which the old one then gave on).
+/// Err = the plain reason (too many sessions, the old one is gone or was transferred already). Returns (new id, title).
+pub(crate) fn make_transfer(a: &Account, from: &Sx, state: &Value, tree: Option<String>, worktree: &Value) -> Result<(String, String), String> {
+    let sid = new_sid(); let now = now_ms();
+    save_file(a, &sid, &json!({ "state": state, "current": {} })); // its file first: the list never names a session without one
+    let r = with_index(a, |v| {
+        if v["sessions"].as_object().map(|o| o.len()).unwrap_or(0) >= MAX_SESSIONS { return Err(format!("You have {MAX_SESSIONS} sessions; delete some first.")); }
+        let old = v["sessions"][&from.sid].clone();
+        if !old.is_object() { return Err("No such session.".into()); }
+        if old["transferredTo"].is_object() && v["sessions"][s(&old["transferredTo"], "id")].is_object() { return Err(format!("This session was transferred already, to \"{}\": transfer that one instead.", s(&v["sessions"][s(&old["transferredTo"], "id")], "title"))); }
+        let old_title = { let t = s(&old, "title"); if t.is_empty() { "Session".to_string() } else { t } };
+        let title = continued_title(&old_title);
+        let mut meta = meta_new(&title);
+        meta["folder"] = old["folder"].clone();
+        if old["mode"].is_string() { meta["mode"] = old["mode"].clone(); }
+        if worktree.is_object() { meta["worktree"] = worktree.clone(); }
+        if let Some(t) = &tree { meta["tree"] = json!(t); }
+        meta["transferredFrom"] = json!({ "id": from.sid, "title": old_title, "at": now });
+        v["sessions"][&sid] = meta;
+        if let Some(m) = v["sessions"][&from.sid].as_object_mut() {
+            m.insert("transferredTo".into(), json!({ "id": sid, "title": title, "at": now }));
+            if tree.is_some() { m.insert("treeGivenTo".into(), json!(sid)); }
+            m.insert("updatedAt".into(), json!(now));
+        }
+        let mut order = vec![json!(sid)]; order.extend(v["order"].as_array().cloned().unwrap_or_default()); v["order"] = json!(order);
+        v["current"] = json!(sid);
+        Ok(title)
+    });
+    match r { Ok(title) => Ok((sid, title)), Err(e) => { let _ = std::fs::remove_file(session_file(a, &sid)); Err(e) } }
 }
 
 /// The session routes (signed in as `a`); None = not one of them.
@@ -296,7 +401,9 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     let b = r.json(); let id = s(&b, "id");
     let exists = |sid: &str| index(a)["sessions"].get(sid).is_some();
     Some(match p {
-        "/api/work/sessions" if get => answer(200, list(w, hub.ai(), a, r.param("archived").as_deref() == Some("1"))),
+        "/api/work/sessions" if get => { let mut v = list(w, hub.ai(), a, r.param("archived").as_deref() == Some("1")); crate::pgm_work::merge_list(hub, a, &mut v).await; answer(200, v) }
+        // a PGM session of the Jcode PGM Server (one started in jcode too): its Work session, made on the fly (T-376 stage 3)
+        "/api/work/sessions/pgm/open" if post => crate::pgm_work::open(hub, a, &b).await,
         "/api/work/sessions/report" if post => ext_report(a, &b, now_ms()),
         "/api/work/sessions/new" if post => {
             let v = index(a);
@@ -337,6 +444,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/work/sessions/open" if post => {
             if !exists(&id) { return Some(answer(404, json!({ "error": "No such session." }))); }
             with_index(a, |v| { v["current"] = json!(id); if let Some(m) = v["sessions"].get_mut(&id) { m["hidden"] = json!(false); m["archived"] = json!(false); m["seenAt"] = json!(now_ms()); } });
+            // a PGM session (T-376 stage 3): what happened on the server or in jcode since, followed live while it runs
+            crate::pgm_work::watch(hub, a, &id).await;
             answer(200, json!({ "current": id }))
         }
         "/api/work/sessions/rename" | "/api/work/sessions/pin" | "/api/work/sessions/seen" | "/api/work/sessions/hide" | "/api/work/sessions/move" if post => {
@@ -371,9 +480,12 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             if w.busy_key(&sx.key) { w.stop(&**hub, &sx.key); for _ in 0..100 { if !w.busy_key(&sx.key) { break; } tokio::time::sleep(std::time::Duration::from_millis(100)).await; } }
             let none = w.is_none(a, &sx);
             let project = { let p = s(&sstate(w, a, &sx), "project"); if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p } };
-            let wt = &w.wt; let (u, hex) = (a.username.clone(), sx.hex().to_string());
-            // its own worktree goes as in § 2a; a first session without one of its own works in work/<user>, which is never touched
-            let tree = if none || !sx.own { String::new() } else { tokio::task::block_in_place(|| wt.remove_session(&u, &hex, &project)) };
+            let wt = &w.wt; let (u, hex) = (a.username.clone(), sx.tree().to_string());
+            // its own worktree goes as in § 2a; a first session without one of its own works in work/<user>, which is never touched;
+            // nor is one it handed on with a /transfer (T-375: the session it was transferred to works there now)
+            let tree = if none || !sx.own || sx.gave { String::new() } else { tokio::task::block_in_place(|| wt.remove_session(&u, &hex, &project)) };
+            // the session that handed it this worktree (T-375) gets its claim back: it may run again (in a fresh worktree of its own)
+            with_index(a, |v| { if let Some(o) = v["sessions"].as_object_mut() { for m in o.values_mut() { if m["treeGivenTo"] == json!(sx.sid) { if let Some(mm) = m.as_object_mut() { mm.remove("treeGivenTo"); } } } } });
             let j = journal_file(a, &sx); pgm_core_internal::store::global().flush(); let _ = std::fs::remove_file(&j); pgm_core_internal::store::forget_hot(&j); let _ = std::fs::remove_file(j.with_extension("old.jsonl"));
             if !sx.primary {
                 let _ = std::fs::remove_file(session_file(a, &sx.sid));
@@ -391,7 +503,8 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
             if w.is_none(a, &sx) { return Some(answer(400, json!({ "error": "This session has no project, so there is no worktree to merge." }))); }
             let project = { let p = s(&sstate(w, a, &sx), "project"); if p.is_empty() { pgm_collab_internal::worktree::HUB_PROJECT.to_string() } else { p } };
             let mut env = w.work_env(&a.username); env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
-            let (u, hex) = (a.username.clone(), sx.hex().to_string()); let wt = &w.wt;
+            if sx.gave { return Some(answer(409, json!({ "error": "This session handed its worktree on with /transfer: merge it from the session it was transferred to." }))); }
+            let (u, hex) = (a.username.clone(), sx.tree().to_string()); let wt = &w.wt;
             let (ok, out, err) = tokio::task::block_in_place(|| wt.tool(&["--project", &project, "home", &u, "--session", &hex], &env));
             let text = if out.trim().is_empty() { err.trim().to_string() } else { out.trim().to_string() };
             let merged = ok && !text.contains("does not merge cleanly");
@@ -488,6 +601,24 @@ mod tests {
         let (p, o) = (sx_in(&a, &v, "s-a"), sx_in(&a, &v, "s-b")); assert!(p.primary && !p.own && p.key == "sponge"); assert!(!o.primary && o.own && o.key == "sponge#s-b");
         first_replaced(&mut v, "s-a", Some("s-b"), "s-new", true);
         let b = sx_in(&a, &v, "s-b"); assert!(b.primary && b.own && b.key == "sponge");
+    }
+    #[test]
+    fn a_transferred_session_works_in_the_worktree_it_was_handed() {
+        let a = Account { username: "sponge".into(), dir: std::env::temp_dir(), admin: false, display: "Sponge".into() };
+        let mut v = list_of(&["s-new", "s-old", "s-a"], "s-a");
+        v["sessions"]["s-new"]["tree"] = json!("0123456789ab"); v["sessions"]["s-old"]["treeGivenTo"] = json!("s-new");
+        v["sessions"]["s-home"] = meta_new("h"); v["sessions"]["s-home"]["tree"] = json!("home");
+        let n = sx_in(&a, &v, "s-new"); assert!(n.own && !n.gave && n.tree() == "0123456789ab" && n.hex() == "new");
+        let o = sx_in(&a, &v, "s-old"); assert!(o.own && o.gave && o.tree() == "old");
+        let h = sx_in(&a, &v, "s-home"); assert!(!h.own, "\"home\": the person's own worktree");
+        // promoted to first, it keeps the worktree it was handed; one in the person's own does not get one
+        assert!(promoted_owns_tree(&v["sessions"]["s-new"], "sponge", "s-new") && !promoted_owns_tree(&v["sessions"]["s-home"], "sponge", "s-home"));
+        first_replaced(&mut v, "s-a", Some("s-new"), "s-x", true);
+        let p = sx_in(&a, &v, "s-new"); assert!(p.primary && p.own && p.tree() == "0123456789ab");
+        assert_eq!(continued_title("Dark mode"), "Dark mode (continued)");
+        assert_eq!(continued_title("Dark mode (continued)"), "Dark mode (continued 2)");
+        assert_eq!(continued_title("Dark mode (continued 2)"), "Dark mode (continued 3)");
+        assert_eq!(continued_title(""), "Session (continued)");
     }
     #[test]
     fn the_promoted_session_s_files_move_into_the_first_session_s_places() {

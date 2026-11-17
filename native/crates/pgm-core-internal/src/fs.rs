@@ -20,6 +20,21 @@ pub fn private_dir(path: &Path) -> std::io::Result<()> {
     { if readable_by_others(path) { let _ = win_lock(path); } }
     Ok(())
 }
+/// A shared secret kept in a file of its own (its first line, trimmed): read when it holds one of 16+ characters, else
+/// made: `bytes` random bytes as lowercase hex, written owner-only (never readable by others for a moment: the temporary
+/// file is locked before the secret goes in, then renamed into place). Two programs on one machine share it this way.
+pub fn secret_file(path: &Path, bytes: usize) -> std::io::Result<String> {
+    let first = |t: &str| t.lines().next().unwrap_or("").trim().to_string();
+    if let Ok(t) = std::fs::read_to_string(path) { let s = first(&t); if s.len() >= 16 { return Ok(s); } }
+    if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) { std::fs::create_dir_all(d)?; }
+    let s = crate::crypto::random_hex(bytes.max(8));
+    let tmp = path.with_extension(format!("tmp-{}", crate::crypto::random_hex(4)));
+    std::fs::write(&tmp, b"")?;
+    private(&tmp);
+    std::fs::write(&tmp, format!("{s}\n"))?;
+    std::fs::rename(&tmp, path)?;
+    Ok(s)
+}
 /// Is the file readable by anyone but its owner? (Linux: group / other bits; Windows: a Users / Everyone /
 /// Authenticated Users entry in its ACL.)
 pub fn readable_by_others(path: &Path) -> bool {

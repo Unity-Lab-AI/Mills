@@ -1092,7 +1092,7 @@ mod tests {
 
     #[test]
     fn preset_folder_is_the_default() {
-        let s = Scope::default_folder("/work/proj");
+        let s = Scope::preset_with(Flavor::Posix, Preset::Folder, &[("/work/proj", Rw)], &[]); // what default_folder makes, Linux paths on every OS
         assert_eq!(s.preset, Preset::Folder);
         let s = l(Preset::Folder, &[("/work/proj", Rw), ("/other", Rw)], &[]);
         run("folder", &s, &[
@@ -1397,7 +1397,7 @@ mod tests {
     #[test]
     fn tool_sets() {
         let names = |s: &Scope| s.tool_names(NOW);
-        let f = Scope::default_folder("/a");
+        let f = Scope::preset_with(Flavor::Posix, Preset::Folder, &[("/a", Rw)], &[]); // default_folder, Linux paths on every OS
         let n = names(&f);
         for t in ["machine_info", "list", "read", "write", "delete", "mkdir", "shell_run", "job_start", "proc_list", "proc_kill"] {
             assert!(n.contains(&t), "folder has {t}");

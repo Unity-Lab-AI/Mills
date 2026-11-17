@@ -66,6 +66,20 @@ const L533 = { // T-341 / T-342 (plans/multi-session.md § 4a): every Work sessi
   R536: 'the JS hub still reads your first session after a delete: the frozen JavaScript hub\'s own reader (bridge/work-state.js) finds the promoted session\'s conversation in work-current.json, in the shape it always had',
   R537: 'an older page (no session field) still works against the new hub after a delete: /api/work/current and /api/chat without a session mean the new first session, and its run works in that session\'s own worktree',
 };
+const L614 = { // T-375: /transfer in Work (a handoff, then a fresh session that goes on from it)
+  R614: '/transfer writes a handoff with a throw-away model call through the session\'s own Claude (the handoff writer\'s own system prompt, no tools, no MCP, no session kept) that gets the conversation in short, the worktree\'s exact state (its uncommitted file) and the paths the runs touched, and the person\'s focus; it makes a new session with the same project, provider, model and harness, in the same worktree, titled "… (continued)", in the old one\'s folder, linked both ways and open on screen; the new session\'s first run starts at once with the fixed transfer line and the handoff, in that worktree',
+  R615: 'when the handoff writer fails, /transfer still goes on with a plain handoff made without a model (it says so and why: the goal, the focus, the conversation in short, the worktree\'s state), and a board task the old session\'s run left claimed gets a handoff note ("session transferred") naming the new session',
+  R616: 'the worktree goes with the transfer: the old session runs no more (a message to it is refused 409 naming the new one), deleting it leaves the worktree and its uncommitted file to the new session, which keeps working there; deleting the new session then removes that worktree as deleting a session always does',
+  R617: 'how /transfer refuses: a session that is working (409, nothing made), another person\'s session (404), a session with no conversation yet (400), one transferred already (409), and nobody signed out (401)',
+  R618: 'a Jcode PGM session (an OpenRouter provider) transfers the same way: the handoff is written through its own OpenRouter provider (its key, the handoff writer\'s prompt), and the new session uses the same provider, model and engine (its first run is a Jcode PGM run in the same worktree)',
+  R619: 'the page offers /transfer: typed with a focus, in the Commands panel with a tooltip and a confirm modal with a focus box that says what happens (a handoff, a fresh session in the same project and worktree, the switch), a progress line while it works, then it opens the new session; the old session shows "Transferred to …" and the new one "Continued from …" with a link to the other, the session list says "transferred →", and its icons are SVG symbols (no emoji)',
+};
+const L637 = { // T-379: Site admin and AI Admin (siteRolesCheck)
+  R637: 'site roles are the chat\'s ladder: the catalogue and the six roles are served, an existing admin is Super Admin and the hub\'s own account Co-owner; a member is refused the accounts list in words ("Needs the View accounts permission."); an admin gives a member Moderator, who then sees the accounts but cannot make one; nobody gives a role at or above their own, changes their own role or touches the owner; the admin flag follows the role (Admin on, back to Member off), and the security log has each role given',
+  R638: 'custom roles: an admin makes "AI keeper" (position 35, Manage AI) and gives it to a member, who then reads AI Admin and the team\'s OpenRouter budgets but still not the accounts; a bad position is refused; an Admin (not Super Admin) cannot make a role with a permission they do not hold; deleting the role puts its people back to Member',
+  R639: 'site settings: only Manage hub changes them; the message of the day and the default theme reach everyone\'s /api/check; a message over 500 characters, an unknown role and a role not below yours are refused; a new account gets the role newAccountRole names',
+  R640: 'AI Admin: a Manage AI role (not View accounts) sees every AI host with its owner, every account\'s Unity own-computer tools, and switches them; a View AI hosts role sees the hosts but may not change anything; the default AI set to "host:<someone>" is what /api/check names at once (no restart) and is kept in config.local.json; a value that is not a choice is refused',
+};
 function skip(id, label, why) {
   results.push({ id, label, status: 'SKIP', detail: why });
   console.log(`SKIP ${id.padEnd(4)} ${label}  — ${why}`);
@@ -119,6 +133,131 @@ function listening(port) {
   });
 }
 
+// R575-R579 (T-369, G2): a fake Anthropic upstream that records the request as it arrived and answers like Anthropic: a streamed
+// tool_use message (SSE), a whole JSON message, Anthropic's own errors, a stream that never ends (the caller hangs up), and the
+// refusal a Claude subscription login gives a harness that is not Claude Code
+function fakeAnthropic(req, res, body, via) {
+  const b = JSON.parse(body || '{}'), h = req.headers, rid = { 'request-id': 'req_r575', 'anthropic-ratelimit-requests-remaining': '99', 'x-internal-note': 'must-not-pass' };
+  if (via === 'api' && h['x-api-key'] !== R575_KEY) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } })); }
+  fakeAnt.calls.push({ via, headers: h, body: b });
+  const jr = (st, o, extra = {}) => { res.writeHead(st, { 'Content-Type': 'application/json', ...extra }); res.end(JSON.stringify(o)); };
+  if (body.includes('R575-SUB2')) return jr(429, { type: 'error', error: { type: 'rate_limit_error', message: 'Error' } });
+  if (body.includes('R575-SUB')) return jr(429, { type: 'error', error: { type: 'invalid_request_error', message: 'This credential is only authorized for use with Claude Code and cannot be used for other API requests.' } });
+  if (body.includes('R575-LIMIT')) return jr(429, { type: 'error', error: { type: 'rate_limit_error', message: 'Number of request tokens has exceeded your per-minute rate limit' } }, { 'retry-after': '7', 'anthropic-ratelimit-unified-5h-status': 'rejected' });
+  const ev = (t, o) => `event: ${t}\ndata: ${JSON.stringify({ type: t, ...o })}\n\n`;
+  const start = ev('message_start', { message: { id: 'msg_r575', type: 'message', role: 'assistant', model: b.model, content: [], stop_reason: null, usage: { input_tokens: 21, cache_read_input_tokens: 5, cache_creation_input_tokens: 2, output_tokens: 1 } } });
+  const textStop = /R580-TEXT-(\w+)/.exec(body); // R583: a plain text answer that stops for the reason named in the request
+  if (textStop) {
+    const parts = [start, ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }), ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'Hello ' } }), ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'wörld' } }),
+      ev('content_block_stop', { index: 0 }), ev('message_delta', { delta: { stop_reason: textStop[1], stop_sequence: null }, usage: { output_tokens: 5 } }), ev('message_stop', {})];
+    if (b.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(parts.join('')); }
+    return jr(200, { id: 'msg_r580', type: 'message', role: 'assistant', model: b.model, content: [{ type: 'text', text: 'Hello wörld' }], stop_reason: textStop[1], stop_sequence: null, usage: { input_tokens: 6, output_tokens: 5 } });
+  }
+  if (b.stream && body.includes('R575-HANG')) {
+    fakeAnt.hangOpened++; res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rid }); res.write(start);
+    const iv = setInterval(() => res.write(ev('ping', {})), 100); res.on('close', () => { clearInterval(iv); fakeAnt.hangClosed++; }); return;
+  }
+  if (b.stream) {
+    const parts = [start, ev('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_r575', name: 'get_weather', input: {} } }),
+      ev('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '{"city":' } }), ev('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '"Zürich"}' } }),
+      ev('content_block_stop', { index: 0 }), ev('message_delta', { delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 17 } }), ev('message_stop', {})];
+    fakeAnt.stream = parts.join(''); res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rid });
+    let i = 0; const next = () => { if (i < parts.length) { res.write(parts[i++]); setTimeout(next, 15); } else res.end(); }; return next();
+  }
+  const msg = { id: 'msg_r575', type: 'message', role: 'assistant', model: b.model, content: [{ type: 'text', text: 'checking' }, { type: 'tool_use', id: 'toolu_r575', name: 'get_weather', input: { city: 'Zürich' } }], stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 9, output_tokens: 4, cache_read_input_tokens: 3 } };
+  fakeAnt.json = JSON.stringify(msg); res.writeHead(200, { 'Content-Type': 'application/json', ...rid }); res.end(fakeAnt.json);
+}
+
+// R580-R585 (T-369, G3): a fake OpenAI-compatible endpoint (the person's "openai" provider at /oai, its bearer k-r580) that records
+// the request as it arrived and answers like OpenAI: a streamed answer with a tool call (incremental arguments, a usage chunk only
+// when stream_options.include_usage asks for it), a whole JSON one with usage and cached tokens, the final text after a tool message,
+// OpenAI's errors (a 429 with retry-after, a 400 for stream_options on an endpoint that does not know it), a stream that never ends,
+// and an endpoint that answers JSON to a streaming request
+const fakeOa = { calls: [], stream: '', json: '', hangClosed: 0, hangOpened: 0 };
+const R580_KEY = 'k-r580';
+function fakeOpenAI(req, res, body) {
+  const b = JSON.parse(body || '{}'), h = req.headers, rid = { 'x-request-id': 'req_r580', 'x-ratelimit-remaining-requests': '77', 'x-internal-note': 'must-not-pass' };
+  if (/^m-r580/.test(String(b.model || '')) && h.authorization !== 'Bearer ' + R580_KEY) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'Incorrect API key provided', type: 'invalid_request_error', code: 'invalid_api_key' } })); }
+  fakeOa.calls.push({ headers: h, body: b, url: req.url });
+  const jr = (st, o, extra = {}) => { res.writeHead(st, { 'Content-Type': 'application/json', ...extra }); res.end(JSON.stringify(o)); };
+  if (body.includes('R580-LIMIT')) return jr(429, { error: { message: 'Rate limit reached for requests (r580)', type: 'requests', code: 'rate_limit_exceeded' } }, { 'retry-after': '5', ...rid });
+  if (body.includes('R580-NOSO') && b.stream_options) return jr(400, { error: { message: 'Unrecognized request argument supplied: stream_options', type: 'invalid_request_error', param: null, code: null } });
+  const ck = (delta, finish = null) => 'data: ' + JSON.stringify({ id: 'chatcmpl-r580', object: 'chat.completion.chunk', created: 1, model: b.model, choices: [{ index: 0, delta, finish_reason: finish }] }) + '\n\n';
+  if (b.stream && body.includes('R580-HANG')) {
+    fakeOa.hangOpened++; res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rid }); res.write(ck({ role: 'assistant', content: '' }));
+    const iv = setInterval(() => res.write(': ping\n\n'), 100); res.on('close', () => { clearInterval(iv); fakeOa.hangClosed++; }); return;
+  }
+  const lm = (b.messages || [])[(b.messages || []).length - 1] || {}, usage = { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 };
+  if (lm.role === 'tool') { // the tool result round trip: the final text
+    const text = 'R580 final: ' + String(lm.content);
+    if (b.stream) { const parts = [ck({ role: 'assistant', content: '' }), ck({ content: 'R580 final: ' }), ck({ content: String(lm.content) }), ck({}, 'stop'), ...(b.stream_options && b.stream_options.include_usage ? ['data: ' + JSON.stringify({ id: 'chatcmpl-r580', object: 'chat.completion.chunk', created: 1, model: b.model, choices: [], usage: { prompt_tokens: 50, completion_tokens: 6, total_tokens: 56 } }) + '\n\n'] : []), 'data: [DONE]\n\n']; res.writeHead(200, { 'Content-Type': 'text/event-stream' }); return res.end(parts.join('')); }
+    return jr(200, { id: 'chatcmpl-r580', object: 'chat.completion', created: 1, model: b.model, choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }], usage: { prompt_tokens: 50, completion_tokens: 6, total_tokens: 56 } });
+  }
+  const msg = { role: 'assistant', content: 'Let me check', tool_calls: [{ id: 'call_r580', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Zürich"}' } }] };
+  const whole = { id: 'chatcmpl-r580', object: 'chat.completion', created: 1, model: b.model, choices: [{ index: 0, message: msg, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38, prompt_tokens_details: { cached_tokens: 10 } } };
+  if (b.stream && !body.includes('R580-JSONSTREAM')) {
+    const parts = [ck({ role: 'assistant', content: '' }), ck({ content: 'Let me ' }), ck({ content: 'check ' }),
+      ck({ tool_calls: [{ index: 0, id: 'call_r580', type: 'function', function: { name: 'get_weather', arguments: '' } }] }), ck({ tool_calls: [{ index: 0, function: { arguments: '{"city":' } }] }), ck({ tool_calls: [{ index: 0, function: { arguments: '"Zürich"}' } }] }), ck({}, 'tool_calls'),
+      ...(b.stream_options && b.stream_options.include_usage ? ['data: ' + JSON.stringify({ id: 'chatcmpl-r580', object: 'chat.completion.chunk', created: 1, model: b.model, choices: [], usage }) + '\n\n'] : []), 'data: [DONE]\n\n'];
+    fakeOa.stream = parts.join(''); res.writeHead(200, { 'Content-Type': 'text/event-stream', ...rid });
+    let i = 0; const next = () => { if (i < parts.length) { res.write(parts[i++]); setTimeout(next, 15); } else res.end(); }; return next();
+  }
+  fakeOa.json = JSON.stringify(whole); res.writeHead(200, { 'Content-Type': 'application/json', ...rid }); res.end(fakeOa.json);
+}
+
+// R586-R590 (T-369, G5): a fake native Responses API upstream: the person's "openai" provider marked responses: true (at
+// /oai/responses, its bearer k-r586) and the AI host's ChatGPT / Codex login relay (at /codex/responses, the host's own login).
+// It records the request as it arrived and answers like OpenAI: a stream of Responses events (numbered, a message item,
+// response.completed with usage and cached tokens), a whole response object, its own 429.
+const fakeResp = { calls: [], stream: '', json: '' };
+const R586_KEY = 'k-r586';
+function fakeResponses(req, res, body, via) {
+  const b = JSON.parse(body || '{}'), h = req.headers;
+  if (via === 'api' && h.authorization !== 'Bearer ' + R586_KEY) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'Incorrect API key provided', type: 'invalid_request_error', code: 'invalid_api_key' } })); }
+  fakeResp.calls.push({ via, headers: h, body: b, url: req.url });
+  if (body.includes('R586-LIMIT')) { res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '4', 'x-request-id': 'req_r586' }); return res.end(JSON.stringify({ error: { message: 'Rate limit reached for requests (r586)', type: 'requests', param: null, code: 'rate_limit_exceeded' } })); }
+  const usage = { input_tokens: 100, input_tokens_details: { cached_tokens: 40 }, output_tokens: 7, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 107 };
+  const msg = { id: 'msg_f586', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'native ok', annotations: [] }] };
+  const resp = (status, output, u) => ({ id: 'resp_fake586', object: 'response', created_at: 1, status, model: b.model, output, usage: u, store: false });
+  if (b.stream) {
+    let n = 0; const ev = (t, o) => `event: ${t}\ndata: ${JSON.stringify({ type: t, sequence_number: n++, ...o })}\n\n`;
+    const parts = [ev('response.created', { response: resp('in_progress', [], null) }), ev('response.output_item.added', { output_index: 0, item: { ...msg, status: 'in_progress', content: [] } }),
+      ev('response.output_text.delta', { item_id: 'msg_f586', output_index: 0, content_index: 0, delta: 'native ' }), ev('response.output_text.delta', { item_id: 'msg_f586', output_index: 0, content_index: 0, delta: 'ok' }),
+      ev('response.output_item.done', { output_index: 0, item: msg }), ev('response.completed', { response: resp('completed', [msg], usage) })];
+    fakeResp.stream = parts.join(''); res.writeHead(200, { 'Content-Type': 'text/event-stream', 'x-ratelimit-remaining-requests': '66', 'x-internal-note': 'must-not-pass' });
+    let i = 0; const next = () => { if (i < parts.length) { res.write(parts[i++]); setTimeout(next, 15); } else res.end(); }; return next();
+  }
+  fakeResp.json = JSON.stringify(resp('completed', [msg], usage)); res.writeHead(200, { 'Content-Type': 'application/json', 'x-request-id': 'req_r586' }); res.end(fakeResp.json);
+}
+
+// R591-R598 (T-370, split routing): a fake OpenRouter (config openrouter.baseUrl, at /orapi, the team key sk-or-v1-r591…). It records the
+// request as it arrived (model, provider routing, usage, the referer and title headers) and answers like OpenRouter: a whole answer or
+// a stream with the usage (and `cost`, only when `usage: {include: true}` was asked for) in the last chunk; `COST=<usd>` in the
+// request sets the cost, `OR-ERR` makes it a 429.
+const fakeOr = { calls: [] };
+const R591_KEY = 'sk-or-v1-r591-secret-0123456789';
+// R606-R612 (T-372, personal keys): two people's own keys the fake also accepts; any other key is a 401 ("revoked", recorded in fakeOr.refused)
+const R606_KEY = 'sk-or-v1-r606-admin-own-aaaa1111', R606_KEY_U = 'sk-or-v1-r606-user-own-bbbb2222', R606_REVOKED = 'sk-or-v1-r606-revoked-cccc3333';
+fakeOr.refused = [];
+function fakeOpenRouter(req, res, body) {
+  const b = JSON.parse(body || '{}'), h = req.headers;
+  if (![R591_KEY, R606_KEY, R606_KEY_U].some((k) => h.authorization === 'Bearer ' + k)) { fakeOr.refused.push(h.authorization); res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } })); }
+  fakeOr.calls.push({ headers: h, body: b, url: req.url });
+  if (body.includes('OR-ERR')) { res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '3' }); return res.end(JSON.stringify({ error: { message: 'Rate limit reached for the pair (r591)', code: 429 } })); }
+  const lm = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' };
+  const text = 'or says: ' + (typeof lm.content === 'string' ? lm.content : JSON.stringify(lm.content));
+  const cm = /COST=([0-9.]+)/.exec(body), cost = cm ? Number(cm[1]) : 0.01;
+  const usage = { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25, ...(b.usage && b.usage.include ? { cost } : {}) };
+  const model = b.model;
+  if (b.stream) {
+    const ck = (delta, finish = null) => 'data: ' + JSON.stringify({ id: 'gen-r591', object: 'chat.completion.chunk', created: 1, model, choices: [{ index: 0, delta, finish_reason: finish }] }) + '\n\n';
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    return res.end([': OPENROUTER PROCESSING\n\n', ck({ role: 'assistant', content: '' }), ck({ content: text }), ck({}, 'stop'), 'data: ' + JSON.stringify({ id: 'gen-r591', object: 'chat.completion.chunk', created: 1, model, choices: [], usage }) + '\n\n', 'data: [DONE]\n\n'].join(''));
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ id: 'gen-r591', object: 'chat.completion', created: 1, model, choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }], usage }));
+}
+
 let RUST_BACK = 0;
 let SCRATCH, SB, PORT, H, hub = null, OLLAMA_PORT = 0, ollamaSrv = null, FAKE_LINUX = ''; // FAKE_LINUX: R159's stand-in Linux accounts (ignored by git: under bridge/profiles)
 // read a zip like an unzipper would (the Download packages): the central directory names every entry and points at its
@@ -136,7 +275,10 @@ function unzipAll(buf) {
 }
 const fakeImagePrompts = [], fakeVoiceReqs = [], fakeEdits = [];
 const fakeForgejo = { issues: new Map(), n: 0, tick: 1, calls: [], relCalls: [] };
-const fakeOaiTools = []; // R346: the bodies the fake OpenAI endpoint got that carried tools or tool messages
+const fakeOaiCalls = []; // R560-R565: which key (Authorization) and model the fake OpenAI endpoint was asked, in order
+const fakeAnt = { calls: [], hangClosed: 0, hangOpened: 0, stream: '', json: '' }; // R575-R579: what the fake Anthropic upstream was asked (the API-key one at /aapi, the host login relay's at /anthropic), and what it answered
+const R575_KEY = 'sk-ant-r575aaaaaaaaaaaaaaaaaaaaaaaa'; // the Anthropic API-key provider's own key: the upstream accepts nothing else
+const fakeOaiTools = [];// R346: the bodies the fake OpenAI endpoint got that carried tools or tool messages
 const FAKE_ASSET = Buffer.from(Array.from({ length: 300000 }, (_, i) => (i * 7 + 3) % 251)); // T-250: a release file of 300 KB
 let fakeSawPhoto = false;
 const fakeGifQueries = [];
@@ -226,9 +368,11 @@ function startFakeOllama() {
       }
       // fake Anthropic + ChatGPT backends behind an AI host's login relays: they only answer to the HOST's tokens (never
       // the hub's placeholder), and report usage like Anthropic does (CAPTEST in the body = 95 % used, resets in 3 s)
+      if (req.url.startsWith('/aapi/v1/messages')) return fakeAnthropic(req, res, body, 'api'); // R575: an Anthropic API-key provider's endpoint (config api.anthropicBase)
       if (req.url.startsWith('/anthropic/v1/messages')) {
         const ok = req.headers.authorization === 'Bearer fake-oauth-token' && /oauth-2025-04-20/.test(req.headers['anthropic-beta'] || '');
         if (!ok) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'bad relay auth: ' + String(req.headers.authorization || '').slice(0, 30) } })); }
+        if (body.includes('R575')) return fakeAnthropic(req, res, body, 'relay'); // R575-R579: the host login's model call, recorded raw
         const b = JSON.parse(body || '{}'), cap = body.includes('CAPTEST');
         const rl = { 'anthropic-ratelimit-unified-5h-utilization': cap ? '0.95' : '0.42', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + (cap ? 3 : 7200)), 'anthropic-ratelimit-unified-5h-status': 'allowed',
           'anthropic-ratelimit-unified-7d-utilization': '0.37', 'anthropic-ratelimit-unified-7d-reset': String(Math.floor(Date.now() / 1000) + 4 * 86400), 'anthropic-ratelimit-unified-7d-status': 'allowed' }; // the 7d window reaches the hub only through these headers (fake-claude reports 5h alone)
@@ -239,15 +383,22 @@ function startFakeOllama() {
       }
       if (req.url.startsWith('/codex/responses')) {
         if (req.headers.authorization !== 'Bearer fake-codex-token' || req.headers['chatgpt-account-id'] !== 'acct-1') { res.writeHead(401); return res.end('{"error":"bad codex auth"}'); }
+        if (body.includes('R586')) return fakeResponses(req, res, body, 'codex'); // R586-R590 (G5): the host's Codex login, raw
         const b = JSON.parse(body || '{}'), txt = 'codex says: ' + JSON.stringify(b.input || []).match(/"text":"([^"]*)"/)[1];
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         for (const w of txt.split(' ')) res.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: w + ' ' }) + '\n\n');
         return res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { model: b.model, usage: { input_tokens: 2, output_tokens: 3 } } }) + '\n\n');
       }
+      if (req.url === '/orapi/key') { const ok = [R606_KEY, R606_KEY_U].some((k) => req.headers.authorization === 'Bearer ' + k); res.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(ok ? { data: { label: 'r606 key', usage: 1.5, limit: null } } : { error: { message: 'User not found.', code: 401 } })); } // R606: OpenRouter's GET /key
+      if (req.url === '/orapi/chat/completions') return fakeOpenRouter(req, res, body); // R591-R598 (T-370): the fake OpenRouter
       // fake OpenAI-compatible endpoint (a person's own "openai" provider): echoes the last user line, streams on request
+      if ((req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') && body.includes('R580')) return fakeOpenAI(req, res, body); // R580-R585 (G3)
+      if (req.url === '/oai/responses') return fakeResponses(req, res, body, 'api'); // R586-R590 (G5): a native Responses endpoint
       if (req.url === '/oai/chat/completions' || req.url === '/v1/chat/completions') { // /v1: Ollama's own OpenAI-compatible path (R182)
         const b = JSON.parse(body || '{}'), last = [...(b.messages || [])].reverse().find((m) => m.role === 'user') || { content: '' }, sys = (b.messages || []).find((m) => m.role === 'system');
         const text = 'oai says: ' + last.content + (sys ? ' [sys ' + sys.content.length + ']' : '');
+        if (/-r56\d/.test(String(b.model || ''))) fakeOaiCalls.push({ auth: req.headers.authorization || '', model: b.model, said: String(last.content).slice(0, 40) });
+        if (/SLOW-r564/.test(body) && !b.stream) return setTimeout(() => j({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } }), 1500); // R564: an answer that takes a while
         if (Array.isArray(b.tools) || (b.messages || []).some((m) => m.role === 'tool')) { // R346 (T-317): tools in, a tool call out; a tool result in, text out
           fakeOaiTools.push(b);
           const lm = (b.messages || [])[(b.messages || []).length - 1] || {};
@@ -340,23 +491,28 @@ async function setup() {
   fs.cpSync(path.join(BRIDGE, 'host-tools'), path.join(SB, 'host-tools'), { recursive: true, filter: (s) => !/\.(exe|ico)$/i.test(s) });
   fs.cpSync(path.join(MILLS, 'web'), path.join(SCRATCH, 'web'), { recursive: true });
   for (const f of ['versions.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(MILLS, f))) fs.copyFileSync(path.join(MILLS, f), path.join(SCRATCH, f)); // semver (law 14)
-  PORT = await freePort(7799);
+  // The checks derive many ports from PORT (PORT + 91, + 300 …) and pick them with freePort some time before they listen,
+  // so two suites running at once on a base 1 apart (7799 and 7800) collide on the derived ones (R539's fake Headroom
+  // failed to bind: 2026-11-15). Every suite process starts from its own 400-port window.
+  PORT = await freePort(7799 + (process.pid % 24) * 400);
   if (RUST_HUB) RUST_BACK = await freePort(PORT + 20); // the JavaScript hub behind the Rust one
   H = `http://127.0.0.1:${PORT}`;
   const real = readJson(path.join(BRIDGE, 'config.json'), {});
   // The scratch copy is its own git repo (main + develop) so per-account worktrees work there.
   const g = (...a) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore', windowsHide: true });
-  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/security/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', ''].join('\n'));
+  fs.writeFileSync(path.join(SCRATCH, '.gitignore'), ['bridge/profiles/', 'bridge/profiles-deleted/', 'bridge/*.json', 'bridge/.restart', 'bridge/logs/', 'bridge/sync/', 'bridge/index/', 'bridge/security/', 'bridge/.fj/', 'bin/', 'Chat/', 'Archive/', 'Hyperwork/', 'worktrees/', 'projects/', 'upstream.git/', 'host-pc/', 'host-claude-login/', 'host-codex/', 'Api/', 'bridge/host2/', 'bridge-handoff/', 'rust-host/', 'native/', 'handoff-run.log', 'hub.log', 'ai-node.log', 'host2.log', 'bridge/ai-node.lock', 'bridge/hub-signing.key', 'bridge/pgm-server.secret', 'bridge/pgm-server.tmp-*', ''].join('\n'));
   g('init', '-q', '-b', 'main'); g('config', 'user.email', 'regress@example.invalid'); g('config', 'user.name', 'regress');
   g('add', '-A'); g('commit', '-q', '-m', 'scratch'); g('branch', 'develop');
   await startFakeOllama();
   reTestSetup();
-  const cfg = { ...real, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
+  const cfg = { ...real, api: { ...(real.api || {}), anthropicBase: `http://127.0.0.1:${OLLAMA_PORT}/aapi` }, openrouter: { baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/orapi` }, jcode: { command: process.execPath, args: [path.join(SB, 'test', 'fake-jcode.js')] } /* T-370: the Jcode PGM an OpenRouter Work session runs on the server: the fake one */, assistant: { ...(real.assistant || {}), ollamaUrl: `http://127.0.0.1:${OLLAMA_PORT}`, imageUrl: `http://127.0.0.1:${OLLAMA_PORT}`, voiceUrl: `http://127.0.0.1:${OLLAMA_PORT}`, speechUrl: `http://127.0.0.1:${OLLAMA_PORT}`, searchUrl: `http://127.0.0.1:${OLLAMA_PORT}/search`, gifSearchUrl: `http://127.0.0.1:${OLLAMA_PORT}/images/search`, youtubeUrl: `http://127.0.0.1:${OLLAMA_PORT}/results`, via: 'node' }, releases: [{ product: 'fake-prod', repo: 'UnityAILab/fake-prod', label: 'Fake Product' }, { product: 'fake-gone', repo: 'UnityAILab/fake-gone', label: 'Gone' }], aiNodes: { 'test-node': NODE_SECRET, 'old-node': OLD_NODE_SECRET, 'upd-node': OLD_NODE_SECRET + '-upd', 'nohello-node': OLD_NODE_SECRET + '-nh', 'group-node': OLD_NODE_SECRET + '-grp', 'rust-node': OLD_NODE_SECRET + '-rs', 'ollama-node': OLD_NODE_SECRET + '-ol', 'jcode-node': OLD_NODE_SECRET + '-jc', 'plain-node': OLD_NODE_SECRET + '-pl', 'nobrain-node': OLD_NODE_SECRET + '-nb' }, hostGroup: ['t-user'], workSecret: WORK_SECRET, ...(RE_T.ok ? { re: { image: RE_T.image, maxConcurrent: 3, idleWarnHours: 4, runtime: 'podman', namePrefix: RE_T.prefix, env: RE_T.env.env || {}, engineArgs: RE_T.env.pre || [], cpus: '1', memory: '512m', mcpCommand: ['sh', '/opt/fake-rea/mcp.sh'], skillDir: '/opt/fake-rea/skill' } } : {}), appSignin: { codeSeconds: 3 } /* R600-R605 (T-371): a browser sign-in code lives 3 s here (120 by default) so that R601 can see it expire */, hyperworkTeams: { core: ['t-admin', 't-user'] }, hyperworkSecrets: { R444_TOKEN: 'r444-sekrit-token-77' }, hyperworkNetwork: ['127.0.0.1'], hyperworkEventSecret: 'r472-event-secret-0123456789', rustHub: RUST_HUB ? { enabled: true, backPort: RUST_BACK, alone: RUST_ALONE } : false /* on by default since 3.22.0: the normal run is the JavaScript hub alone */, linuxPasswdFile: path.join(FAKE_LINUX, 'passwd'), aiNodeOfflineMs: 4000, presence: { workGapMs: 1500 }, board: { offlineGraceSeconds: 1 } /* R518: a holder offline for 1 s gets the automatic note */, port: PORT, tunnel: false, gistId: '', worktreeRoot: path.join(SCRATCH, 'worktrees'), projectsRoot: path.join(SCRATCH, 'projects'), projectsLocalClone: true, headroom: { url: `http://127.0.0.1:${PORT + 83}` } /* R499's stand-in Headroom; down for every other check (runs go straight to the relay) */, claudeCommand: process.execPath, claudeArgs: [path.join(SB, 'test', 'fake-claude.js')] };
   fs.writeFileSync(path.join(SB, 'config.json'), JSON.stringify(cfg, null, 2));
   // a stand-in for the server's Linux accounts (R159): t-user has one and linked it (its ~/uploaded_files exists and the
   // hub may write it); t-admin has none
   fs.mkdirSync(path.join(FAKE_LINUX, 'home', 't-user', 'uploaded_files'), { recursive: true });
-  fs.writeFileSync(path.join(FAKE_LINUX, 'passwd'), `root:x:0:0:root:/root:/bin/bash\nt-user:x:1500:1500::${path.join(FAKE_LINUX, 'home', 't-user')}:/bin/bash\n`);
+  // passwd fields are split on ':', so on Windows the home is written without its drive letter ("\Users\...", resolved on
+  // the scratch hub's own drive); a real /etc/passwd never has a ':' in a home folder
+  fs.writeFileSync(path.join(FAKE_LINUX, 'passwd'), `root:x:0:0:root:/root:/bin/bash\nt-user:x:1500:1500::${WIN ? path.join(FAKE_LINUX, 'home', 't-user').replace(/^[A-Za-z]:/, '') : path.join(FAKE_LINUX, 'home', 't-user')}:/bin/bash\n`);
   // the scratch hub mirrors its "team" board to the fake Forgejo (a 3-second poll: the minimum)
   // host-set owners (bridge/server-owners.json, R134): a server that exists before the hub starts gets a new owner +
   // a co-owner; the Mills server gets a named owner (t-admin, a hub admin already, so nothing else changes)
@@ -426,6 +582,14 @@ const NATIVE_BIN = (() => {
 let nativeBuilt = null;
 function buildNative() { // → '' when built, else why not (once per run)
   if (nativeBuilt !== null) return nativeBuilt;
+  if (process.env.VR_NATIVE_PREBUILT) { // development only: copy the binaries of an earlier build of this same tree instead of building (a loop of R280 runs needs one build, not one each)
+    try {
+      const from = path.join(process.env.VR_NATIVE_PREBUILT, 'release'), to = path.join(NATIVE_TARGET, 'release'); fs.mkdirSync(path.join(to, 'examples'), { recursive: true });
+      for (const f of ['vr-host', 'vr-hub', 'vr-host.exe', 'vr-hub.exe']) if (fs.existsSync(path.join(from, f))) { fs.copyFileSync(path.join(from, f), path.join(to, f)); fs.chmodSync(path.join(to, f), 0o755); }
+      if (fs.existsSync(path.join(from, 'examples', 'interop'))) { fs.copyFileSync(path.join(from, 'examples', 'interop'), path.join(to, 'examples', 'interop')); fs.chmodSync(path.join(to, 'examples', 'interop'), 0o755); }
+      return (nativeBuilt = buildResult({ status: 0 }));
+    } catch (e) { return (nativeBuilt = 'VR_NATIVE_PREBUILT: ' + e.message); }
+  }
   const home = (() => { try { return require('os').userInfo().homedir; } catch { return process.env.HOME || ''; } })();
   const env = { ...process.env, RUSTUP_HOME: process.env.RUSTUP_HOME || path.join(home, '.rustup'), CARGO_HOME: process.env.CARGO_HOME || path.join(home, '.cargo'), CARGO_TARGET_DIR: NATIVE_TARGET, VR_RELEASE_PUBKEY: TEST_RELEASE_KEY.public, VR_VERSION: (() => { try { return JSON.parse(fs.readFileSync(path.join(MILLS, 'versions.json'), 'utf8')).project; } catch { return ''; } })() };
   env.PATH = path.join(env.CARGO_HOME, 'bin') + path.delimiter + (env.PATH || '');
@@ -543,7 +707,7 @@ async function call(p, token, body, extraHeaders = {}, retry = true) {
 const login = (username, password, deviceId) => call('/api/login', null, { username, password, deviceId });
 // Run a chat to completion; answers pc_tool events like a browser would.
 async function chat(token, message, opts = {}) {
-  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}), ...(opts.startedBy ? { _testStartedBy: opts.startedBy } : {}) }) });
+  const r = await fetch(H + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ message, fresh: !!opts.fresh, ...(opts.context ? { context: opts.context } : {}), ...(opts.session ? { session: opts.session } : {}), ...(opts.target ? { target: opts.target } : {}), ...(opts.startedBy ? { _testStartedBy: opts.startedBy } : {}) }) });
   if (r.status !== 200) return { status: r.status, events: [] };
   const events = []; let buf = '';
   const reader = r.body.getReader(), dec = new TextDecoder();
@@ -773,7 +937,7 @@ async function run() {
   // covering code that moved out of index.html into its own file.
   const indexHtml = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
   const EDITOR_FILES = ['editor/core.js', 'editor/view.js', 'editor/kinds-workflow.js', 'editor/kinds-boxes.js', 'editor/workflows-ui.js']; // the visual editor foundation (T-205), loaded after the page script
-  const PAGE_SCRIPTS = ['menu.js', 'sessions.js', 'queue.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
+  const PAGE_SCRIPTS = ['menu.js', 'sessions.js', 'queue.js', 'apisetup.js', 'tools.js', 'agents.js', 'localai.js', 'hyperwork.js', 'attach.js', 'library.js', 'calls.js',  'coview.js', 'presence.js', 'machines.js', 'guilds.js', 'guild-settings.js', 'profile.js', 'notes.js', 'app.js'];
   const html = indexHtml + '\n' + PAGE_SCRIPTS.map((f) => fs.readFileSync(path.join(MILLS, 'web', f), 'utf8')).join('\n');
   const inlineStart = indexHtml.indexOf('<script>') + 8, inlineEnd = indexHtml.indexOf('</script>', inlineStart);
   try { new Function(indexHtml.slice(inlineStart, inlineEnd)); } catch (e) { pageOk = false; pageErr = 'page: ' + e.message; }
@@ -793,8 +957,19 @@ async function run() {
   const A = (await login('T-Admin', 'pw-t-admin-0001', devA)).data.token;
   const U = (await login('t-user', 'pw-t-user-0001', devB)).data.token;
   const D = (await login('mills', 'pw-default-0001', devC)).data.token;
+  if (process.argv.includes('--only-r280') && RUST_HUB && NATIVE_BIN.host) await r280Check(); // development: just R280 to R284 (with --stop-after R280)
   if (process.argv.includes('--only-r323') && RUST_HUB) await r323Check(); // development: just R323 (with --stop-after R323), a minute instead of an hour
   if (process.argv.includes('--only-r328') && RUST_HUB) await machineToolsCheck(); // development: just R328 to R330 (with --stop-after R330)
+  if (process.argv.includes('--only-r575') && RUST_HUB) await r575Check(); // development: just R575 to R579 (with --stop-after R579)
+  if (process.argv.includes('--only-r580') && RUST_HUB) await r580Check(); // development: just R580 to R585 (with --stop-after R585)
+  if (process.argv.includes('--only-r600') && RUST_HUB) await r600Check(); // development: just R600 to R605 (with --stop-after R605)
+  if (process.argv.includes('--only-r591') && RUST_HUB) await r591Check(); // development: just R591 to R598 (with --stop-after R598)
+  if (process.argv.includes('--only-r620') && RUST_HUB) await r620Check(); // development: just R620 to R626 (with --stop-after R626)
+  if (process.argv.includes('--only-r627') && RUST_HUB) await r627Check(); // development: just R627 to R633 (with --stop-after R633)
+  if (process.argv.includes('--only-r606') && RUST_HUB) await r606Check(); // development: just R606 to R612 (with --stop-after R612)
+  if (process.argv.includes('--only-r614') && RUST_HUB) { await r614Check(); r619Check(); } // development: just R614 to R619 (with --stop-after R619)
+  if (process.argv.includes('--only-r586') && RUST_HUB) await r586Check(); // development: just R586 to R590 (with --stop-after R590)
+  if (process.argv.includes('--only-r560') && RUST_HUB) await r560Check(); // development: just R560 to R565 (with --stop-after R565)
   if (process.argv.includes('--only-r488') && RUST_HUB) await r488Check(); // development: just R488 (with --stop-after R488)
   if (process.argv.includes('--only-r337') && RUST_HUB) await r337Check(); // development: just R337 (with --stop-after R337)
   if (process.argv.includes('--only-r489') && RUST_HUB) await r489Check(); // development: just R489 (with --stop-after R489)
@@ -807,6 +982,7 @@ async function run() {
   if (process.argv.includes('--only-r532')) { if (RUST_HUB) { await r532Check(); await r545Check(); } await r532bCheck(); } // development: just R532 / R545 / R532b (with --stop-after R532b)
   if (process.argv.includes('--only-r527') && RUST_HUB) await r527Check(); // development: just R538 to R543 (with --stop-after R532)
   if (process.argv.includes('--only-r546')) await r546Check(); // development: just R546 (with --stop-after R546)
+  if (process.argv.includes('--only-r637') && RUST_HUB) await siteRolesCheck(); // development: just R637 to R640 (with --stop-after R640)
   if (process.argv.includes('--only-r533') && RUST_HUB) await r533Check(); // development: just R533 to R537 (with --stop-after R537)
   check('R3', 'correct username + password → token (case-insensitive username)', !!A && !!U && !!D);
 
@@ -927,7 +1103,7 @@ async function run() {
   check('R17', '[static] input never disabled while busy; Queue / Send now present', !/\$\('input'\)\.disabled\s*=/.test(html) && html.includes("'Queue'") && html.includes("'Send now'"));
   check('R18', '[static] page retries 502/503/504/530 and re-finds the hub address', /\[502, 503, 504, 530\]/.test(html) && /findBridge\(\)/.test(html));
   check('R19', '[static] login form has username + password; ?user= only pre-fills', hasIds && /get\('user'\)/.test(html) && !/mills-bridge-\$\{/.test(html));
-  check('R20', '[static] menu with Work/Chat, Admin hidden unless admin, ← Menu in three screens', (html.match(/data-back/g) || []).length >= 4 && /goAdmin'\)\.hidden = !me\.admin/.test(html));
+  check('R20', '[static] menu with Work/Chat, Site admin hidden unless a site permission allows it (T-379; the admin flag on an older hub), ← Menu in three screens', (html.match(/data-back/g) || []).length >= 4 && /goAdmin'\)\.hidden = !siteAdminAny\(\)/.test(html) && /function siteCan\(perm\) \{[^\n]*return !!\(me && me\.admin\)/.test(html));
 
   // Chat (E2E)
   const pairs = {};
@@ -1151,7 +1327,7 @@ async function run() {
     const pushed2 = otherPush('other2.txt', 'two\n');
     const chk3 = wt('--project', 'pulled', 'check', 't-user');
     const upd = wt('--project', 'pulled', 'update', 't-user');
-    const rd = (f) => { try { return fs.readFileSync(path.join(qDir, f), 'utf8'); } catch { return ''; } };
+    const rd = (f) => { try { return fs.readFileSync(path.join(qDir, f), 'utf8').replace(/\r\n/g, '\n'); } catch { return ''; } }; // Git for Windows' core.autocrlf checks files out with CRLF
     const renewed = g(qDir, 'rev-parse', '--abbrev-ref', 'HEAD').stdout.trim() === 'work/t-user' && rd('other2.txt') === 'two\n' && rd('mine.txt') === 'my commit\n'
       && /my uncommitted line/.test(rd('README.md')) && rd('scratch-note.txt') === 'untracked\n' && g(qDir, 'log', '-1', '--format=%s').stdout.trim() === 'my work'
       && !fs.readdirSync(path.join(PR, 'pulled')).some((d) => d.startsWith('_old-')) && /refs\/viberoller\/renewed\/t-user-/.test(g(path.join(PR, 'pulled', '_repo'), 'for-each-ref', 'refs/viberoller').stdout);
@@ -2458,10 +2634,10 @@ async function run() {
       const lib161 = fs.readFileSync(path.join(MILLS, 'web', 'library.js'), 'utf8'), page161 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       check('R161', 'Files, complete: a Work file is edited in place (saved back, the owner only, text only), made executable and back (chmod, the owner only); a file put in uploaded_files outside VibeRoller (over SSH, by a Work run) shows in the library (type from its name, "disk"), opens, goes to Work as it is (its path handed to Claude) and deletes; [static] the Files screen has Edit (Ctrl+S), Executable, Use in Work / Run in Work, and Work sends library files with the message',
         saved.status === 200 && /echo two r161/.test(back) && saveOther === 404 && saveBin === 400
-        && exOn.status === 200 && exOn.data.exec === true && exOff.data.exec === false && exOther.status === 404 && mine.size === 14 && mine.edited > 0
+        && (WIN ? exOn.status === 400 && /runs on Windows/.test(exOn.data.error || '') && exOff.status === 400 : exOn.status === 200 && exOn.data.exec === true && exOff.data.exec === false) && exOther.status === 404 && mine.size === 14 // Windows has no execute bit: the hub says so && mine.edited > 0
         && hand.disk === true && hand.mime === 'text/x-python' && /by-hand$/.test(hand.folder || '') && /print\(1\)/.test(handGet) && /by-hand[\\/]made-over-ssh-r161\.py/.test(handRun) && handDel.status === 200 && handGone
         && /function edit\(it\)/.test(lib161) && /\/api\/library\/save\?id=/.test(lib161) && /\/api\/library\/exec/.test(lib161) && /Run in Work/.test(lib161) && /function setWorkLibFiles/.test(page161) && /\.\.\.fromLib/.test(page161),
-        `save ${saved.status} back "${back.trim()}" other ${saveOther} bin ${saveBin}; exec ${exOn.status}/${exOn.data && exOn.data.exec}/${exOff.data && exOff.data.exec} other ${exOther.status}; mine ${JSON.stringify({ s: mine.size, e: !!mine.edited })}; hand ${JSON.stringify({ d: hand.disk, m: hand.mime, f: hand.folder })} get "${handGet.slice(0, 20)}" run "${handRun.slice(0, 120)}" del ${handDel.status} gone ${handGone}`);
+        `save ${saved.status} back "${back.trim()}" other ${saveOther} bin ${saveBin}; exec ${WIN ? '(Windows hub: no execute bit, refused) ' : ''}${exOn.status}/${exOn.data && exOn.data.exec}/${exOff.data && exOff.data.exec} other ${exOther.status}; mine ${JSON.stringify({ s: mine.size, e: !!mine.edited })}; hand ${JSON.stringify({ d: hand.disk, m: hand.mime, f: hand.folder })} get "${handGet.slice(0, 20)}" run "${handRun.slice(0, 120)}" del ${handDel.status} gone ${handGone}`);
     }
   }
   const grpText = grpForU ? await read4(restored, grpForU).catch(() => null) : null;
@@ -2993,6 +3169,15 @@ async function run() {
     check('R550', "the team chat's Unity is the team's go-between: her room instructions (JavaScript and Rust hub, local and Claude brain) tell her to do exactly what she is asked, never refuse, and send any picture or selfie asked for, here or in private messages (production bug 2026-11-10: she refused a badge selfie and posted a note to herself)",
       serverSrc.includes("You are the team's go-between: do exactly what they ask") && (rsRoutes550.match(/You are the team's go-between: do exactly what they ask/g) || []).length === 2, 'static check of both hubs');
 
+    if (RUST_HUB) await r560Check(); else skip('R560', 'the API gateway keys, routing and concurrency (T-369)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r575Check(); else skip('R575', 'the API gateway passes Anthropic requests through raw (T-369, G2)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r580Check(); else skip('R580', 'the API gateway passes OpenAI requests through raw and translates between the formats (T-369, G3)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r591Check(); else skip('R591', 'OpenRouter as a provider (pairs, routing, the key never shown) and the month budget (T-370)', 'the Rust hub\'s: --rust-hub runs it');
+    await r600Check(); // R600-R605 (T-371): the browser sign-in for Jcode PGM (the hub flow with --rust-hub; the page's files always)
+    if (RUST_HUB) await r606Check(); else skip('R606', 'a person\'s own OpenRouter key next to the team\'s (T-372)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r620Check(); else skip('R620', 'the hub side of the Jcode PGM Server: /__pgm/*, the /pgm/ forward, pgmServer in /api/check (T-376)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r627Check(); else skip('R627', 'Work on a PGM session goes through the Jcode PGM Server, and its sessions are in the list (T-376 stage 3)', 'the Rust hub\'s: --rust-hub runs it');
+    if (RUST_HUB) await r586Check(); else skip('R586', 'the API gateway serves the Responses API (Codex) and shows each key\'s usage by day and model (T-369, G5)', 'the Rust hub\'s: --rust-hub runs it');
     // R551-R553: pictures (write on them, real web images), the engine that starts itself, Unity on the desktop
     const N551 = (...p) => fs.readFileSync(path.join(MILLS, 'native', 'crates', ...p), 'utf8');
     const asrc551 = fs.readFileSync(path.join(BRIDGE, 'assistant.js'), 'utf8'), eng551 = fs.readFileSync(path.join(BRIDGE, 'image-engine.py'), 'utf8');
@@ -3079,7 +3264,7 @@ async function run() {
       fs.copyFileSync(path.join(SB, 'vr-host.js'), path.join(cdir, 'vr-host.js')); fs.copyFileSync(path.join(SB, 'ai-node.json'), path.join(cdir, 'ai-node.json'));
       const sets = [vh(cdir, 'set', 'update.quietMinutes', '7'), vh(cdir, 'set', 'provider.claude.shareWithGroup', 'yes'), vh(cdir, 'set', 'provider.claude.allowedUsers', 'mills, sponge'), vh(cdir, 'set', 'engine.image.enabled', 'off'), vh(cdir, 'set', 'allowWork', 'off')];
       const badN = vh(cdir, 'set', 'update.quietMinutes', '999').status, badHub = vh(cdir, 'set', 'hub', 'http://evil.example').status, badKey = vh(cdir, 'set', 'nope', '1').status;
-      const ccfg = JSON.parse(fs.readFileSync(path.join(cdir, 'ai-node.json'), 'utf8')), mode = fs.statSync(path.join(cdir, 'ai-node.json')).mode & 0o777;
+      const ccfg = JSON.parse(fs.readFileSync(path.join(cdir, 'ai-node.json'), 'utf8')), mode = WIN ? 0o600 : fs.statSync(path.join(cdir, 'ai-node.json')).mode & 0o777; // Windows has no Unix modes (always 666 to Node), as in R164
       const listOut = vh(cdir, 'settings').stdout;
       fs.rmSync(cdir, { recursive: true, force: true });
       // pause / resume through the app
@@ -3160,15 +3345,15 @@ async function run() {
     const pubSigned = (await fetch(H + '/api/pub/versions', { headers: { Authorization: 'Bearer ' + U } })).status;
     const page = await (await fetch(H + '/')).text();
     const html = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), appJs = fs.readFileSync(path.join(MILLS, 'web', 'app.js'), 'utf8');
-    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the Download button sits above Settings in the menu and in the app\'s user panel',
+    check('R142', 'Download: only the native programs and only for people with an account (anonymous → 401 for the list and the desktop\'s release; the public /api/pub/* answers 410 to everyone; the old script packages are gone → 404); the Rust hub hands them out (nothing built here yet: an empty list), the JavaScript hub on its own says they come from the Rust hub (503); the page the hub serves says so (it then talks to its own origin, whatever name reached it); the menu\'s Downloads button sits next to Settings under My status / Team now and above Settings in the app\'s user panel, and every Download button opens the Downloads window (no longer a Settings tab)',
       anon.status === 401 && anonNative.status === 401 && pubGone.every((s) => s === 410) && pubSigned === 410
       && (RUST_HUB ? dl.status === 200 && Array.isArray(items) && items.every((it) => it.native === true && /^(app|host)-/.test(it.id)) && unknown.status === 404 : dl.status === 503 && unknown.status === 503)
       && !fs.existsSync(path.join(BRIDGE, 'downloads.js')) && !fs.existsSync(path.join(BRIDGE, 'desktop'))
       && /'hub' === 'hub'/.test(page) && !/__MILLS_SERVED__/.test(page) && /__MILLS_SERVED__/.test(html) && /SERVED_BY_HUB \|\|/.test(html)
-      && /class="menuFoot menuDl"/.test(html) && html.indexOf('data-downloads') < html.indexOf('id="goSettings"') && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
-      // Work's bar: Download right above Settings; Settings has its own Downloads tab, which every Download button opens
+      && /<div class="psBar menuQuick" id="menuQuick"><button type="button" id="goSettings" class="ghost psBtn" data-settings[\s\S]*?id="goDownloads" class="ghost psBtn" data-downloads/.test(html) && /symbol id="i-download"/.test(html) && /openDownloads\(\)/.test(appJs) && /ic\('download'\)/.test(appJs)
+      // Work's bar: Download right above Settings; Downloads is a window of its own (T-378), which every Download button opens
       && (() => { const rail = (html.match(/<nav id="rail">[\s\S]*?<\/nav>/) || [''])[0]; return rail.indexOf('data-downloads') > -1 && rail.indexOf('data-downloads') < rail.indexOf('data-settings'); })()
-      && /data-settab="downloads"/.test(html) && /<div data-setpane="downloads" hidden>[\s\S]*id="dlBody"[\s\S]*id="appBox"/.test(html) && /PROFILE\.tab\('downloads'\)/.test(html) && !/id="downloads" class="modal"/.test(html),
+      && !/data-settab="downloads"|data-setpane="downloads"|PROFILE\.tab\('downloads'\)/.test(html) && /<div id="downloads" class="modal" hidden>[\s\S]*?id="dlBody"[\s\S]*?id="appBox"/.test(html) && /function openDownloads\(\) \{\s*\$\('downloads'\)\.hidden = false;/.test(html),
       `anon ${anon.status} native ${anonNative.status} pub ${pubGone.join(',')} signed ${pubSigned}; list ${dl.status} ${items.map((x) => x.id + ':' + x.bytes).join(' ')}; old package ${unknown.status}; page served ${/'hub' === 'hub'/.test(page)}; menu order ${html.indexOf('data-downloads') < html.indexOf('id="goSettings"')}`);
   }
 
@@ -4099,6 +4284,103 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   if (RUST_HUB) { if (!process.argv.includes('--only-r533')) await r533Check(); } else for (const id of Object.keys(L533)) skip(id, L533[id], 'the Rust hub\'s: --rust-hub runs it');
   // R533 to R537 (T-341 / T-342, plans/multi-session.md § 4a): every session, the first one too, can be deleted. An account of
   // its own (t-r533), so t-user's first session, which many checks use, stays as it is.
+  // R637 to R640 (T-379): see L637
+  async function siteRolesCheck() {
+    const made = [];
+    const mkAcct = async (name, by = A) => { const c = (await call('/api/admin/create', by, { username: name, display: name })).data || {}; if (c.password) made.push(name); return c.password ? (await login(name, c.password, 'device-' + (name + 'xxxxxxxxxxxxxxxx').slice(0, 16))).data.token : ''; };
+    const role = async (tok) => (((await call('/api/check', tok)).data || {}).site || {});
+    const give = (by, username, r) => call('/api/admin/roles/assign', by, { username, role: r });
+    const Dname = ((await call('/api/check', D)).data || {}).username;
+    try { // R637
+      const seen = {};
+      const ro = (await call('/api/admin/roles', A)).data || {};
+      seen.ladder = (ro.roles || []).filter((r) => r.builtin).map((r) => `${r.id}:${r.position}`).join(',');
+      seen.cats = (ro.categories || []).map((c) => c[0]).join(',');
+      seen.members = [ro.members && ro.members['t-admin'], ro.members && ro.members[Dname], ro.members && ro.members['t-user']].join(',');
+      const M = await mkAcct('t-r637m');
+      const m0 = await call('/api/admin/accounts', M), mr0 = await role(M);
+      const g1 = await give(A, 't-r637m', 'moderator');
+      const m1 = await call('/api/admin/accounts', M), mc1 = await call('/api/admin/create', M, { username: 't-r637-no' }), mr1 = await role(M), mRoles = await call('/api/admin/roles', M), mGive = await give(M, 't-user', 'moderator');
+      const tooHigh = await give(A, 't-r637m', 'superadmin'), own = await give(A, 't-admin', 'member'), owner = await give(A, Dname, 'member');
+      const gA = await give(A, 't-r637m', 'admin');
+      const listed = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-r637m') || {};
+      const mGiveAdmin = await give(M, 't-user', 'admin'), mDel = await call('/api/admin/delete', M, { username: 't-admin' });
+      const gM = await give(A, 't-r637m', 'member');
+      const back = ((await call('/api/admin/accounts', A)).data.accounts || []).find((x) => x.username === 't-r637m') || {};
+      const au = ((await call('/api/admin/audit?action=roles&limit=200', A)).data.entries || []).filter((e) => e.action === 'roles.assign' && e.target === 't-r637m' && e.actor === 't-admin').map((e) => e.detail.role).reverse().join(','); // (the log answers newest first)
+      Object.assign(seen, { m0: `${m0.status} "${m0.data.error}"`, mr0: mr0.role && mr0.role.id, g1: `${g1.status} ${g1.data.role}/${g1.data.admin}`, m1: m1.status, mc1: `${mc1.status} "${mc1.data.error}"`, mr1: `${mr1.role && mr1.role.id} [${mr1.perms}]`, mRoles: mRoles.status, mGive: mGive.status,
+        refused: [tooHigh.status, own.status, owner.status].join('/'), gA: `${gA.status} ${gA.data.admin}`, listed: `${listed.admin} ${listed.role && listed.role.id}`, mGiveAdmin: mGiveAdmin.status, mDel: mDel.status, gM: `${gM.status} ${gM.data.admin}`, back: `${back.admin} ${back.role && back.role.id}`, au });
+      check('R637', L637.R637, seen.ladder === 'coowner:60,superadmin:50,admin:40,supermod:30,moderator:20,member:10' && seen.cats === 'Accounts,Hub,AI,Advanced' && seen.members === 'superadmin,coowner,member'
+        && m0.status === 403 && m0.data.error === 'Needs the View accounts permission.' && mr0.role && mr0.role.id === 'member' && (mr0.perms || []).length === 0
+        && g1.status === 200 && g1.data.role === 'moderator' && g1.data.admin === false && m1.status === 200 && mc1.status === 403 && mc1.data.error === 'Needs the Manage accounts permission.'
+        && mr1.role.id === 'moderator' && JSON.stringify(mr1.perms) === '["VIEW_ACCOUNTS"]' && mRoles.status === 200 && mGive.status === 403
+        && tooHigh.status === 403 && own.status === 403 && owner.status === 403 && gA.status === 200 && gA.data.admin === true && listed.admin === true && listed.role.id === 'admin'
+        && mGiveAdmin.status === 403 && mDel.status === 403 && gM.status === 200 && gM.data.admin === false && back.admin === false && back.role.id === 'member' && au === 'moderator,admin,member',
+        JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R637', L637.R637, false, 'the check itself failed: ' + e.message); }
+    try { // R638
+      const seen = {};
+      const bad = await call('/api/admin/roles/save', A, { name: 'Bad', color: '#112233', position: 40, perms: [] });
+      const sv = await call('/api/admin/roles/save', A, { name: 'AI keeper', color: '#22aa88', position: 35, perms: ['MANAGE_AI'] });
+      const id = (sv.data.role || {}).id || '';
+      const K = await mkAcct('t-r638k'), G = await mkAcct('t-r638g');
+      const gk = await give(A, 't-r638k', id); await give(A, 't-r638g', 'admin');
+      const kAi = await call('/api/admin/ai', K), kOr = await call('/api/openrouter/budget/all', K), kAcc = await call('/api/admin/accounts', K), kr = await role(K);
+      const gBig = await call('/api/admin/roles/save', G, { name: 'Too big', color: '#000000', position: 25, perms: ['ADMINISTRATOR'] });
+      const del = await call('/api/admin/roles/delete', A, { id });
+      const kAfter = await role(K), kAi2 = await call('/api/admin/ai', K), gone = !((await call('/api/admin/roles', A)).data.roles || []).some((r) => r.id === id);
+      Object.assign(seen, { bad: bad.status, sv: `${sv.status} ${id} ${JSON.stringify((sv.data.role || {}).perms)}`, gk: `${gk.status} ${gk.data.admin}`, kAi: `${kAi.status} ${kAi.data.canManage}`, kOr: kOr.status, kAcc: kAcc.status, kr: kr.role && kr.role.name,
+        gBig: `${gBig.status} "${gBig.data.error}"`, del: `${del.status} [${del.data.cleared}]`, kAfter: kAfter.role && kAfter.role.id, kAi2: kAi2.status, gone });
+      check('R638', L637.R638, bad.status === 400 && sv.status === 200 && /^c-/.test(id) && JSON.stringify(sv.data.role.perms) === '["MANAGE_AI"]' && gk.status === 200 && gk.data.admin === false
+        && kAi.status === 200 && kAi.data.canManage === true && kOr.status === 200 && kAcc.status === 403 && kr.role.name === 'AI keeper' && kr.role.position === 35
+        && gBig.status === 403 && /permissions you do not hold/.test(gBig.data.error || '') && del.status === 200 && JSON.stringify(del.data.cleared) === '["t-r638k"]' && kAfter.role.id === 'member' && kAi2.status === 403 && gone,
+        JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R638', L637.R638, false, 'the check itself failed: ' + e.message); }
+    try { // R639
+      const seen = {}; const f = path.join(SB, 'site-settings.json'), had = fs.existsSync(f) ? fs.readFileSync(f) : null;
+      const uSet = await call('/api/admin/site-settings', U, { motd: 'no' });
+      const set = await call('/api/admin/site-settings', A, { motd: 'R639 hello team', defaultTheme: 'gruvbox_dark', newAccountRole: 'moderator' });
+      const uSite = await role(U), get = await call('/api/admin/site-settings', A);
+      const long = await call('/api/admin/site-settings', A, { motd: 'x'.repeat(501) }), unknown = await call('/api/admin/site-settings', A, { newAccountRole: 'no-such-role' }), high = await call('/api/admin/site-settings', A, { newAccountRole: 'superadmin' });
+      const N = await mkAcct('t-r639n'), nSite = await role(N);
+      await call('/api/admin/site-settings', A, { motd: '', defaultTheme: '', newAccountRole: 'member' });
+      if (had) fs.writeFileSync(f, had); else fs.rmSync(f, { force: true });
+      Object.assign(seen, { uSet: `${uSet.status} "${uSet.data.error}"`, set: set.status, uSite: `${uSite.motd}|${uSite.defaultTheme}`, get: JSON.stringify(get.data), long: long.status, unknown: unknown.status, high: high.status, n: nSite.role && nSite.role.id });
+      check('R639', L637.R639, uSet.status === 403 && uSet.data.error === 'Needs the Manage hub permission.' && set.status === 200 && uSite.motd === 'R639 hello team' && uSite.defaultTheme === 'gruvbox_dark'
+        && get.data.newAccountRole === 'moderator' && long.status === 400 && unknown.status === 400 && high.status === 403 && !!N && nSite.role.id === 'moderator', JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R639', L637.R639, false, 'the check itself failed: ' + e.message); }
+    try { // R640
+      const seen = {}; const local = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(local) ? fs.readFileSync(local) : null;
+      const sv = await call('/api/admin/roles/save', A, { name: 'R640 AI', color: '#8844cc', position: 33, perms: ['MANAGE_AI'] }), id = (sv.data.role || {}).id || '';
+      const X = await mkAcct('t-r640x'), Y = await mkAcct('t-r640y');
+      await give(A, 't-r640x', id); await give(A, 't-r640y', 'supermod');
+      const xa = (await call('/api/admin/ai', X)).data || {}, ya = await call('/api/admin/ai', Y), xAcc = await call('/api/admin/accounts', X);
+      const accts = (await call('/api/admin/accounts', A)).data.accounts || [];
+      const unityOk = accts.length > 0 && accts.every((a) => { const u = (xa.unity || []).find((x) => x.username === a.username); return u && u.pc === a.unityPc && u.code === a.unityCode && typeof u.display === 'string'; });
+      const sw = await call('/api/admin/unity-tools', X, { username: 't-user', pc: false }), swBack = await call('/api/admin/unity-tools', X, { username: 't-user', pc: true });
+      const ySw = await call('/api/admin/unity-tools', Y, { username: 't-user', pc: false }), yDef = await call('/api/admin/ai/default', Y, { defaultProvider: '' });
+      const pick = (xa.choices || []).find((c) => /^host:/.test(c.value)) || {}, owner = (pick.value || '').slice(5);
+      const ownerTok = { 't-admin': A, 't-user': U }[owner] || (owner === Dname ? D : '');
+      const was = xa.defaultProvider;
+      const setDef = await call('/api/admin/ai/default', X, { defaultProvider: pick.value });
+      const chk = ownerTok ? (await call('/api/check', ownerTok)).data || {} : {}, after = (await call('/api/admin/ai', X)).data || {};
+      const kept = (() => { try { return JSON.parse(fs.readFileSync(local, 'utf8')).defaultProvider; } catch { return undefined; } })();
+      const badDef = await call('/api/admin/ai/default', X, { defaultProvider: 'host:nobody-r640' }), oddDef = await call('/api/admin/ai/default', X, { defaultProvider: 'weird' });
+      await call('/api/admin/ai/default', X, { defaultProvider: was || '' });
+      if (hadLocal) fs.writeFileSync(local, hadLocal);
+      await call('/api/admin/roles/delete', A, { id });
+      const prov = (chk.providers || []).find((p) => p.id === chk.defaultProvider) || {};
+      Object.assign(seen, { hosts: (xa.hosts || []).map((h) => `${h.id}@${h.owner}`).join(','), canManage: xa.canManage, unity: (xa.unity || []).length, unityOk, ya: `${ya.status} ${ya.data.canManage} ${(ya.data.unity || []).length} hosts ${(ya.data.hosts || []).length}`, xAcc: xAcc.status,
+        sw: `${sw.status} ${JSON.stringify(sw.data)}`, swBack: `${swBack.status} ${swBack.data.pc}`, ySw: `${ySw.status} "${ySw.data.error}"`, yDef: `${yDef.status} "${yDef.data.error}"`, choices: (xa.choices || []).map((c) => c.value).join(','), pick: pick.value, setDef: setDef.status, check: `${chk.defaultProvider} (owner ${prov.owner})`, after: after.defaultProvider, kept, badDef: badDef.status, oddDef: oddDef.status });
+      check('R640', L637.R640, sv.status === 200 && xa.canManage === true && (xa.hosts || []).length > 0 && (xa.hosts || []).every((h) => typeof h.owner === 'string' && 'online' in h && Array.isArray(h.inUse) && Array.isArray(h.users)) && unityOk && xAcc.status === 403
+        && ya.status === 200 && ya.data.canManage === false && (ya.data.unity || []).length === 0 && (ya.data.hosts || []).length === (xa.hosts || []).length
+        && sw.status === 200 && sw.data.username === 't-user' && sw.data.pc === false && typeof sw.data.code === 'boolean' && swBack.status === 200 && swBack.data.pc === true
+        && ySw.status === 403 && ySw.data.error === 'Needs the Manage AI permission.' && yDef.status === 403
+        && (xa.choices || [])[0] && xa.choices[0].value === '' && !!owner && !!ownerTok && setDef.status === 200 && after.defaultProvider === pick.value && kept === pick.value && /^h:/.test(chk.defaultProvider || '') && prov.owner === owner
+        && badDef.status === 400 && oddDef.status === 400, JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R640', L637.R640, false, 'the check itself failed: ' + e.message); }
+    finally { for (const u of made) await call('/api/admin/delete', A, { username: u }); }
+  }
   async function r533Check() {
     const seen = {};
     const created = (await call('/api/admin/create', A, { username: 't-r533', display: 'R533' })).data || {};
@@ -4168,6 +4450,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r489')) await r489Check(); } else skip('R489', R489_LABEL, 'the Rust hub\'s: --rust-hub runs it');
   await r526Check();
+  await r565Check(); // T-369 G4: Settings → API access page side (both modes)
   await r527ThemeCheck(); // T-291: the Theme menu on top (both modes)
   if (!process.argv.includes('--only-r546')) await r546Check(); // T-318: Settings in groups, Find a setting, the ways back (both modes)
   if (!process.argv.includes('--only-r528')) await r528r529Check();
@@ -4221,6 +4504,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R510', 'the prompt enhancer gets the session\'s conversation to understand the draft: its first message and its newest turns (tools left out, older middle turns skipped and said so, about 12 000 characters at most) before the draft, marked as context only; with context: false it gets none',
       Object.values(seen.ctx).every(Boolean) && seen.off, JSON.stringify(seen));
   } else skip('R510', 'the prompt enhancer with the session\'s context', 'the Rust hub\'s: --rust-hub runs it');
+  if (RUST_HUB) { if (!process.argv.includes('--only-r614')) await r614Check(); } else for (const [n, what] of Object.entries(L614)) if (n !== 'R619') skip(n, what, 'the Rust hub\'s: --rust-hub runs it');
+  r619Check(); // T-375: the page's /transfer (static: both modes)
   // T-271: the security log (bridge/security/audit.jsonl, pgm-core-internal audit.rs): append-only, hash-chained, admins read it
   const AUDIT_FILE = path.join(SB, 'security', 'audit.jsonl');
   const loginFrom = (ip, body) => fetch(H + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
@@ -4290,7 +4575,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
     const seen = {
       box: /<div class="setSection" id="healthBox" hidden>[\s\S]{0,1500}<div class="setSection" id="auditBox" hidden><b><svg class="ic" aria-hidden="true"><use href="#i-shield"\/><\/svg> Security log<\/b>/.test(page),
-      reads: /json\('\/api\/admin\/audit\?limit=300'/.test(page) && /Chain broken at entry \$\{v\.brokenAt\}/.test(page) && /loadHealth\(\);\n  loadAudit\(\);/.test(page),
+      reads: /json\('\/api\/admin\/audit\?limit=300'/.test(page) && /Chain broken at entry \$\{v\.brokenAt\}/.test(page) && /if \(siteCan\('VIEW_HEALTH'\)\) loadHealth\(\);[^\n]*\n  if \(siteCan\('VIEW_SECURITY_LOG'\)\) loadAudit\(\);/.test(page),
       ignored: /^bridge\/security\/$/m.test(fs.readFileSync(path.join(MILLS, '.gitignore'), 'utf8')),
     };
     if (!RUST_HUB) seen.jsHub = (await call('/api/admin/audit', A)).status !== 200 && (await call('/api/status')).status === 200;
@@ -4637,6 +4922,175 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R642 (T-380): Settings is a page from the main menu and the modal from everywhere else, one Settings moved between the two
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8'), seen = {};
+    // settingsAs, run on stand-ins: it moves the one #settings into the page's body or back beside the modals, and marks it
+    const src = (page.match(/\nfunction settingsAs\(page\) \{[\s\S]*?\n\}\n/) || [''])[0];
+    const node = (id) => ({ id, parent: null, kids: [], cls: new Set(), classList: null });
+    const els = { settings: node('settings'), settingsPageBody: node('settingsPageBody'), downloads: node('downloads'), body: node('body') };
+    const S = els.settings; S.classList = { contains: (c) => S.cls.has(c), toggle: (c, on) => (on ? S.cls.add(c) : S.cls.delete(c)) };
+    const move = (n, to) => { if (n.parent) n.parent.kids = n.parent.kids.filter((k) => k !== n); n.parent = to; to.kids.push(n); };
+    els.settingsPageBody.append = (n) => move(n, els.settingsPageBody);
+    els.downloads.parent = els.body; els.body.kids.push(els.downloads); els.downloads.before = (n) => move(n, els.body);
+    move(S, els.body);
+    const where = () => (S.parent === els.settingsPageBody ? 'page' : 'modal') + (S.cls.has('asPage') ? '+asPage' : '');
+    try {
+      const ctx = { $: (id) => els[id] }; require('vm').runInNewContext(src + '\nthis.go = settingsAs;', ctx);
+      const steps = []; for (const p of [true, true, false, false, true]) { ctx.go(p); steps.push(where()); }
+      seen.moves = steps.join(' ');
+    } catch (e) { seen.err = e.message; }
+    // who opens which: the main menu's Settings the page, every other Settings button (Work's bar, the chat app, a profile card) the modal
+    seen.menuPage = /\$\('goSettings'\)\.onclick = \(\) => \{ openSettings\(true\); showScreen\('settingsPage'\); \};/.test(page) && /function openSettings\(asPage\) \{\n  settingsAs\(asPage === true\);/.test(page)
+      && /document\.querySelectorAll\('\[data-settings\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => \{ settingsFrom = b; openSettings\(\);/.test(page);
+    seen.screen = /<div id="settingsPage" class="screen" hidden>\s*<header>\s*<button class="ghost back" data-back>[\s\S]*?<b>Settings<\/b>[\s\S]*?<div id="settingsPageBody"><\/div>/.test(page) && /'settingsPage'/.test((page.match(/const SCREENS = \[[^\]]*\]/) || [''])[0]);
+    // the page: no Close, Escape and a click beside it do nothing; it scrolls as a whole, tabs on top, Save at the bottom
+    seen.pageWaysOut = /if \(\$\('settings'\)\.classList\.contains\('asPage'\)\) return;/.test(page) && /\$\('settings'\)\.classList\.contains\('asPage'\) \|\| !\$\('profileCard'\)\.hidden/.test(page) && /#settings\.asPage \.setBox > \.bar > span, #settings\.asPage #closeSettings \{ display: none; \}/.test(css);
+    seen.pageScroll = /#settings\.asPage \{[^}]*overflow-y: auto;[^}]*padding: 0 max\(1rem, calc\(\(100% - 900px\) \/ 2\)\); \}/.test(css) && /#settings\.asPage \.setTabs \{ position: sticky; top: 0;/.test(css) && /#settings\.asPage \.setSave \{ position: sticky; bottom: 0;/.test(css);
+    check('R642', 'Settings opens as its own page (← Menu, the whole page scrolls, the tabs stay on top and Save at the bottom, no Close) only from the main menu; Settings in Work, the chat app, a profile card or /settings is the modal; both are the same Settings (the one element moves between the page and the modal, so the options are always the same)',
+      seen.moves === 'page+asPage page+asPage modal modal page+asPage' && seen.menuPage && seen.screen && seen.pageWaysOut && seen.pageScroll && !seen.err, JSON.stringify(seen));
+  }
+  { // R641 (T-379): the menu's Settings / Downloads beside My status; Site admin and AI Admin on the page; who sees what
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8');
+    const sa = fs.readFileSync(path.join(MILLS, 'web', 'siteadmin.js'), 'utf8'), aa = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'), seen = {};
+    const vm = require('vm');
+    // the menu: Settings and Downloads are the small buttons right under My status / Team now (presence.js puts those after #menuWho)
+    seen.quick = /<div id="menuWho" class="menuWho" hidden><\/div>\n[^\n]*\n  <div class="psBar menuQuick" id="menuQuick"><button type="button" id="goSettings" class="ghost psBtn" data-settings[^>]*>(?:(?!<small>)[\s\S])*?Settings<\/button><button type="button" id="goDownloads" class="ghost psBtn" data-downloads[^>]*>(?:(?!<small>)[\s\S])*?Downloads<\/button><\/div>/.test(page);
+    // the admin pages scroll as a whole (T-379 follow-up): the scrolling body spans the screen, so the wheel works anywhere and the scrollbar sits at the window edge; the content stays a centred column of at most 1000px by its padding
+    seen.adminScroll = /#adminBody\.adminPage, #aiAdminBody\.adminPage \{ flex: 1; min-height: 0; width: 100%; margin: 0; overflow-y: auto; padding: 1rem max\(1rem, calc\(\(100% - 1000px\) \/ 2\)\); \}/.test(css) && !/\.adminPage \{[^}]*width: min\(1000px/.test(css);
+    seen.twoPerRow = /#menu \.menuSec\[data-menusec="productivity"\] \.choices \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(css);
+    // a fake page, enough for the two files: elements with children, text, value, hidden
+    const mkDoc = () => {
+      const byId = {};
+      const el = (tag) => { const e = { tagName: String(tag).toUpperCase(), children: [], hidden: false, value: '', checked: false, disabled: false, title: '', className: '', style: {}, dataset: {}, parentElement: null, _text: '',
+        append(...k) { for (const c of k) { const n = typeof c === 'string' ? { tagName: '#text', _text: c, children: [] } : c; n.parentElement = e; e.children.push(n); } }, after() {}, remove() {}, setAttribute(k, v) { e[k] = v; }, querySelector: () => null,
+        get textContent() { return e._text + e.children.map((c) => c.textContent !== undefined ? c.textContent : c._text).join(''); }, set textContent(v) { e._text = String(v); e.children = []; },
+        set innerHTML(v) { e._text = ''; e.children = []; }, get options() { return e.children; }, get selectedIndex() { return e.children.findIndex((o) => o.value === e.value); } };
+        return e; };
+      const doc = { createElement: el, getElementById: (id) => (byId[id] || (byId[id] = Object.assign(el('div'), { id, parentElement: el('div') }))) };
+      return { doc, byId };
+    };
+    // Site admin's role column: a picker only for people below you (never yourself), with only the roles below you
+    const R = { categories: [], roles: [{ id: 'member', name: 'Member', position: 10, perms: [] }, { id: 'moderator', name: 'Moderator', position: 20, perms: ['VIEW_ACCOUNTS'] }, { id: 'admin', name: 'Admin', position: 40, perms: ['MANAGE_ROLES'] }, { id: 'superadmin', name: 'Super Admin', position: 50, perms: ['ADMINISTRATOR'] }],
+      members: { boss: 'superadmin', ann: 'admin', bob: 'member' }, me: { role: 'admin', position: 40, perms: ['VIEW_ACCOUNTS', 'MANAGE_ROLES'] } };
+    try {
+      const { doc } = mkDoc();
+      const ctx = { document: doc, json: async (u) => { if (u === '/api/admin/roles') return JSON.parse(JSON.stringify(R)); throw new Error('no'); }, siteCan: (p) => R.me.perms.includes(p), me: { username: 'ann' }, confirmButton: () => doc.createElement('button'), loadAdmin() {}, THEMES: {}, themeLabel: (x) => x, console };
+      vm.runInNewContext(sa + '\nthis.S = SITEADMIN;', ctx);
+      await ctx.S.load();
+      const cell = (u) => { const td = ctx.S.roleCell({ username: u, admin: false }, () => {}); const w = td.children[0]; const sel = w && w.children.find((c) => c.tagName === 'SELECT'); return sel ? 'pick:' + sel.children.map((o) => o.value).join('/') : 'shown'; };
+      seen.cells = ['boss', 'ann', 'bob'].map((u) => u + '=' + cell(u)).join(' ');
+    } catch (e) { seen.saErr = e.message; }
+    // AI Admin: everyone gets their own part; the Global part (and the line) only with Manage AI or See AI hosts, each group by its permission
+    const aiFor = async (perms) => {
+      const { doc, byId } = mkDoc(); const calls = [];
+      const ctx = { document: doc, siteCan: (p) => perms.includes(p), json: async (u) => { calls.push(u); throw new Error('offline'); }, renderSource: () => calls.push('mine:source'), renderProviders: () => calls.push('mine:providers'), renderOrBudget: () => calls.push('mine:openrouter'), renderHosts: () => calls.push('mine:hosts'), me: { username: 'x' }, console };
+      vm.runInNewContext(aa + '\nthis.A = AIADMIN;', ctx); ctx.A.open(); await new Promise((r) => setTimeout(r, 20));
+      const vis = ['aiGlobal', 'aiSplit', 'agDefault', 'agOpenRouter', 'agHosts', 'agUnity'].filter((id) => byId[id] && !byId[id].hidden).join(',');
+      return (vis || 'none') + ' | ' + calls.filter((c) => c.startsWith('mine:')).length + ' of mine' + (calls.includes('/api/admin/ai') ? ' | asks /api/admin/ai' : '');
+    };
+    try { seen.aiMember = await aiFor([]); seen.aiHostsOnly = await aiFor(['VIEW_AI_HOSTS']); seen.aiManage = await aiFor(['MANAGE_AI']); } catch (e) { seen.aaErr = e.message; }
+    // the page's own siteCan: ADMINISTRATOR is all; an older hub (no site in /api/check) falls back to the admin flag
+    const sc = (page.match(/\nconst SITE_ADMIN_PERMS = [^\n]*\nfunction siteCan\([^\n]*\nfunction siteAdminAny\([^\n]*\n/) || [''])[0];
+    const can = (meV, perm) => vm.runInNewContext(sc + `\nme = ${JSON.stringify(meV)}; [siteCan(${JSON.stringify(perm)}), siteAdminAny()]`, { me: null }).join('/');
+    try { seen.siteCan = [can({ site: { perms: ['ADMINISTRATOR'] } }, 'MANAGE_HUB'), can({ site: { perms: ['MANAGE_AI'] } }, 'MANAGE_HUB'), can({ admin: true }, 'VIEW_HEALTH'), can({ admin: false }, 'VIEW_HEALTH')].join(' '); } catch (e) { seen.scErr = e.message; }
+    seen.screens = /<div id="aiAdmin" class="screen" hidden>[\s\S]*?<b>AI Admin<\/b>[\s\S]*?id="aiGlobal"[\s\S]*?<hr class="adminSplit" id="aiSplit" hidden>[\s\S]*?id="aiPersonal"[\s\S]*?id="srcBox"[\s\S]*?id="provBox"[\s\S]*?id="orBox"[\s\S]*?id="hostBox"/.test(page)
+      && /<div id="admin" class="screen" hidden>[\s\S]*?<b>Site admin<\/b>/.test(page) && /<script src="siteadmin\.js"><\/script>\n<script src="aiadmin\.js"><\/script>/.test(page);
+    check('R641', 'the menu shows Settings and Downloads as small buttons right under My status / Team now (no description lines) and Productivity two to a row; Site admin and AI Admin scroll as a whole page (the scrollbar at the window edge, the wheel works anywhere on it); Site admin gives a role picker only for people below you, with only the roles below yours (yourself and those above just show their role); AI Admin shows everyone their own AI settings and the Global part (with the line under it) only to Manage AI (default AI, team OpenRouter, AI hosts, Unity tools) or See AI hosts (the hosts list alone); ADMINISTRATOR counts as every permission and an older hub without site roles falls back to the admin flag',
+      seen.quick && seen.twoPerRow && seen.adminScroll && seen.cells === 'boss=shown ann=shown bob=pick:moderator/member'
+      && seen.aiMember === 'none | 4 of mine' && seen.aiHostsOnly === 'aiGlobal,aiSplit,agHosts | 4 of mine | asks /api/admin/ai' && seen.aiManage === 'aiGlobal,aiSplit,agDefault,agOpenRouter,agHosts,agUnity | 4 of mine | asks /api/admin/ai'
+      && seen.siteCan === 'true/true false/false true/true false/false' && seen.screens && !seen.saErr && !seen.aaErr && !seen.scErr,
+      JSON.stringify(seen));
+  }
+  { // R635 (T-378): Settings in five tabs about your own account; Downloads a window of its own with Jcode PGM; Desktop Unity off by default
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), pjs = fs.readFileSync(path.join(MILLS, 'web', 'profile.js'), 'utf8');
+    const duJs = fs.readFileSync(path.join(MILLS, 'web', 'deskunity.js'), 'utf8'), seen = {};
+    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="downloads" class="modal" hidden>/) || [])[1] || '';
+    seen.tabs = [...box.matchAll(/data-settab="(\w+)"><svg class="ic lead"><use href="#i-[\w-]+"\/><\/svg>([^<]+)</g)].map((m) => m[1] + '=' + m[2]).join(' | ');
+    seen.panes = [...box.matchAll(/<div data-setpane="(\w+)"( data-saves)?/g)].map((m) => m[1] + (m[2] ? '+save' : '')).join(',');
+    // the Save bar is the box's own footer (outside every pane), shown only while App or Sound & voice is on screen
+    seen.saveOutside = /<\/div>\n    <!-- one Save for App and Sound & voice[^\n]*-->\n    <div class="setSave"><button type="button" id="saveSettings">/.test(box);
+    const sb = (pjs.match(/\n  (function saveBar\(\) \{[\s\S]*?\n  \})/) || [])[1] || '';
+    const bar = (panes) => { const b = { hidden: null }; try { require('vm').runInNewContext(sb + '\nsaveBar();', { document: { querySelector: () => b, querySelectorAll: () => panes } }); } catch (e) { seen.err = e.message; } return b.hidden; };
+    seen.saveShown = [bar([{ hidden: false }, { hidden: true }]), bar([{ hidden: true }, { hidden: true }]), bar([{ hidden: true }, { hidden: false }])].join(',');
+    seen.saveCalled = (pjs.match(/saveBar\(\)/g) || []).length >= 4;
+    // Downloads: its own window; Jcode PGM gets its own section, newest first with this platform's files up front
+    const dl = (page.match(/<div id="downloads" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
+    seen.dlWindow = /id="closeDownloads"/.test(dl) && /id="dlBody"/.test(dl) && /id="appBox"/.test(dl) && /id="dlVersion"/.test(dl) && !/data-settab="downloads"/.test(page);
+    const planSrc = (page.match(/\nconst JCODE_ABOUT = \{[\s\S]*?\n\};\nfunction dlReleasePlan\([\s\S]*?\n\}\n/) || [''])[0];
+    let plan = null;
+    const cat = { products: [
+      { product: 'pgm-shadowchat', label: 'ShaDow Chat', releases: [{ version: 'v1.0.0', assets: [] }] },
+      { product: 'jcode-pgm', label: 'Jcode PGM', releases: [
+        { version: 'v0.99.10-pgm.1', assets: [{ name: 'jcodepgm-linux-x86_64.tar.gz', platform: 'Linux' }, { name: 'jcodepgm-windows-x86_64.zip', platform: 'Windows' }] },
+        { version: 'v0.99.9-pgm.1', assets: [{ name: 'jcodepgm-linux-x86_64.tar.gz', platform: 'Linux' }] }] },
+      { product: 'jcode-pgm-desktop', label: 'Jcode PGM Desktop', releases: [], error: 'Forgejo did not answer.' }] };
+    try { const ctx = {}; require('vm').runInNewContext(planSrc + '\nthis.P = dlReleasePlan;', ctx); plan = ctx.P(cat, 'Windows'); } catch (e) { seen.planErr = e.message; }
+    if (plan) {
+      const j = plan.jcode[0] || {}, d = plan.jcode[1] || {};
+      seen.jcode = plan.jcode.map((x) => x.label).join(',') + ' | others ' + plan.others.map((x) => x.label).join(',');
+      seen.newest = (j.latest || {}).version + ' mine ' + (j.mine || []).map((a) => a.name).join(',') + ' other ' + (j.others || []).map((a) => a.name).join(',') + ' older ' + (j.older || []).map((v) => v.version).join(',') + ' about ' + !!j.about;
+      seen.unavailable = d.latest === null && d.error === 'Forgejo did not answer.';
+    }
+    // Desktop Unity on the website: off until Settings turns her on; an order ("show", a walk) never turns her on
+    const store = {}, ls = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+    const win = {};
+    try { require('vm').runInNewContext(duJs, { window: win, localStorage: ls, addEventListener: () => {}, innerWidth: 1000, innerHeight: 800, document: {}, Date, Math, JSON, Number, String, RegExp, URL, setInterval, clearInterval, setTimeout }); } catch (e) { seen.duErr = e.message; }
+    const U = win.webUnity;
+    if (U) {
+      seen.offByDefault = U.isOn() === false;
+      seen.orderShow = U.order({ action: 'show' }) === false && U.order({ action: 'walk_left' }) === false && U.isOn() === false && !('vrDeskUnityOn' in store);
+      store.vrDeskUnityOn = 'true'; seen.onWhenTurnedOn = U.isOn() === true;
+      U.setOn(false); seen.offAgain = U.isOn() === false && store.vrDeskUnityOn === 'false';
+    }
+    seen.hint = /<h3>Desktop Unity<\/h3><p class="setHint">[^<]*She is off until you turn her on here\./.test(page);
+    check('R635', 'Settings is five tabs about your own account: Profile, App (look, Desktop Unity), Work (Chat and Work, projects, when the AI asks), Sound & voice (sounds, read aloud, calls) and Connections (API access, signed-in devices, my machines, Forgejo), the AI settings being in AI Admin; one Save bar under the box shows only while App, Work or Sound & voice is on screen; Downloads is a window of its own where Jcode PGM and Jcode PGM Desktop have their own section (the newest version with this platform\'s files first, other platforms and older versions below; one that cannot be listed says so) and the other products stay in a list; Desktop Unity is off until Settings turns her on, and no order (show, a walk) turns her on',
+      seen.tabs === 'profile=Profile | app=App | work=Work | sound=Sound &amp; voice | connections=Connections' && seen.panes === 'profile,app+save,work+save,sound+save,connections'
+      && seen.saveOutside && seen.saveShown === 'false,true,false' && seen.saveCalled && !seen.err && seen.dlWindow
+      && seen.jcode === 'Jcode PGM,Jcode PGM Desktop | others ShaDow Chat'
+      && seen.newest === 'v0.99.10-pgm.1 mine jcodepgm-windows-x86_64.zip other jcodepgm-linux-x86_64.tar.gz older v0.99.9-pgm.1 about true' && seen.unavailable
+      && seen.offByDefault && seen.orderShow && seen.onWhenTurnedOn && seen.offAgain && seen.hint && !seen.duErr && !seen.planErr,
+      JSON.stringify(seen));
+  }
+  { // R634 (T-377): the main menu in four sections; Settings and Download inside one; "Also here" as buttons
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8'), seen = {};
+    const menu = (page.match(/<div id="menu" hidden>[\s\S]*?\n<\/div>\n/) || [''])[0];
+    const secs = [...menu.matchAll(/<section class="menuSec" data-menusec="(\w+)" aria-label="([^"]+)">\s*<h2>([^<]+)<\/h2>\s*<div class="choices">([\s\S]*?)<\/div>\s*<\/section>/g)]
+      .map((m) => ({ key: m[1], title: m[3], tiles: [...m[4].matchAll(/<button (?:id="(\w+)" class="tile"|class="tile" id="(\w+)")/g)].map((t) => t[1] || t[2]) }));
+    seen.sections = secs.map((x) => x.title + ':' + x.tiles.join('+')).join(' | ');
+    seen.layout = seen.sections === 'Productivity:goWork+goChat+goBoard+goCal | Utility:goWorkflows+goFiles+goNotes+goTools | AI:goAgents+goAssist | Administration:goAdmin+goAiAdmin+goPgmMenu';
+    seen.settingsTile = /id="goSettings" class="ghost psBtn" data-settings/.test(menu) && /id="goDownloads" class="ghost psBtn" data-downloads/.test(menu); // T-379: under My status / Team now
+    const foot = menu.slice(menu.lastIndexOf('<div class="menuFoot">'));
+    seen.footOnlySignOut = /id="menuLogout"/.test(foot) && !/goSettings|goDownloads|data-settings|data-downloads/.test(foot) && !/menuDl/.test(page);
+    const prods = (menu.match(/<div class="menuFoot menuProducts" id="menuProducts" hidden>([\s\S]*?)<\/div>/) || [, ''])[1];
+    const links = [...prods.matchAll(/<a class="prodBtn" href="(\/p\/\w+\/)" target="_blank" rel="noopener">([^<]+)<\/a>/g)].map((m) => m[1]);
+    seen.alsoHere = links.join(',') === '/p/prodsuit/,/p/shadowchat/,/p/hyperprodman/' && !/ · /.test(prods);
+    seen.buttonLook = /\.menuProducts \.prodBtn \{[^}]*border-radius: var\(--r-m\)[^}]*border: 1px solid[^}]*\}/.test(css) && /\.menuProducts \.prodBtn:hover/.test(css);
+    // the section logic, run on stand-ins: a section with no visible tile hides; a write only happens on a change
+    const fn = (page.match(/function menuSections\(\) \{[\s\S]*?\n\}/) || [''])[0];
+    const mk = (hiddens) => { const sec = { writes: 0, _h: false, tiles: hiddens.map((h) => ({ hidden: h })) }; Object.defineProperty(sec, 'hidden', { get() { return this._h; }, set(v) { this.writes++; this._h = v; } }); sec.querySelectorAll = () => sec.tiles; return sec; };
+    const a = mk([true, false]), b = mk([true, true]), c = mk([]);
+    try { require('vm').runInNewContext(fn + '\nmenuSections(); menuSections();', { document: { querySelectorAll: () => [a, b, c] } }); } catch (e) { seen.err = e.message; }
+    seen.logic = a.hidden === false && b.hidden === true && c.hidden === true && a.writes === 0 && b.writes === 1 && c.writes === 1;
+    seen.observed = /new MutationObserver\(menuSections\)\.observe\(\$\('menu'\), \{ subtree: true, attributes: true, attributeFilter: \['hidden'\] \}\);/.test(page);
+    check('R634', 'the main menu is four sections with headings: Productivity (Work, Chat, Board, Calendar), Utility (Workflows, Files, Notes, Tools), AI (Agents, Unity) and Administration (Site admin, AI Admin, Exit to menu); Settings and Downloads sit under My status / Team now (Sign out alone stays below); a section whose tiles are all hidden hides itself and follows later changes; "Also here" shows the PGM products as rounded-rectangle buttons with the same links',
+      Object.values(seen).every((v) => v === true || typeof v === 'string') && seen.layout && seen.settingsTile && seen.footOnlySignOut && seen.alsoHere && seen.buttonLook && seen.logic && seen.observed && !seen.err,
+      JSON.stringify(seen));
+  }
+  { // R613 (T-373): the hub page in Jcode PGM Desktop's VibeRoller window uses that app's own bridge (window.__PGM_DESKTOP__)
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), seen = {};
+    const line = (re) => (page.match(re) || [''])[0];
+    const code = [line(/^const PGMD = .*$/m), line(/^const nativeNotify = .*$/m)].join('\n');
+    const run = (win) => { const out = {}; try { require('vm').runInNewContext(code + '\nout.PGMD = PGMD; out.notify = nativeNotify;', { window: win, NATIVE: null, out }); } catch (e) { out.err = e.message; } return out; };
+    const calls = [], bridge = { exitToMenu: () => calls.push('exit'), notify: (t, b) => calls.push('notify:' + t + '|' + b), openExternal: () => {} };
+    const withB = run({ __PGM_DESKTOP__: bridge }), without = run({}), fake = run({ __PGM_DESKTOP__: { notify: () => {} } });
+    seen.found = !!withB.PGMD && !without.PGMD && !fake.PGMD; // a bridge without exitToMenu is not taken for the app
+    seen.notified = !!withB.notify && withB.notify('Title r613', 'Body') === true && calls.includes('notify:Title r613|Body') && without.notify('x', 'y') === false;
+    seen.button = /<button id="goPgmMenu" class="tile" hidden><svg class="ic lead"><use href="#i-back"\/><\/svg>Exit to menu<small>/.test(page);
+    seen.wired = /if \(PGMD\) \{ \$\('goPgmMenu'\)\.hidden = false; \$\('goPgmMenu'\)\.onclick = \(\) => \{ try \{ PGMD\.exitToMenu\(\); \} catch \{\} \};/.test(page);
+    seen.notifyPaths = (page.match(/nativeNotify\(/g) || []).length === 2; // the two places the page notifies (a mention while away, user action required)
+    check('R613', 'in Jcode PGM Desktop\'s VibeRoller window the hub page finds the app\'s own bridge (window.__PGM_DESKTOP__ with exitToMenu; not a look-alike), shows an "Exit to menu" tile that calls it, and sends its notifications through it; in a browser or the Tauri app nothing changes',
+      Object.values(seen).every(Boolean) && !withB.err, JSON.stringify({ ...seen, err: withB.err || '', calls }));
+  }
   if (RUST_HUB) { if (!process.argv.includes('--only-r527')) await r527Check(); } else for (const id of Object.keys(L527)) skip(id, L527[id], 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own and a stand-in AI host)');
   { // R496: the page keeps one device id for the live host and its dev host (portal.x and dev.portal.x), through a cookie on
     // the live host. The page's own deviceIdFor, run with a stand-in browser: one cookie jar for both hosts, a storage each.
@@ -5369,7 +5823,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R203', 'a shared Work session shows the session that was shared (POST /api/work/share {session}): its lines reach the watchers, another session\'s do not; the watch answer names it',
       seen.share === c203 && seen.has && !seen.leak && seen.session === c203, `shared ${seen.share} · watcher sees it ${seen.has}, the first session\'s ${seen.leak} · watch names ${seen.session}`);
   } else skip('R203', 'a share shows the shared session', 'the Rust hub\'s: --rust-hub runs it');
-  if (RUST_HUB && NATIVE_BIN.host) { // R280-R284 (T-290 = T-282 · 8/8): several people, two native hosts, many sessions: limits, restarts, a share and an older page, in one run
+  async function r280Check() { // R280-R284 (T-290 = T-282 · 8/8): several people, two native hosts, many sessions: limits, restarts, a share and an older page, in one run
     const until280 = async (fn, ms = 20000) => { const end = Date.now() + ms; let v; while (Date.now() < end) { v = await fn(); if (v) return v; await sleep(100); } return v; };
     const list280 = async (tok) => (await call('/api/work/sessions', tok)).data || {};
     const sum280 = async (tok, id) => ((await list280(tok)).sessions || []).find((x) => x.id === id) || {};
@@ -5432,7 +5886,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       S.perHost = [(perHost[h1.id] || {}).used, (perHost[h2.id] || {}).used].join('/');
       S.refusedIdle = [(await sum280(U, uC[3])).state, (await sum280(U, uX)).state, (await sum280(U, primary.id)).state !== 'working'].join('/');
       const done = await Promise.all(wave);
-      S.waveOk = done.every(ran280); S.waveBad = done.map((r, i) => (ran280(r) ? '' : i + ':' + r.status)).filter(Boolean).join(',');
+      S.waveOk = done.every(ran280); S.waveBad = done.map((r, i) => (ran280(r) ? '' : i + ':' + r.status + ' ' + (texts(r.events).match(/relay=[^|]*/) || ['no relay'])[0] + ' ' + JSON.stringify(r.events.map((e) => [e.type, String(e.text || e.error || e.subtype || '').slice(0, 500)])).slice(0, 700))).filter(Boolean).join(','); // a failed run says what it did
 
       // ---- 1b. the owner of a host is limited on it only when that host says so (the limits control)
       const lim = (tok, h, limits) => call('/api/hosts/control', tok, { id: h.id, action: 'limits', limits });
@@ -5542,7 +5996,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R284', 'T-290 an older page (calls without a session) keeps meaning the first session while other sessions run: it reads that conversation and queue (not another session\'s), runs it (attach finds the run), a second message is 409, Stop ends only that run, and the other session of the same person finishes untouched',
       !S.err && S.oldSees && S.oldAttach && S.oldBusy === 409 && S.states === 'working/working' && S.oldStop === 200 && S.oldStopped && S.otherLeft === 'working' && S.otherRan,
       `sees its own ${S.oldSees} · attach ${S.oldAttach} · second message ${S.oldBusy} · states ${S.states} · stop ${S.oldStop} ended without an answer ${S.oldStopped} · the other still ${S.otherLeft}, finished ${S.otherRan}${E}`);
-  } else for (const [id, what] of [['R280', 'three people on two native hosts: caps and owners'], ['R281', 'a hub restart mid-run keeps every session'], ['R282', 'a host restart mid-run'], ['R283', 'a shared session across a restart'], ['R284', 'an older page next to the sessions']]) skip(id, what + ' (T-290)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
+  }
+  if (RUST_HUB && NATIVE_BIN.host) { if (!process.argv.includes('--only-r280')) await r280Check(); } else for (const [id, what] of [['R280', 'three people on two native hosts: caps and owners'], ['R281', 'a hub restart mid-run keeps every session'], ['R282', 'a host restart mid-run'], ['R283', 'a shared session across a restart'], ['R284', 'an older page next to the sessions']]) skip(id, what + ' (T-290)', 'the Rust hub\'s and the native host\'s: --rust-hub with a built vr-host runs it');
   if (RUST_HUB) { // R210-R214 (T-245 = T-195 · 1/4): the AI asks its person (team note plans/question-protocol.md); the fake Claude's "ASKTOOL" calls ask_user like the team MCP relay
     const askOf = (events) => { const t = texts(events).split('\n').find((l) => l.startsWith('ASK:')); try { return JSON.parse(t.slice(4)); } catch { return {}; } };
     const sessionsOf = async () => ((await call('/api/work/sessions', U)).data.sessions) || [];
@@ -5636,7 +6091,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     { const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       check('R244', 'T-246/T-248 [static] the Work page shows a question series one at a time (Back / Next / Done, radio, checkboxes, checklist with select all / none and a filter, own answer, recommended marked, countdown, Use the recommended), restores it after a reload (GET /api/work/questions, sessionStorage), the "User action required" tone has its own kind and volume in Settings, a "When the AI asks" settings group, speech and the desktop notification respect do-not-disturb, and any activity is sent at most every 15 s',
         /function showQuestion/.test(page) && /'Next'/.test(page) && /'Done'/.test(page) && /Select all/.test(page) && /Select none/.test(page) && /Filter the list/.test(page) && /qrec/.test(page) && /Use the recommended/.test(page) && /restoreQuestions/.test(page) && /api\/work\/questions/.test(page) && /sessionStorage/.test(page)
-        && /ask: \[0, 0\.95\]/.test(page) && /id="volAsk"/.test(page) && /id="setAskMin"/.test(page) && /When the AI asks/.test(page) && /User action required/.test(page) && /if \(dndOn\(\)\) return;\s*\n\s*if \(P\.sound\.on\) playTone\('ask'/.test(page) && /NATIVE\.call\('notify', \{ title: 'User action required'/.test(page) && /now - lastPoke < 15000/.test(page),
+        && /ask: \[0, 0\.95\]/.test(page) && /id="volAsk"/.test(page) && /id="setAskMin"/.test(page) && /When the AI asks/.test(page) && /User action required/.test(page) && /if \(dndOn\(\)\) return;\s*\n\s*if \(P\.sound\.on\) playTone\('ask'/.test(page) && /nativeNotify\('User action required', title\)/.test(page) && /now - lastPoke < 15000/.test(page),
         'page checked'); }
   } else for (const [id, l] of [['R240', 'the question settings are saved'], ['R241', 'a question waits the person\'s minutes'], ['R242', 'off = never; the tool\'s own timeout wins'], ['R243', 'activity restarts the wait'], ['R244', 'the question UI on the page']]) skip(id, l, 'the Rust hub\'s: --rust-hub runs it');
   if (RUST_HUB) { // R255-R259 (T-239): the person's project index, pin / hide, remove my worktree, admin delete (to the trash)
@@ -6436,20 +6891,27 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const local = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(local), before = hadLocal ? fs.readFileSync(local) : null;
     if (hadLocal) fs.chmodSync(local, 0o600);
     const dflt = (await sum()).find((x) => !['t-admin', 't-user'].includes(x.username)) || {};
+    const adminsBefore = (await sum()).filter((x) => x.admin).map((x) => x.username);
     const mkD = await call('/api/admin/set-admin', A, { username: dflt.username, admin: true });
-    const afterD = await sum(), localMode = fs.statSync(local).mode & 0o777;
+    const afterD = await sum(), localMode = fs.existsSync(local) ? fs.statSync(local).mode & 0o777 : 0 /* the Rust hub refuses (T-379): no file is made */, localSame = !hadLocal || fs.readFileSync(local).equals(before);
     const leak = afterD.filter((x) => x.admin).map((x) => x.username).sort().join(',');
     await call('/api/admin/set-admin', A, { username: dflt.username, admin: false });
     if (hadLocal) fs.writeFileSync(local, before);
     const rm = await call('/api/admin/set-admin', A, { username: 't-user', admin: false });
     const uAfter = await call('/api/admin/accounts', U);
-    check('R171', 'Admin → Make admin / Remove admin: non-admin 403; the new admin can use Admin at once (both hubs); nobody removes their own admin; the default account\'s flag goes into config.local.json (its permissions kept) and never makes the profiles admins; removed again → 403',
+    // the Rust hub (T-379): set-admin gives the site role Admin / Member, and nobody acts on the hub's own account (the owner)
+    const dfltOk = RUST_HUB ? mkD.status === 403 && localSame && leak === [...new Set([...adminsBefore, 't-user'])].sort().join(',')
+      : mkD.status === 200 && mkD.data.admin === true && leak === [dflt.username, 't-admin', 't-user'].sort().join(',') && (!hadLocal || localMode === 0o600);
+    check('R171', 'Admin → Make admin / Remove admin: non-admin 403; the new admin can use Admin at once (both hubs); nobody removes their own admin; the default account\'s flag goes into config.local.json (its permissions kept) and never makes the profiles admins (on the Rust hub nobody changes the default account, the owner: refused, its file untouched); removed again → 403',
       notAdm.status === 403 && mk.status === 200 && mk.data.admin === true && uSees.status === 200 && uPw.status !== 403 && uPw.status < 500 && self.status === 400
-      && mkD.status === 200 && mkD.data.admin === true && leak === [dflt.username, 't-admin', 't-user'].sort().join(',') && (!hadLocal || localMode === 0o600)
+      && dfltOk
       && rm.status === 200 && rm.data.admin === false && uAfter.status === 403 && /set-admin/.test(html),
       `${notAdm.status} ${mk.status} ${uSees.status}/${uPw.status} self ${self.status} default ${dflt.username} ${mkD.status} admins ${leak} mode ${localMode.toString(8)} rm ${rm.status} after ${uAfter.status}`);
   }
-  check('R88', '[static] page: code sandbox workers + admin Unity switches', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /unity-tools/.test(html));
+  // R637-R640 (T-379): Site admin (site roles on the chat's ladder, custom roles, the site-wide settings) and AI Admin. The Rust
+  // hub's: the JavaScript hub has none of these routes. Each check makes its own accounts / roles and takes them away again.
+  if (RUST_HUB) await siteRolesCheck(); else for (const id of Object.keys(L637)) skip(id, L637[id], 'the Rust hub\'s: --rust-hub runs it');
+  check('R88', '[static] page: code sandbox workers + the Unity switches (AI Admin, web/aiadmin.js since T-379)', /function jsWorkerMain/.test(html) && /function pyWorkerMain/.test(html) && /\/api\/admin\/unity-tools/.test(fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8')));
   { // 5.46.1: the @ picker wrote Unity's account name (@claude), which calls nobody (R36), so a picked or Tab / Enter-completed mention never reached her
     const pickerUsesHandle = /b\.dataset\.user = h;/.test(html) && /insertMention\(h\)/.test(html) && !/insertMention\(m\.username\)/.test(html) && !/b\.dataset\.user = m\.username;/.test(html);
     const handleFn = /const mentionHandleOf = \(m\) => m\.agent \? \(m\.display \|\| 'unity'\)\.toLowerCase\(\)\.replace\(\/\\s\+\/g, ''\) : m\.username;/.test(html);
@@ -6682,7 +7144,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // the page as a product's shell (5.2.0): PRODUCT from the placeholder, everything stored under NS, the base path, only its screens
       && /const PRODUCT = \(\(\) => \{ const v = '__MILLS_PRODUCT__';/.test(page170) && /const NS = PRODUCT \? PRODUCT\.id \+ '\.' : '';/.test(page170) && /const TOKEN_KEY = NS \+ 'mills\.token';/.test(page170)
       && /localStorage\.getItem\(NS \+ k\)/.test(page170) && /indexedDB\.open\(NS \+ 'mills', 1\)/.test(page170) && !/localStorage\.(get|set)Item\('mills/.test(page170) && !/sessionStorage\.(get|set)Item\('/.test(page170)
-      && /return location\.origin \+ \(PRODUCT \? PRODUCT\.base : ''\);/.test(page170) && /if \(PRODUCT && !\['menu', 'admin', \.\.\.PRODUCT\.screens\]\.includes\(name\)\) name = 'menu';/.test(page170)
+      && /return location\.origin \+ \(PRODUCT \? PRODUCT\.base : ''\);/.test(page170) && /if \(PRODUCT && !\['menu', 'admin', 'settingsPage', \.\.\.PRODUCT\.screens\]\.includes\(name\)\) name = 'menu';/.test(page170)
       && (await call('/')).status === 200 && /__MILLS_PRODUCT__/.test(await fetch(H + '/').then((r) => r.text())); // the hub leaves the placeholder: PRODUCT stays null here
     if (RUST_HUB) {
       const notAdmin = await call('/api/admin/gateway/products', U, { id: 'prodsuit', name: 'PGM Prod Suit' });
@@ -6906,7 +7368,11 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const jsTools = (f) => (fs.readFileSync(path.join(BRIDGE, f), 'utf8').match(/\{ name: '([a-z_]+)'/g) || []).map((m) => m.slice(9, -1)).sort().join(',');
       const toolsSame = [['pc', 'pc-tools-mcp.js'], ['board', 'board-mcp.js'], ['team', 'team-mcp.js']].every(([k, f]) => (tools[k] || []).slice().sort().join(',') === jsTools(f));
       // a newer build in the scratch hub's native/dist: the same program with bytes appended (ELF / PE ignore trailing data)
-      const target = WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu', dist = path.join(SCRATCH, 'native', 'dist', target);
+      // the release targets the hub publishes; a local MSVC build (x86_64-pc-windows-msvc) asks for its own, which no release has,
+      // so the swap is only testable on a gnu / Linux build (production's) and is reported as not testable otherwise
+      const builtTarget = (spawnSync(rexe, ['version'], { encoding: 'utf8', timeout: 30000 }).stdout || '').trim().split(/\s+/).pop();
+      const releasable = ['x86_64-unknown-linux-gnu', 'x86_64-pc-windows-gnu'].includes(builtTarget);
+      const target = releasable ? builtTarget : (WIN ? 'x86_64-pc-windows-gnu' : 'x86_64-unknown-linux-gnu'), dist = path.join(SCRATCH, 'native', 'dist', target);
       fs.mkdirSync(dist, { recursive: true });
       fs.writeFileSync(path.join(dist, path.basename(rexe)), Buffer.concat([fs.readFileSync(NATIVE_BIN.host), Buffer.from('\nr164-newer-build\n')]), { mode: 0o755 });
       fs.writeFileSync(path.join(dist, 'BUILD.json'), JSON.stringify({ version: '99.0.0', commit: 'c'.repeat(40) }));
@@ -6923,22 +7389,23 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const up1 = await hostUp();
       let st1 = rstatus(); for (let i = 0; i < 20 && st1.connected !== true; i++) { await sleep(250); st1 = rstatus(); } // rewritten within a second
       const stRun = vh('status');
-      vh('update');
-      let swapped = false; for (let i = 0; i < 160 && !swapped; i++) { await sleep(250); try { swapped = fs.readFileSync(rexe).includes('r164-newer-build'); } catch {} }
-      let confirmed = false; for (let i = 0; i < 120 && !confirmed; i++) { await sleep(250); confirmed = swapped && !fs.existsSync(path.join(rdir, '.update-trial.json')) && /confirmed/.test(rstatus().lastUpdate || ''); }
+      if (releasable) vh('update');
+      let swapped = false; for (let i = 0; i < (releasable ? 160 : 0) && !swapped; i++) { await sleep(250); try { swapped = fs.readFileSync(rexe).includes('r164-newer-build'); } catch {} }
+      let confirmed = false; for (let i = 0; i < (releasable ? 120 : 0) && !confirmed; i++) { await sleep(250); confirmed = swapped && !fs.existsSync(path.join(rdir, '.update-trial.json')) && /confirmed/.test(rstatus().lastUpdate || ''); }
       const up2 = await hostUp();
       vh('pause'); let paused = false; for (let i = 0; i < 40 && !paused; i++) { await sleep(250); paused = rstatus().paused === true; }
       vh('resume'); let resumed = false; for (let i = 0; i < 40 && !resumed; i++) { await sleep(250); resumed = rstatus().paused === false; }
       vh('stop', '--now'); for (let i = 0; i < 60 && rExit === null; i++) await sleep(250);
       if (rExit === null) { try { rproc.kill(); } catch {} }
-      const outLog = (() => { try { return fs.readFileSync(path.join(rdir, 'out.log'), 'utf8'); } catch { return ''; } })();
+      // `run` with no terminal sends the host's lines to ai-node.log (out.log only gets the supervisor's own): read both
+      const outLog = ['out.log', 'ai-node.log'].map((n) => { try { return fs.readFileSync(path.join(rdir, n), 'utf8'); } catch { return ''; } }).join('\n');
       check('R164', L164,
         stNot.status === 3 && setBad.status === 1 && setOk.status === 0 && cfgAfter.update && cfgAfter.update.checkMinutes === 7 && cfgAfter.keepMe === 'r164' && cfgMode === 0o600
         && /provider\.local\.max5h/.test(listed) && /security\.engineGuard/.test(listed) && toolsSame
         && man.status === 200 && manAnon === 401 && sigOk && hmacOk && /"version":"99\.0\.0"/.test(manJ.manifest || '')
         && !!up1 && st1.connected === true && st1.native === true && stRun.status === 0 && /CONNECTED/.test(stRun.stdout)
-        && swapped && confirmed && !!up2 && paused && resumed && rExit === 0,
-        `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate}); back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
+        && (!releasable || (swapped && confirmed)) && !!up2 && paused && resumed && rExit === 0,
+        `status ${stNot.status}; set ${setBad.status}/${setOk.status} mode ${cfgMode.toString(8)} kept ${cfgAfter.keepMe}; tools ${toolsSame}; manifest ${man.status} anon ${manAnon} sig ${sigOk} hmac ${hmacOk}; up ${!!up1} (${up1 && up1.version}) status ${st1.connected}/${st1.native} cmd ${stRun.status}; ${releasable ? `swapped ${swapped} confirmed ${confirmed} (${rstatus().lastUpdate})` : `self-update not testable on a ${builtTarget} build (releases are gnu / Linux)`}; back ${!!up2}; pause ${paused} resume ${resumed}; exit ${rExit}; log "${outLog.replace(/\s+/g, ' ').slice(-300)}"`);
     }
     // R182: the native host finds a local Ollama by itself (no engine, no provider configured) and offers it; a missing
     // Codex login is named in its log at hello
@@ -6958,7 +7425,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const ans = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: 'unity-brain:latest', messages: [{ role: 'user', content: 'local r182' }] }) }).then((r) => r.json()).catch(() => ({}));
       await call('/api/apikey/revoke', A, {});
       try { oproc.kill(); } catch {}
-      const outText = (() => { try { return fs.readFileSync(olog, 'utf8'); } catch { return ''; } })();
+      const outText = [olog, path.join(odir, 'ai-node.log')].map((f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } }).join('\n'); // the host's lines go to ai-node.log without a terminal
       const page182 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       check('R182', L182,
         !!seen && seen.kind === 'host-openai' && (seen.models || []).includes('unity-brain:latest') && !otherSees
@@ -7091,6 +7558,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && /capture::enable_in_webview\(&main_win\)/.test(mainSrc) && /set_enable_media_stream\(true\)/.test(capSrc) && /capture::capability\(\)/.test(mainSrc)
         && /screenShare/.test(capSrc) && /is_hub_origin\(page, hub\)/.test(capSrc) && ut.status === 0 && /3 passed; 0 failed|test result: ok\. 3 passed/.test(ut.stdout || ''),
         `cargo test ${ut.status} "${String(ut.stdout || ut.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
+      // R636 (T-378): Desktop Unity in the desktop app is off until Settings turns her on (its unit test, built like R290's)
+      const L636 = 'Desktop Unity in the desktop app is off until she is turned on: no saved choice, or anything but "true", is off';
+      const ut636 = sm.status === 77 ? { status: 77 } : spawnSync('sh', ['-c', `export RUSTUP_HOME="${home290}/.rustup" CARGO_HOME="${home290}/.cargo" CARGO_TARGET_DIR="${NATIVE_TARGET}" OWNER_HOME="${home290}"; export PATH="$CARGO_HOME/bin:$PATH"; . ./tauri-env.sh; cargo test --release -q -p vr-desktop companion_default 2>&1`], { cwd: path.join(MILLS, 'native'), encoding: 'utf8', timeout: 1800000 });
+      if (sm.status === 77) skip('R636', L636, sm.stdout.trim());
+      else check('R636', L636, ut636.status === 0 && /test result: ok\. 1 passed/.test(ut636.stdout || ''),
+        `cargo test ${ut636.status} "${String(ut636.stdout || ut636.stderr || '').replace(/\s+/g, ' ').slice(-200)}"`);
     }
   }
   // R321, R322, R340 (T-307, linked machines 1/8): the library core pgm-net-internal::machine (scope model + evaluator,
@@ -7119,7 +7592,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const detail321 = `cargo test ${ct.status} scope ${okN('scope::')} paths ${okN('paths::')} floor ${okN('floor::')} integration ${okN('tests::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src321 = ['mod.rs', 'scope.rs', 'paths.rs', 'floor.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R321', L321, ct.status === 0 && src321 && okN('scope::') >= 12, detail321);
-      check('R322', L322, ct.status === 0 && okN('paths::') >= 8, detail321);
+      check('R322', L322, ct.status === 0 && okN('paths::') >= (WIN ? 6 : 8), detail321); // Windows: the 2 symlink / O_NOFOLLOW tests are cfg(unix)
       check('R340', L340, ct.status === 0 && okN('floor::') >= 4 && okN('tests::') >= 4, detail321);
       // R324 (T-308, linked machines 2/8): signed requests and the machine's own check: machine::sign (hub key, envelope, verifier) and the
       // host's pin of the hub key (host/pin.rs: an older hub that signs nothing still works). The hub's per-run secret unit tests ride along.
@@ -7138,8 +7611,8 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const detail331 = `cargo test ${ct.status} audit ${okN('audit::')} kill ${okN('kill::')} limits ${okN('limits::')} elevate ${okN('elevate::')} changes ${okN('changes::')} ${/FAILED|panicked/.test(out321) ? 'FAILURES' : ''}${why321}`;
       const src331 = ['audit.rs', 'kill.rs', 'limits.rs', 'elevate.rs', 'changes.rs'].every((f) => fs.existsSync(path.join(mdir, f)));
       check('R331', L331, ct.status === 0 && src331 && okN('audit::') >= 6, detail331);
-      check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= 4 && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331);
-      check('R333', L333, ct.status === 0 && src331 && okN('changes::') >= 7, detail331);
+      check('R332', L332, ct.status === 0 && src331 && okN('kill::') >= (WIN ? 3 : 4) && okN('limits::') >= 3 && okN('elevate::') >= 5, detail331); // Windows: one kill test is cfg(unix)
+      check('R333', L333, ct.status === 0 && src331 && (WIN || okN('changes::') >= 7), detail331 + (WIN ? ' (changes:: tests are cfg(unix): they run on Linux)' : ''));
       // R327 and R338 (T-310): the unit tests of the rule, the watcher filter and the compatibility module, plus the hub's half from above
       const ct310 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '-p', 'pgm-identity-internal', '--', 'compat::', 'work::tests::', 'devices::'], { cwd: path.join(MILLS, 'native'), env: env321, encoding: 'utf8', timeout: 1800000 });
       const out310 = String(ct310.stdout || '') + String(ct310.stderr || '');
@@ -7158,6 +7631,575 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   // R323 (T-308, linked machines 2/8, the Rust hub's): the per-run secret and the owner check on the hub (plans/linked-machines.md 4.3)
   if (!RUST_HUB) skip('R323', 'per-run MCP secret and the owner check for machines (the Rust hub\'s; --rust-hub runs it)', 'the Rust hub is not in front: run with --rust-hub');
   else await r323Check();
+  // R560-R565 (T-369, G1 of the API gateway): several named keys, model routing across providers, a concurrency limit per
+  // key, the security log. Two OpenAI-style providers of the admin's (one private, one shared) answer through the fake
+  // endpoint, which tells which provider key (Authorization) and model it was asked.
+  async function r560Check() {
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json, retry: r.headers.get('retry-after') }; };
+    const ask = (key, model, content = 'hi r56x') => g('/v1/chat/completions', key, { ...(model ? { model } : {}), messages: [{ role: 'user', content }] });
+    const antH = { 'anthropic-version': '2023-06-01' };
+    const ids = (r) => ((r.json && r.json.data) || []).map((m) => m.id), mine = (r) => ids(r).filter((x) => /r560/.test(x));
+    const lastCall = () => fakeOaiCalls[fakeOaiCalls.length - 1] || {};
+    const secrets = [];
+    const mkKey = async (tok, body) => { const r = await call('/api/apikey/create', tok, body); if (r.data && r.data.key) secrets.push(r.data.key); return r; };
+    const th = (await call('/api/hosts/new', A, {})).data.host || {}, thCfg = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const base560 = `http://127.0.0.1:${OLLAMA_PORT}/oai`;
+    const pFirst = (await call('/api/providers/add', A, { kind: 'openai', label: 'R560 first', baseUrl: base560, apiKey: 'k-first', models: 'm-r560-both, m-r560-first', shared: false })).data.provider || {};
+    const pSecond = (await call('/api/providers/add', A, { kind: 'openai', label: 'R560 second', baseUrl: base560, apiKey: 'k-second', models: 'm-r560-both, m-r560-second', shared: true })).data.provider || {};
+    await call('/api/hosts/remove', A, { id: th.id });
+    const kDef = (await call('/api/apikey/rotate', A, {})).data.key; secrets.push(kDef);
+    const keysFile = () => (JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-admin'] || {};
+
+    // R560: a second key with a label next to the default one; both work; revoking one leaves the other
+    const mk2 = await mkKey(A, { label: 'harness', expiresDays: 7 }), k2 = mk2.data;
+    const both = [(await g('/v1/models', kDef)).status, (await g('/v1/models', k2.key)).status];
+    const list2 = (await call('/api/apikey', A)).data, file2 = keysFile(), fileText2 = fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8');
+    const badProv = await call('/api/apikey/create', U, { label: 'bad-prov', providers: [pFirst.id] }), badModel = await call('/api/apikey/create', A, { label: 'bad-model', models: ['no-such-model'] });
+    const rev2 = await call('/api/apikey/revoke', A, { id: k2.id }), after2 = [(await g('/v1/models', kDef)).status, (await g('/v1/models', k2.key)).status];
+    const revNone = await call('/api/apikey/revoke', A, { id: 'k-nope' });
+    const kX = (await mkKey(A, { label: 'second round' })).data, revDef = await call('/api/apikey/revoke', A, {}), afterDef = [(await g('/v1/models', kDef)).status, (await g('/v1/models', kX.key)).status];
+    await call('/api/apikey/revoke', A, { id: kX.id });
+    const kDef2 = (await call('/api/apikey/rotate', A, {})).data.key; secrets.push(kDef2);
+    check('R560', 'a person makes a second key with a label (shown once, only its hash kept next to the default key\'s legacy fields) and both keys work; the list never shows a secret; revoking one by id leaves the other, revoking without an id still revokes the default key only; a key cannot be limited to a provider the person may not use or a model they cannot reach',
+      mk2.status === 200 && /^mills_[a-f0-9]{48}$/.test(k2.key || '') && /^k-/.test(k2.id || '') && k2.created.label === 'harness' && k2.created.prefix === k2.key.slice(0, 12) && k2.created.expiresDays === 7 && k2.created.enabled === true
+      && both.join() === '200,200' && list2.hasKey === true && (list2.keys || []).length === 2 && list2.keys[0].id === 'default' && list2.keys[1].label === 'harness' && !JSON.stringify(list2).includes(k2.key) && !/"hash"/.test(JSON.stringify(list2))
+      && typeof file2.hash === 'string' && file2.prefix === kDef.slice(0, 12) && (file2.keys || []).length === 1 && file2.keys[0].hash === crypto.createHash('sha256').update(k2.key).digest('hex') && !fileText2.includes(k2.key) && !fileText2.includes(kDef)
+      && badProv.status === 400 && badModel.status === 400 && /m?odel/.test(JSON.stringify(badModel.data)) && rev2.status === 200 && (rev2.data.keys || []).length === 1 && after2.join() === '200,401' && revNone.status === 404
+      && revDef.status === 200 && afterDef.join() === '401,200',
+      `create ${mk2.status} ${JSON.stringify(mk2.data).slice(0, 80)}; both ${both}; list ${(list2.keys || []).length}; file keys ${(file2.keys || []).length}; bad ${badProv.status}/${badModel.status}; revoke ${rev2.status} after ${after2}; none ${revNone.status}; default revoke ${afterDef}`);
+
+    // R561: a key limited to a model (or a provider) refuses the others and lists only what it may use
+    const kOne = (await mkKey(A, { label: 'one model', models: ['m-r560-first'] })).data, kProv = (await mkKey(A, { label: 'one provider', providers: [pSecond.id] })).data;
+    fakeOaiCalls.length = 0;
+    const oneList = await g('/v1/models', kOne.key), oneAnt = await g('/v1/models', kOne.key, undefined, antH), oneOk = await ask(kOne.key, 'm-r560-first'), okCall = lastCall();
+    const oneNo = await ask(kOne.key, 'm-r560-second'), oneBoth = await ask(kOne.key, 'm-r560-both'), oneAntNo = await g('/v1/messages', kOne.key, { model: 'm-r560-second', max_tokens: 5, messages: [{ role: 'user', content: 'x' }] }, antH);
+    const provList = await g('/v1/models', kProv.key), provNo = await ask(kProv.key, 'm-r560-first'), provOk = await ask(kProv.key, 'm-r560-both'), provCall = lastCall();
+    check('R561', 'a key limited to one model lists only that model and refuses every other with a plain 404 (OpenAI and Anthropic error shapes) naming what it may use; a key limited to one provider sees and reaches only that provider\'s models; the limit narrows what the person may use, never widens it',
+      mine(oneList).join() === 'm-r560-first' && oneList.json.data[0].owned_by === 'R560 first' && oneAnt.json.data.map((m) => m.id).filter((x) => /r560/.test(x)).join() === 'm-r560-first' && oneAnt.json.data[0].type === 'model'
+      && oneOk.status === 200 && okCall.model === 'm-r560-first' && okCall.auth === 'Bearer k-first'
+      && oneNo.status === 404 && /not available to this key/.test(oneNo.json.error.message) && /m-r560-first/.test(oneNo.json.error.message) && oneBoth.status === 404
+      && oneAntNo.status === 404 && oneAntNo.json.type === 'error' && oneAntNo.json.error.type === 'not_found_error'
+      && mine(provList).sort().join() === 'm-r560-both,m-r560-second' && provNo.status === 404 && provOk.status === 200 && provCall.auth === 'Bearer k-second',
+      `one ${mine(oneList)} ok ${oneOk.status} ${JSON.stringify(okCall)} no ${oneNo.status} "${oneNo.text.slice(0, 120)}" both ${oneBoth.status} ant ${oneAntNo.status}; prov ${mine(provList)} ${provNo.status} ${provOk.status} ${JSON.stringify(provCall)}`);
+
+    // R562: model routing across providers: a plain id (the person's own provider first), <provider>/<model>, a model only a
+    // teammate's shared provider offers; /v1/models lists every model once with its provider and the alias on a clash
+    const kRoute = (await mkKey(A, { label: 'route' })).data, kU = (await mkKey(U, { label: 'teammate' })).data;
+    fakeOaiCalls.length = 0;
+    const rBoth = await ask(kRoute.key, 'm-r560-both'), cBoth = lastCall(), rSecond = await ask(kRoute.key, 'm-r560-second'), cSecond = lastCall();
+    const rAliasS = await ask(kRoute.key, 'r560-second/m-r560-both'), cAliasS = lastCall(), rAliasF = await ask(kRoute.key, 'r560-first/m-r560-both'), cAliasF = lastCall();
+    const rAnt = await g('/v1/messages', kRoute.key, { model: 'r560-second/m-r560-both', max_tokens: 20, system: 'sys', messages: [{ role: 'user', content: [{ type: 'text', text: 'via-messages r56x' }] }] }, antH), cAnt = lastCall();
+    const rMissing = await ask(kRoute.key, 'r560-first/m-r560-second');
+    const rList = await g('/v1/models', kRoute.key), rAntList = await g('/v1/models', kRoute.key, undefined, antH);
+    const owner = (id) => ((rList.json.data || []).find((m) => m.id === id) || {}).owned_by;
+    const uList = await g('/v1/models', kU.key), uSecond = await ask(kU.key, 'm-r560-second'), cU = lastCall(), uBoth = await ask(kU.key, 'm-r560-both'), cUb = lastCall(), uFirst = await ask(kU.key, 'm-r560-first');
+    check('R562', 'model routing: a plain id goes to the first provider offering it (the person\'s own before a shared one), "<provider>/<model>" picks a provider (OpenAI and Anthropic requests alike), a model only a teammate\'s shared provider offers reaches it for the teammate and nobody else\'s private provider; /v1/models lists every model once with owned_by = the provider\'s label and a <provider>/<model> alias for each provider when two offer the same id',
+      rBoth.status === 200 && cBoth.auth === 'Bearer k-first' && cBoth.model === 'm-r560-both' && rSecond.status === 200 && cSecond.auth === 'Bearer k-second' && /oai says: hi r56x/.test(rSecond.json.choices[0].message.content)
+      && rAliasS.status === 200 && cAliasS.auth === 'Bearer k-second' && cAliasS.model === 'm-r560-both' && rAliasF.status === 200 && cAliasF.auth === 'Bearer k-first'
+      && rAnt.status === 200 && rAnt.json.type === 'message' && cAnt.auth === 'Bearer k-second' && cAnt.model === 'm-r560-both' && /oai says: via-messages r56x/.test(rAnt.json.content[0].text) && rMissing.status === 404
+      && mine(rList).filter((x) => x === 'm-r560-both').length === 1 && ['m-r560-both', 'm-r560-first', 'm-r560-second', 'r560-first/m-r560-both', 'r560-second/m-r560-both'].every((x) => mine(rList).includes(x)) && !mine(rList).includes('r560-first/m-r560-first')
+      && owner('m-r560-both') === 'R560 first' && owner('m-r560-second') === 'R560 second' && owner('r560-second/m-r560-both') === 'R560 second'
+      && mine(rAntList).join() === mine(rList).join() && rAntList.json.has_more === false && rAntList.json.data[0].type === 'model'
+      && mine(uList).sort().join() === 'm-r560-both,m-r560-second' && uSecond.status === 200 && cU.auth === 'Bearer k-second' && uBoth.status === 200 && cUb.auth === 'Bearer k-second' && uFirst.status === 404,
+      `both ${rBoth.status} ${JSON.stringify(cBoth)}; second ${rSecond.status} ${JSON.stringify(cSecond)}; alias ${rAliasS.status}/${rAliasF.status} ${JSON.stringify(cAliasS)}; ant ${rAnt.status} ${JSON.stringify(cAnt)}; missing ${rMissing.status}; list ${mine(rList)}; owners ${owner('m-r560-both')}/${owner('m-r560-second')}; teammate ${mine(uList)} ${uSecond.status} ${JSON.stringify(cU)} ${uFirst.status}`);
+
+    // R563: the default key behaves as before: its legacy fields, and the provider / model it is bound to answer when
+    // the request names no model or one the bound provider does not offer
+    const pin = await call('/api/apikey/settings', A, { provider: pFirst.id, model: 'm-r560-first' });
+    fakeOaiCalls.length = 0;
+    const dUnknown = await ask(kDef2, 'unknown-zzz'), cUnk = lastCall(), dNone = await ask(kDef2, ''), cNone = lastCall(), dOther = await ask(kDef2, 'm-r560-second'), cOther = lastCall();
+    const dList = await g('/v1/models', kDef2), top = (await call('/api/apikey', A)).data, rec563 = keysFile();
+    check('R563', 'the default key behaves as before: bound to a provider and model it answers from that provider alone (an unknown model or none falls back to the bound model), /v1/models lists that provider\'s models, GET /api/apikey keeps its legacy fields (hasKey, prefix, provider, model, calls) and the record in api-keys.json keeps hash / prefix / provider / model next to the named keys',
+      pin.status === 200 && dUnknown.status === 200 && cUnk.model === 'm-r560-first' && cUnk.auth === 'Bearer k-first' && dNone.status === 200 && cNone.model === 'm-r560-first' && dOther.status === 200 && cOther.model === 'm-r560-first' && cOther.auth === 'Bearer k-first'
+      && mine(dList).sort().join() === 'm-r560-both,m-r560-first' && top.hasKey === true && top.prefix === kDef2.slice(0, 12) && top.provider === pFirst.id && top.model === 'm-r560-first' && top.calls >= 3 && !!top.lastUsed && top.keys[0].id === 'default'
+      && typeof rec563.hash === 'string' && rec563.prefix === kDef2.slice(0, 12) && rec563.provider === pFirst.id && rec563.model === 'm-r560-first' && Array.isArray(rec563.keys) && rec563.keys.length >= 3,
+      `pin ${pin.status}; unknown ${dUnknown.status} ${JSON.stringify(cUnk)}; none ${dNone.status} ${JSON.stringify(cNone)}; other ${JSON.stringify(cOther)}; list ${mine(dList)}; top ${JSON.stringify({ ...top, keys: undefined })}`);
+
+    // R564: several requests at once on one key are served; over the key's maxConcurrent: 429 with retry-after (a limit per
+    // key, not per person: another key of the same person still answers meanwhile)
+    const kC = (await mkKey(A, { label: 'two at once', maxConcurrent: 2, models: ['m-r560-first'] })).data, kD = (await mkKey(A, { label: 'default limit', models: ['m-r560-first'] })).data, kM = (await mkKey(A, { label: 'one at once', maxConcurrent: 1, models: ['m-r560-first'] })).data;
+    const t0 = Date.now();
+    const four = await Promise.all([1, 2, 3, 4].map((i) => ask(kD.key, 'm-r560-first', 'SLOW-r564 d' + i))), tFour = Date.now() - t0;
+    const burst = await Promise.all([1, 2, 3].map((i) => ask(kC.key, 'm-r560-first', 'SLOW-r564 c' + i)).concat([(async () => { await sleep(300); return ask(kRoute.key, 'm-r560-first', 'fast r564'); })()]));
+    const slow = burst.slice(0, 3), over = slow.find((r) => r.status === 429), fine = slow.filter((r) => r.status === 200);
+    const again = await ask(kC.key, 'm-r560-first', 'after r564');
+    const first1 = g('/v1/messages', kM.key, { model: 'm-r560-first', max_tokens: 5, messages: [{ role: 'user', content: 'SLOW-r564 m1' }] }, antH);
+    await sleep(300);
+    const second1 = await g('/v1/messages', kM.key, { model: 'm-r560-first', max_tokens: 5, messages: [{ role: 'user', content: 'x r564' }] }, antH), first1r = await first1;
+    check('R564', 'several requests at once on one key are served in parallel (four at once on a default-limit key, all answered, in well under four answers\' time); over the key\'s maxConcurrent the extra one gets 429 with a retry-after header and a plain message (Anthropic requests in Anthropic\'s error shape); the limit is per key: another key of the same person answers meanwhile, and the key serves again once its answers are done',
+      four.every((r) => r.status === 200) && tFour < 4000 && fine.length === 2 && !!over && !!over.retry && /Too many requests at once/.test(over.json.error.message) && over.json.error.type === 'rate_limit_error' && /2/.test(over.json.error.message)
+      && burst[3].status === 200 && again.status === 200
+      && first1r.status === 200 && second1.status === 429 && !!second1.retry && second1.json.type === 'error' && second1.json.error.type === 'rate_limit_error',
+      `four ${four.map((r) => r.status)} in ${tFour} ms; burst ${burst.map((r) => r.status)} retry ${over && over.retry} "${over && over.text.slice(0, 120)}"; other key ${burst[3].status}; again ${again.status}; one-at-once ${first1r.status}/${second1.status} ${second1.retry}`);
+
+    // R565: the security log: apikey.create / apikey.revoke and the first use of each key a day, never the secret
+    const audit = ((await call('/api/admin/audit?action=apikey&limit=1000', A)).data.entries) || [];
+    const ofA = (a) => audit.filter((e) => e.action === a);
+    const useOf = (id) => ofA('apikey.use').filter((e) => e.target === id);
+    const auditText = JSON.stringify(audit);
+    check('R565', 'the security log has apikey.create (label, limits) and apikey.revoke (the key id) and one apikey.use for the first use of each key in a day (key id and prefix only, however many calls follow), nothing for a refused create, and never a key or its hash',
+      ofA('apikey.create').some((e) => e.target === 'harness' && e.actor === 't-admin') && !ofA('apikey.create').some((e) => e.target === 'bad-prov' || e.target === 'bad-model') && ofA('apikey.create').some((e) => e.target === 'one model' && JSON.stringify(e.detail.models) === '["m-r560-first"]')
+      && ofA('apikey.revoke').some((e) => e.target === k2.id) && ofA('apikey.revoke').some((e) => e.target === 'default')
+      && useOf(kRoute.id).length === 1 && useOf(kRoute.id)[0].detail.prefix === kRoute.key.slice(0, 12) && useOf(kOne.id).length === 1 && useOf('default').length >= 1
+      && secrets.every((k) => !auditText.includes(k) && !auditText.includes(crypto.createHash('sha256').update(k).digest('hex'))),
+      `entries ${audit.length}: ${[...new Set(audit.map((e) => e.action))]}; route uses ${useOf(kRoute.id).length}; ${auditText.slice(0, 200)}`);
+
+    // clean up for the checks that follow
+    for (const tok of [A, U]) for (const k of ((await call('/api/apikey', tok)).data.keys || [])) await call('/api/apikey/revoke', tok, k.id === 'default' ? {} : { id: k.id });
+    await call('/api/providers/remove', A, { id: pFirst.id }); await call('/api/providers/remove', A, { id: pSecond.id });
+  }
+
+  // R575-R579 (T-369, G2 of the API gateway): POST /v1/messages to an Anthropic-speaking provider goes through raw. A fake Anthropic
+  // upstream (an API-key provider's endpoint, and the host login's relay) records what arrives and answers with tool_use messages
+  // (streamed and whole), Anthropic's errors, a stream that never ends, and the refusal a subscription login gives other harnesses.
+  async function r575Check() {
+    const http = require('http'), assert = require('assert');
+    const same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { 'x-api-key': key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json, retry: r.headers.get('retry-after'), ct: r.headers.get('content-type') || '', h: r.headers }; };
+    const lastCall = () => fakeAnt.calls[fakeAnt.calls.length - 1] || {};
+    const keysFile = () => ((JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-admin'] || {});
+    const keyRec = (id) => (keysFile().keys || []).find((k) => k.id === id) || {};
+    const by = async () => ((((await call('/api/usage', A)).data || {}).answers || {}).by || {}).anthropic || { turns: 0, input: 0, output: 0, cached: 0, written: 0 };
+    const mk = async (body) => (await call('/api/apikey/create', A, body)).data;
+    const th = (await call('/api/hosts/new', A, {})).data.host || {}, thCfg = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const pAnt = (await call('/api/providers/add', A, { kind: 'anthropic', label: 'R575 Anthropic', apiKey: R575_KEY, models: 'claude-r575-a, claude-r575-b' })).data.provider || {};
+    const pOai = (await call('/api/providers/add', A, { kind: 'openai', label: 'R575 Oai', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: 'k-r575', models: 'm-r575-oai' })).data.provider || {};
+    await call('/api/hosts/remove', A, { id: th.id });
+    const hostProv = ((await call('/api/providers', A)).data.providers || []).find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-claude') || {};
+    const kA = await mk({ label: 'r575 api', providers: [pAnt.id, pOai.id] }), kRelay = await mk({ label: 'r575 relay', providers: [hostProv.id], models: ['claude-haiku-5-5'] });
+    const ver = { 'anthropic-version': '2023-06-01' }, beta = 'interleaved-thinking-2025-05-14,prompt-caching-2024-07-31';
+    const rich = { model: 'claude-r575-a', max_tokens: 321, system: [{ type: 'text', text: 'You are a weather bot R575-rich', cache_control: { type: 'ephemeral' } }, { type: 'text', text: 'second system block' }],
+      tools: [{ name: 'get_weather', description: 'Weather of a city', input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }, cache_control: { type: 'ephemeral' } }],
+      tool_choice: { type: 'auto', disable_parallel_tool_use: true }, thinking: { type: 'enabled', budget_tokens: 2048 }, metadata: { user_id: 'user-r575' }, stop_sequences: ['END'], temperature: 0.3, top_k: 5,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R575-rich', cache_control: { type: 'ephemeral' } }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }, { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'a document' }, title: 'doc' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_prev', name: 'get_weather', input: { city: 'Bern' } }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_prev', content: [{ type: 'text', text: 'sunny' }] }] }] };
+    const hdr = (k) => ({ ...ver, 'anthropic-beta': beta, 'user-agent': 'r575-harness/1', ...(k ? { 'x-api-key': k } : {}) });
+
+    // R575: the request arrives as it was sent (only the model is swapped for an alias), with the provider's own key
+    const n0 = fakeAnt.calls.length;
+    const whole = await g('/v1/messages', kA.key, rich, hdr()), c1 = lastCall(), j1 = fakeAnt.json;
+    const alias = await g('/v1/messages', kA.key, { ...rich, model: 'r575-anthropic/claude-r575-b' }, hdr()), c2 = lastCall();
+    const n1 = fakeAnt.calls.length;
+    const oai = await g('/v1/messages', kA.key, { model: 'm-r575-oai', max_tokens: 50, messages: [{ role: 'user', content: 'plain text r575' }] }, hdr());
+    check('R575', 'POST /v1/messages to an Anthropic API-key provider is forwarded as it is: tools, tool_choice, thinking, an image and a document block, cache_control, a system array, metadata, stop_sequences, temperature, tool_use / tool_result turns and the anthropic-beta header all arrive intact, the key is the provider\'s own (never the caller\'s, no caller auth or user agent), a "<provider>/<model>" alias is swapped for the real model id, the whole answer comes back as the upstream\'s JSON, and a provider that does not speak Anthropic still answers text as before',
+      whole.status === 200 && same(c1.body, rich) && c1.via === 'api' && c1.headers['x-api-key'] === R575_KEY && !c1.headers.authorization && c1.headers['anthropic-beta'] === beta && c1.headers['anthropic-version'] === '2023-06-01' && c1.headers['user-agent'] !== 'r575-harness/1' && !JSON.stringify(c1.headers).includes(kA.key)
+      && alias.status === 200 && same(c2.body, { ...rich, model: 'claude-r575-b' }) && n1 - n0 === 2
+      && whole.text === j1 && /application\/json/.test(whole.ct)
+      && oai.status === 200 && (((oai.json || {}).content || [])[0] || {}).type === 'text' && /^oai says: plain text r575/.test((((oai.json || {}).content || [])[0] || {}).text || '') && fakeAnt.calls.length === n1,
+      `whole ${whole.status} ${whole.ct} body==${same(c1.body, rich)} key ${c1.headers && c1.headers['x-api-key'] === R575_KEY} beta ${c1.headers && c1.headers['anthropic-beta']}; alias ${alias.status} model ${c2.body && c2.body.model}; oai ${oai.status} ${oai.text.slice(-200)}; n ${n1 - n0}/${fakeAnt.calls.length - n1} ua ${c1.headers && c1.headers["user-agent"]} ver ${c1.headers && c1.headers["anthropic-version"]} ctj ${whole.text === j1}`);
+
+    // R576: a streamed answer comes back byte for byte, with the status and the harmless headers; Anthropic's errors come back as they are
+    const st = await g('/v1/messages', kA.key, { ...rich, stream: true }, hdr()), cs = lastCall();
+    const lim = await g('/v1/messages', kA.key, { ...rich, messages: [{ role: 'user', content: 'R575-LIMIT' }] }, hdr());
+    const badUp = await g('/v1/messages', kA.key, { model: 'claude-r575-a', max_tokens: 5, messages: [{ role: 'user', content: 'x' }] }, hdr());
+    check('R576', 'a streamed tool_use answer comes back as the upstream\'s SSE byte for byte with the right content-type, request-id and rate-limit headers (not the internal ones) and the request had stream on; an Anthropic error (a 429 with retry-after) comes back with its status, body and retry-after as they were',
+      st.status === 200 && st.text === fakeAnt.stream && /^text\/event-stream/.test(st.ct) && st.text.includes('"type":"tool_use"') && st.text.includes('partial_json') && cs.body.stream === true && cs.headers.accept === 'text/event-stream'
+      && st.h.get('request-id') === 'req_r575' && st.h.get('anthropic-ratelimit-requests-remaining') === '99' && !st.h.get('x-internal-note')
+      && lim.status === 429 && lim.retry === '7' && lim.json && lim.json.error.type === 'rate_limit_error' && /per-minute rate limit/.test(lim.json.error.message) && !lim.h.get('anthropic-ratelimit-unified-5h-status')
+      && badUp.status === 200,
+      `stream ${st.status} ${st.ct} ${st.text.length}/${fakeAnt.stream.length} same ${st.text === fakeAnt.stream}; limit ${lim.status} retry ${lim.retry} ${lim.text.slice(0, 100)}`);
+
+    // R577: the usage is read from the stream and the body: the usage ledger and the key's own counters
+    const kU = await mk({ label: 'r575 usage', providers: [pAnt.id] }), b0 = await by();
+    const u1 = await g('/v1/messages', kU.key, { ...rich, stream: true }, hdr()), u2 = await g('/v1/messages', kU.key, rich, hdr());
+    const b1 = await by(), rec = keyRec(kU.id), listed = ((await call('/api/apikey', A)).data.keys || []).find((k) => k.id === kU.id) || {};
+    check('R577', 'usage lands where it belongs: one streamed and one whole answer (input 21 + 9, cache read 5 + 3, cache written 2, output 17 + 4) add two turns to the person\'s answer ledger (input paid, output, cached, written) and to the key\'s own counters (calls 2, tokens in 40, tokens out 21), and the key list shows the calls',
+      u1.status === 200 && u2.status === 200 && b1.turns - b0.turns === 2 && b1.input - b0.input === 30 && b1.output - b0.output === 21 && b1.cached - b0.cached === 8 && b1.written - b0.written === 2
+      && rec.calls === 2 && rec.tokensIn === 40 && rec.tokensOut === 21 && listed.calls === 2,
+      `ledger +${b1.turns - b0.turns} turns in ${b1.input - b0.input} out ${b1.output - b0.output} cached ${b1.cached - b0.cached} written ${b1.written - b0.written}; key ${JSON.stringify({ calls: rec.calls, in: rec.tokensIn, out: rec.tokensOut })}`);
+
+    // R578: the caller hanging up mid-stream frees the key's slot and closes the upstream
+    const kOne = await mk({ label: 'r575 one', providers: [pAnt.id], maxConcurrent: 1 });
+    const open0 = fakeAnt.hangOpened, closed0 = fakeAnt.hangClosed;
+    const hang = await new Promise((resolve) => { const rq = http.request(H + '/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': kOne.key, ...ver } }, (res) => { res.once('data', (d) => resolve({ rq, res, first: d.toString() })); }); rq.on('error', () => {}); rq.end(JSON.stringify({ ...rich, stream: true, messages: [{ role: 'user', content: 'R575-HANG' }] })); });
+    const busy = await g('/v1/messages', kOne.key, { ...rich, messages: [{ role: 'user', content: 'while one is open' }] }, hdr());
+    const openBefore = fakeAnt.hangOpened - open0, closedBefore = fakeAnt.hangClosed - closed0;
+    hang.rq.destroy();
+    let freed = null; for (let i = 0; i < 50 && !(fakeAnt.hangClosed > closed0); i++) await sleep(100);
+    for (let i = 0; i < 50 && !freed; i++) { const r = await g('/v1/messages', kOne.key, { ...rich, messages: [{ role: 'user', content: 'after hang-up' }] }, hdr()); if (r.status === 200) freed = r; else await sleep(100); }
+    check('R578', 'the key\'s concurrency slot is held for the whole stream (a second request on a one-at-a-time key gets 429 with retry-after while one stream is open) and the caller hanging up mid-stream closes the upstream connection and frees the slot, so the next request is served',
+      /message_start/.test(hang.first) && openBefore === 1 && closedBefore === 0 && busy.status === 429 && !!busy.retry && fakeAnt.hangClosed - closed0 === 1 && !!freed,
+      `first ${hang.first.slice(0, 30).replace(/\n/g, ' ')}; opened ${openBefore}; busy ${busy.status} ${busy.retry}; upstream closed ${fakeAnt.hangClosed - closed0}; after ${freed && freed.status}`);
+
+    // R579: a host's Claude login through its relay: forwarded as it is (the host adds its own login), the subscription refusal in plain words, a real limit as it is
+    const richR = { ...rich, model: 'claude-haiku-5-5', system: 'You are a weather bot R575-relay' }, kR = kRelay.key;
+    const rw = await g('/v1/messages', kR, richR, hdr()), cr = lastCall();
+    const rs = await g('/v1/messages', kR, { ...richR, stream: true }, hdr());
+    const sub = await g('/v1/messages', kR, { ...richR, messages: [{ role: 'user', content: 'R575-SUB' }] }, hdr()), cSub = lastCall();
+    const sub2 = await g('/v1/messages', kR, { ...richR, messages: [{ role: 'user', content: 'R575-SUB2' }] }, hdr());
+    const rlim = await g('/v1/messages', kR, { ...richR, messages: [{ role: 'user', content: 'R575-LIMIT' }] }, hdr());
+    const apiSub = await g('/v1/messages', kA.key, { ...rich, messages: [{ role: 'user', content: 'R575-SUB' }] }, hdr());
+    const plain = (r) => r.status === 403 && r.json && r.json.type === 'error' && r.json.error.type === 'permission_error' && /Claude subscription login: it serves Claude Code; use Claude Code with this key, or pick a provider that has an API key/.test(r.json.error.message);
+    check('R579', 'a host\'s Claude login through its relay: the request reaches the host as it was sent (tools, thinking, image, cache_control, system string, the caller\'s beta) and the host adds only its own login, the whole and the streamed answer come back raw, nothing makes it pass as Claude Code (the system prompt arrives as sent), the refusal a subscription login gives other harnesses (Anthropic\'s wording, or its bare rate-limit "Error") becomes a plain 403 saying it serves Claude Code and to use a provider with an API key, a real usage limit comes back as Anthropic sent it, and an API-key provider\'s error is never rewritten',
+      rw.status === 200 && same(cr.body, richR) && cr.via === 'relay' && cr.headers.authorization === 'Bearer fake-oauth-token' && String(cr.headers['anthropic-beta'] || '').includes('prompt-caching-2024-07-31') && !JSON.stringify(cr.headers).includes(kR) && !JSON.stringify(cr.body).includes('Claude Code')
+      && rw.text === fakeAnt.json && rs.status === 200 && rs.text === fakeAnt.stream && /^text\/event-stream/.test(rs.ct)
+      && plain(sub) && plain(sub2) && !JSON.stringify(cSub.body).includes('Claude Code') && sub.json.error.message.length < 300
+      && rlim.status === 429 && rlim.retry === '7' && /per-minute rate limit/.test(rlim.text)
+      && apiSub.status === 429 && /only authorized for use with Claude Code/.test(apiSub.text),
+      `relay ${rw.status} body==${same(cr.body, richR)} auth ${cr.headers && cr.headers.authorization}; stream ${rs.status} ${rs.text === fakeAnt.stream}; sub ${sub.status} ${sub.text.slice(0, 120)}; sub2 ${sub2.status}; limit ${rlim.status} ${rlim.retry}; apiSub ${apiSub.status}`);
+
+    for (const k of [kA, kRelay, kU, kOne]) await call('/api/apikey/revoke', A, { id: k.id });
+    await call('/api/providers/remove', A, { id: pAnt.id }); await call('/api/providers/remove', A, { id: pOai.id });
+  }
+
+  // R580-R585 (T-369, G3 of the API gateway): POST /v1/chat/completions to an OpenAI-speaking provider goes through raw, and a request in
+  // one format to a provider that speaks the other is translated, streaming and tools included. A fake OpenAI endpoint (fakeOpenAI) and
+  // G2's fake Anthropic upstream record what arrives and answer with tool calls (streamed and whole), their own errors and a stream
+  // that never ends.
+  async function r580Check() {
+    const http = require('http'), assert = require('assert');
+    const same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json, retry: r.headers.get('retry-after'), ct: r.headers.get('content-type') || '', h: r.headers }; };
+    const lastOa = () => fakeOa.calls[fakeOa.calls.length - 1] || {}, lastAnt = () => fakeAnt.calls[fakeAnt.calls.length - 1] || {};
+    const keysFile = () => ((JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-admin'] || {});
+    const keyRec = (id) => (keysFile().keys || []).find((k) => k.id === id) || {};
+    const by = async (kind) => ((((await call('/api/usage', A)).data || {}).answers || {}).by || {})[kind] || { turns: 0, input: 0, output: 0, cached: 0, written: 0 };
+    const mk = async (body) => (await call('/api/apikey/create', A, body)).data;
+    const datas = (text) => text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => { try { return JSON.parse(l.slice(6)); } catch { return { bad: l }; } }); // an OpenAI stream's chunks
+    const frames = (text) => text.split('\n\n').filter((f) => f.trim()).map((f) => { const m = /^event: (.+)\ndata: (.*)$/s.exec(f) || []; let d = {}; try { d = JSON.parse(m[2]); } catch {} return { ev: m[1], d }; }); // Anthropic's events
+    const th = (await call('/api/hosts/new', A, {})).data.host || {}, thCfg = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const pOai = (await call('/api/providers/add', A, { kind: 'openai', label: 'R580 Oai', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: R580_KEY, models: 'm-r580-a, m-r580-b' })).data.provider || {};
+    const pAnt = (await call('/api/providers/add', A, { kind: 'anthropic', label: 'R580 Anthropic', apiKey: R575_KEY, models: 'claude-r580-a' })).data.provider || {};
+    await call('/api/hosts/remove', A, { id: th.id });
+    const plist = (await call('/api/providers', A)).data.providers || [];
+    const hostLocal = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-openai') || {}, hostClaude = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-claude') || {};
+    const kX = await mk({ label: 'r580 all', providers: [pOai.id, pAnt.id, hostLocal.id] }), kRelay = await mk({ label: 'r580 relay', providers: [hostClaude.id], models: ['claude-haiku-5-5'] });
+    const richOa = { model: 'm-r580-a', temperature: 0.2, top_p: 0.9, max_tokens: 55, stop: ['END'], seed: 7, user: 'user-r580', parallel_tool_calls: false,
+      response_format: { type: 'json_schema', json_schema: { name: 'w', schema: { type: 'object' } } },
+      tools: [{ type: 'function', function: { name: 'get_weather', description: 'Weather of a city', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }, strict: true } }],
+      tool_choice: { type: 'function', function: { name: 'get_weather' } },
+      messages: [{ role: 'system', content: 'You are a weather bot R580-rich' }, { role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=', detail: 'low' } }] },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'call_prev', content: 'sunny' }, { role: 'user', content: 'and now? R580' }] };
+    const withMsg = (b, text) => ({ ...b, messages: [{ role: 'user', content: text }] });
+
+    // R580: the request arrives as it was sent (only the model is swapped for an alias), with the provider's own bearer; the answer comes back as sent
+    const n0 = fakeOa.calls.length;
+    const whole = await g('/v1/chat/completions', kX.key, richOa, { 'x-api-key': kX.key }), c1 = lastOa(), j1 = fakeOa.json;
+    const alias = await g('/v1/chat/completions', kX.key, { ...richOa, model: 'r580-oai/m-r580-b' }), c2 = lastOa();
+    const st = await g('/v1/chat/completions', kX.key, { ...richOa, stream: true }), cs = lastOa(), s1 = fakeOa.stream;
+    const noUsage = await g('/v1/chat/completions', kX.key, { ...richOa, stream: true, stream_options: { include_usage: false } }), cn = lastOa();
+    const withUsage = await g('/v1/chat/completions', kX.key, { ...richOa, stream: true, stream_options: { include_usage: true } }), cu = lastOa();
+    const nOk = fakeOa.calls.length - n0;
+    const soRetry = await g('/v1/chat/completions', kX.key, { ...withMsg(richOa, 'R580-NOSO retry'), stream: true }), retried = fakeOa.calls.slice(-2);
+    const jsonStream = await g('/v1/chat/completions', kX.key, { ...withMsg(richOa, 'R580-JSONSTREAM'), stream: true }), jsChunks = datas(jsonStream.text);
+    const lim = await g('/v1/chat/completions', kX.key, withMsg(richOa, 'R580-LIMIT'));
+    check('R580', 'POST /v1/chat/completions to an OpenAI-compatible provider is forwarded as it is: tools, tool_choice, response_format, an image part, temperature, stop, seed, user and the rest arrive intact, only the model is swapped for a "<provider>/<model>" alias, the auth is the provider\'s own bearer (never the caller\'s key); the whole answer comes back as the upstream\'s JSON, a stream comes back byte for byte (with the upstream\'s request-id and rate-limit headers, not its internal ones), stream_options.include_usage is asked for unless the caller said false, an endpoint that refuses that option is asked again without it, an endpoint that answers JSON to a streaming request is streamed from it, and the provider\'s own 429 comes back with its status, body and retry-after',
+      whole.status === 200 && same(c1.body, richOa) && c1.headers.authorization === 'Bearer ' + R580_KEY && !c1.headers['x-api-key'] && !JSON.stringify(c1.headers).includes(kX.key) && whole.text === j1 && /application\/json/.test(whole.ct)
+      && alias.status === 200 && same(c2.body, { ...richOa, model: 'm-r580-b' })
+      && st.status === 200 && st.text === s1 && /^text\/event-stream/.test(st.ct) && same(cs.body, { ...richOa, stream: true, stream_options: { include_usage: true } }) && st.h.get('x-ratelimit-remaining-requests') === '77' && !st.h.get('x-internal-note')
+      && noUsage.status === 200 && same(cn.body.stream_options, { include_usage: false }) && !noUsage.text.includes('"usage"') && withUsage.status === 200 && same(cu.body.stream_options, { include_usage: true }) && nOk === 5
+      && soRetry.status === 200 && retried.length === 2 && !!retried[0].body.stream_options && !retried[1].body.stream_options && soRetry.text === fakeOa.stream
+      && jsonStream.status === 200 && /^text\/event-stream/.test(jsonStream.ct) && jsChunks.some((c) => (((c.choices || [])[0] || {}).delta || {}).tool_calls) && /data: \[DONE\]/.test(jsonStream.text) && jsChunks.some((c) => ((c.choices || [])[0] || {}).finish_reason === 'tool_calls')
+      && lim.status === 429 && lim.retry === '5' && lim.json && lim.json.error.type === 'requests' && /Rate limit reached for requests/.test(lim.json.error.message) && lim.h.get('x-ratelimit-remaining-requests') === '77' && !lim.h.get('x-internal-note'),
+      `nOk ${nOk} cu ${JSON.stringify(cu.body && cu.body.stream_options)} hdr ${st.h.get('x-request-id')}/${st.h.get('x-ratelimit-remaining-requests')}/${st.h.get('x-internal-note')} limhdr ${lim.h.get('x-request-id')}/${lim.h.get('x-internal-note')} so ${soRetry.text === fakeOa.stream} ${soRetry.text.length}/${fakeOa.stream.length} noUsage ${noUsage.text.includes('"usage"')} whole ${whole.text === j1} ${whole.ct}; whole ${whole.status} body==${same(c1.body, richOa)} auth ${c1.headers && c1.headers.authorization}; alias ${alias.status} ${c2.body && c2.body.model}; stream ${st.status} same ${st.text === s1} so ${JSON.stringify(cs.body && cs.body.stream_options)}; noUsage ${noUsage.status} ${JSON.stringify(cn.body && cn.body.stream_options)}; retry ${soRetry.status} ${retried.map((c) => JSON.stringify(c.body.stream_options)).join('/')}; jsonStream ${jsonStream.status} ${jsonStream.ct} ${jsonStream.text.slice(0, 100).replace(/\n/g, ' ')}; limit ${lim.status} ${lim.retry} ${lim.text.slice(0, 100)}`);
+
+    // R581: the usage is read from the stream and the body: the usage ledger and the key's own counters
+    const kU = await mk({ label: 'r580 usage', providers: [pOai.id] }), kUA = await mk({ label: 'r580 usage anthropic', providers: [pAnt.id] }), b0 = await by('openai'), x0 = await by('anthropic');
+    const u1 = await g('/v1/chat/completions', kU.key, { ...richOa, stream: true }), u2 = await g('/v1/chat/completions', kU.key, richOa);
+    const x1r = await g('/v1/chat/completions', kUA.key, { model: 'claude-r580-a', max_tokens: 20, stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'usage R580' }] }), x2r = await g('/v1/chat/completions', kUA.key, { model: 'claude-r580-a', max_tokens: 20, messages: [{ role: 'user', content: 'usage R580' }] });
+    const b1 = await by('openai'), x1 = await by('anthropic'), rec = keyRec(kU.id), recX = keyRec(kUA.id), listed = ((await call('/api/apikey', A)).data.keys || []).find((k) => k.id === kU.id) || {};
+    check('R581', 'usage lands where it belongs, raw and translated: for an OpenAI-compatible provider one streamed (usage chunk: 40 in, 12 out) and one whole answer (30 in with 10 cached, 8 out) add two turns to the person\'s answer ledger (input paid 40 + 20, output 20, cached 10) and to the key\'s own counters (calls 2, tokens in 70, tokens out 20); for an OpenAI request answered by an Anthropic provider the streamed (21 in, 5 cache read, 2 cache written, 17 out) and the whole answer (9 in, 3 cache read, 4 out) add two turns with those numbers and tokens in 40, out 21; the key list shows the calls',
+      u1.status === 200 && u2.status === 200 && b1.turns - b0.turns === 2 && b1.input - b0.input === 60 && b1.output - b0.output === 20 && b1.cached - b0.cached === 10 && b1.written - b0.written === 0
+      && rec.calls === 2 && rec.tokensIn === 70 && rec.tokensOut === 20 && listed.calls === 2
+      && x1r.status === 200 && x2r.status === 200 && x1.turns - x0.turns === 2 && x1.input - x0.input === 30 && x1.output - x0.output === 21 && x1.cached - x0.cached === 8 && x1.written - x0.written === 2 && recX.calls === 2 && recX.tokensIn === 40 && recX.tokensOut === 21,
+      `openai ledger +${b1.turns - b0.turns} turns in ${b1.input - b0.input} out ${b1.output - b0.output} cached ${b1.cached - b0.cached}; key ${JSON.stringify({ calls: rec.calls, in: rec.tokensIn, out: rec.tokensOut })}; anthropic ledger +${x1.turns - x0.turns} turns in ${x1.input - x0.input} out ${x1.output - x0.output} cached ${x1.cached - x0.cached} written ${x1.written - x0.written}; key ${JSON.stringify({ calls: recX.calls, in: recX.tokensIn, out: recX.tokensOut })}`);
+
+    // R582: the caller hanging up mid-stream frees the key's slot and closes the upstream, raw and translated
+    const kOne = await mk({ label: 'r580 one', providers: [pOai.id], maxConcurrent: 1 });
+    const open0 = fakeOa.hangOpened, closed0 = fakeOa.hangClosed;
+    const hangOn = (p, key, body, hs) => new Promise((resolve) => { const rq = http.request(H + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...hs } }, (res) => { res.once('data', (d) => resolve({ rq, res, first: d.toString() })); }); rq.on('error', () => {}); rq.end(JSON.stringify(body)); });
+    const hang = await hangOn('/v1/chat/completions', kOne.key, { ...withMsg(richOa, 'R580-HANG raw'), stream: true });
+    const busy = await g('/v1/chat/completions', kOne.key, withMsg(richOa, 'while one is open R580'));
+    const busyAnt = await g('/v1/messages', kOne.key, { model: 'm-r580-a', max_tokens: 9, messages: [{ role: 'user', content: 'while one is open R580' }] }, { 'anthropic-version': '2023-06-01' });
+    const openBefore = fakeOa.hangOpened - open0, closedBefore = fakeOa.hangClosed - closed0;
+    hang.rq.destroy();
+    for (let i = 0; i < 50 && !(fakeOa.hangClosed > closed0); i++) await sleep(100);
+    let freed = null; for (let i = 0; i < 50 && !freed; i++) { const r = await g('/v1/chat/completions', kOne.key, withMsg(richOa, 'after hang-up R580')); if (r.status === 200) freed = r; else await sleep(100); }
+    const hang2 = await hangOn('/v1/messages', kOne.key, { model: 'm-r580-a', max_tokens: 9, stream: true, messages: [{ role: 'user', content: 'R580-HANG translated' }] }, { 'anthropic-version': '2023-06-01' });
+    const closed1 = fakeOa.hangClosed; hang2.rq.destroy();
+    for (let i = 0; i < 50 && !(fakeOa.hangClosed > closed1); i++) await sleep(100);
+    let freed2 = null; for (let i = 0; i < 50 && !freed2; i++) { const r = await g('/v1/chat/completions', kOne.key, withMsg(richOa, 'after the second hang-up R580')); if (r.status === 200) freed2 = r; else await sleep(100); }
+    check('R582', 'the key\'s concurrency slot is held for the whole stream (a second request on a one-at-a-time key gets 429 with retry-after, in OpenAI\'s shape and in Anthropic\'s) and the caller hanging up mid-stream closes the upstream connection and frees the slot, for a raw OpenAI stream and for an Anthropic stream translated from an OpenAI one',
+      /chat\.completion\.chunk/.test(hang.first) && openBefore === 1 && closedBefore === 0 && busy.status === 429 && !!busy.retry && busy.json && busy.json.error.type === 'rate_limit_error' && busyAnt.status === 429 && !!busyAnt.retry && busyAnt.json && busyAnt.json.type === 'error' && busyAnt.json.error.type === 'rate_limit_error'
+      && closed1 - closed0 === 1 && !!freed &&/message_start/.test(hang2.first) && fakeOa.hangClosed - closed0 === 2 && !!freed2,
+      `first ${hang.first.slice(0, 40).replace(/\n/g, ' ')}; opened ${openBefore}; busy ${busy.status} ${busy.retry} ${busyAnt.status}; closed ${fakeOa.hangClosed - closed0}; after ${freed && freed.status}; second ${hang2.first.slice(0, 30).replace(/\n/g, ' ')} after ${freed2 && freed2.status}`);
+
+    // R583: an OpenAI request to an Anthropic-speaking provider is translated and streamed back as chat.completion.chunk events
+    const toAnt = { model: 'claude-r580-a', stream: true, stream_options: { include_usage: true }, max_tokens: 99, temperature: 0.2, stop: ['END'], tool_choice: 'required', parallel_tool_calls: false, user: 'u-r583', seed: 3,
+      tools: richOa.tools,
+      messages: [{ role: 'system', content: 'You are R583 sys' }, { role: 'user', content: [{ type: 'text', text: 'Weather? R583' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'call_prev', content: 'sunny' }, { role: 'user', content: 'and now?' }] };
+    const kAnt = await mk({ label: 'r580 anthropic', providers: [pAnt.id] });
+    const sA = await g('/v1/chat/completions', kAnt.key, toAnt), cA = lastAnt(), chunks = datas(sA.text);
+    const deltas = chunks.map((c) => ((c.choices || [])[0] || {}).delta || {}), calls = deltas.flatMap((d) => d.tool_calls || []);
+    const fins = chunks.map((c) => ((c.choices || [])[0] || {}).finish_reason).filter(Boolean), usageChunk = chunks.find((c) => c.usage) || {};
+    const sNo = await g('/v1/chat/completions', kAnt.key, { ...toAnt, stream_options: undefined });
+    const wA = await g('/v1/chat/completions', kAnt.key, { ...toAnt, stream: false, stream_options: undefined }), cW = lastAnt(), mW = ((wA.json || {}).choices || [])[0] || {};
+    const endT = await g('/v1/chat/completions', kAnt.key, { ...withMsg(toAnt, 'R580-TEXT-end_turn'), tools: undefined, tool_choice: undefined, stream: false }), maxT = await g('/v1/chat/completions', kAnt.key, { ...withMsg(toAnt, 'R580-TEXT-max_tokens'), tools: undefined, tool_choice: undefined, stream: true });
+    const sysOnly = await g('/v1/chat/completions', kAnt.key, { model: 'claude-r580-a', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'system', content: 'sys R583-plain' }, { role: 'user', content: 'R580-TEXT-end_turn' }] }), cP = lastAnt();
+    const rel = await g('/v1/chat/completions', kRelay.key, { model: 'claude-haiku-5-5', tools: toAnt.tools, messages: [{ role: 'system', content: 'You are R575 relay bot' }, { role: 'user', content: 'weather? R583' }] }), cRel = lastAnt();
+    const sub = await g('/v1/chat/completions', kRelay.key, { model: 'claude-haiku-5-5', tools: toAnt.tools, messages: [{ role: 'user', content: 'R575-SUB' }] });
+    check('R583', 'an OpenAI request to an Anthropic provider (an API key, a host\'s Claude login) arrives as Messages: the system message in system, the image as a base64 block, the assistant\'s tool_calls as tool_use and the tool message as tool_result in one user turn, the tools with their schemas, tool_choice required as any (parallel_tool_calls false as disable_parallel_tool_use), max_tokens, stop and temperature carried, user and seed dropped; the stream comes back as chat.completion.chunk events with the call in delta.tool_calls (id and name first, the arguments in the pieces they arrived in), one finish_reason tool_calls, the usage chunk only when asked (cache included) and [DONE]; the whole answer has message.tool_calls and its usage; end_turn is stop and max_tokens is length; the login is sent as it is (no Claude Code prompt) and its subscription refusal is a plain 403 in OpenAI\'s shape',
+      sA.status === 200 && /^text\/event-stream/.test(sA.ct) && cA.via === 'api' && cA.headers['x-api-key'] === R575_KEY && !cA.headers.authorization
+      && same(Object.keys(cA.body).sort(), ['max_tokens', 'messages', 'model', 'stop_sequences', 'stream', 'system', 'temperature', 'tool_choice', 'tools']) && cA.body.system === 'You are R583 sys' && cA.body.stream === true && cA.body.max_tokens === 99 && cA.body.temperature === 0.2 && same(cA.body.stop_sequences, ['END'])
+      && same(cA.body.messages[0].content[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }) && cA.body.messages[0].content[0].text === 'Weather? R583'
+      && same(cA.body.messages[1], { role: 'assistant', content: [{ type: 'tool_use', id: 'call_prev', name: 'get_weather', input: { city: 'Bern' } }] })
+      && same(cA.body.messages[2], { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_prev', content: 'sunny' }, { type: 'text', text: 'and now?' }] })
+      && cA.body.tools[0].name === 'get_weather' && cA.body.tools[0].input_schema.required[0] === 'city' && same(cA.body.tool_choice, { type: 'any', disable_parallel_tool_use: true })
+      && deltas[0].role === 'assistant' && same(calls[0], { index: 0, id: 'toolu_r575', type: 'function', function: { name: 'get_weather', arguments: '' } }) && same(calls.slice(1).map((c) => c.function.arguments), ['{"city":', '"Zürich"}']) && calls.every((c) => c.index === 0)
+      && same(fins, ['tool_calls']) && same(usageChunk.usage, { prompt_tokens: 28, completion_tokens: 17, total_tokens: 45, prompt_tokens_details: { cached_tokens: 5 } }) && sA.text.endsWith('data: [DONE]\n\n')
+      && sNo.status === 200 && !sNo.text.includes('"usage"') && datas(sNo.text).some((c) => ((c.choices || [])[0] || {}).finish_reason === 'tool_calls')
+      && wA.status === 200 && cW.body.stream === undefined && mW.finish_reason === 'tool_calls' && mW.message.content === 'checking' && mW.message.tool_calls[0].id === 'toolu_r575' && same(JSON.parse(mW.message.tool_calls[0].function.arguments), { city: 'Zürich' }) && wA.json.usage.prompt_tokens === 12 && wA.json.usage.completion_tokens === 4 && wA.json.object === 'chat.completion'
+      && endT.status === 200 && endT.json.choices[0].finish_reason === 'stop' && endT.json.choices[0].message.content === 'Hello wörld' && datas(maxT.text).filter((c) => (((c.choices || [])[0] || {}).delta || {}).content).map((c) => c.choices[0].delta.content).join('') === 'Hello wörld' && datas(maxT.text).some((c) => ((c.choices || [])[0] || {}).finish_reason === 'length')
+      && sysOnly.status === 200 && cP.body.system === 'sys R583-plain' && cP.body.max_tokens === 4096 && cP.body.tools === undefined && datas(sysOnly.text).some((c) => ((c.choices || [])[0] || {}).finish_reason === 'stop')
+      && rel.status === 200 && cRel.via === 'relay' && cRel.headers.authorization === 'Bearer fake-oauth-token' && cRel.body.system === 'You are R575 relay bot' && !JSON.stringify(cRel.body).includes('Claude Code') && (((rel.json || {}).choices || [])[0] || {}).finish_reason === 'tool_calls'
+      && sub.status === 403 && sub.json && sub.json.error.type === 'permission_error' && /Claude subscription login: it serves Claude Code; use Claude Code with this key, or pick a provider that has an API key/.test(sub.json.error.message),
+      `stream ${sA.status} ${sA.ct} body keys ${Object.keys(cA.body || {})} calls ${JSON.stringify(calls).slice(0, 300)} fins ${fins} usage ${JSON.stringify(usageChunk.usage)}; no-usage ${sNo.status}; whole ${wA.status} ${wA.text.slice(0, 200)}; end ${endT.status} ${endT.text.slice(0, 150)}; max ${maxT.text.slice(-200).replace(/\n/g, ' ')}; sys ${sysOnly.status} ${JSON.stringify(cP.body)}; relay ${rel.status} ${rel.text.slice(0, 120)} sys ${cRel.body && JSON.stringify(cRel.body.system)}; sub ${sub.status} ${sub.text.slice(0, 160)}`);
+
+    // R584: an Anthropic request to an OpenAI-speaking provider is translated and streamed back as Anthropic events
+    const toOa = { model: 'm-r580-a', max_tokens: 77, temperature: 0.5, stop_sequences: ['END'], stream: true, top_k: 4, metadata: { user_id: 'u-r585' }, thinking: { type: 'enabled', budget_tokens: 1024 },
+      system: [{ type: 'text', text: 'You are R580 sys', cache_control: { type: 'ephemeral' } }],
+      tools: [{ name: 'get_weather', description: 'Weather of a city', input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }, cache_control: { type: 'ephemeral' } }], tool_choice: { type: 'any', disable_parallel_tool_use: true },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580', cache_control: { type: 'ephemeral' } }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 'hm', signature: 'sig' }, { type: 'tool_use', id: 'toolu_prev', name: 'get_weather', input: { city: 'Bern' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_prev', content: [{ type: 'text', text: 'sunny' }] }, { type: 'text', text: 'and now?' }] }] };
+    const av = { 'anthropic-version': '2023-06-01', 'anthropic-beta': 'interleaved-thinking-2025-05-14' };
+    const kOa = await mk({ label: 'r580 to openai', providers: [pOai.id] }), o0 = await by('openai');
+    const sO = await g('/v1/messages', kOa.key, toOa, av), cO = lastOa(), fr = frames(sO.text);
+    const sBody = fr.filter((f) => f.ev === 'content_block_delta' && f.d.delta.type === 'text_delta').map((f) => f.d.delta.text).join(''), argsJ = fr.filter((f) => f.ev === 'content_block_delta' && f.d.delta.type === 'input_json_delta');
+    const mDelta = (fr.find((f) => f.ev === 'message_delta') || { d: {} }).d, tStart = fr.find((f) => f.ev === 'content_block_start' && f.d.content_block.type === 'tool_use') || { d: {} };
+    const wO = await g('/v1/messages', kOa.key, { ...toOa, stream: false }, av), cWO = lastOa();
+    const trip = { ...toOa, stream: false, messages: [toOa.messages[0], { role: 'assistant', content: [{ type: 'tool_use', id: 'call_r580', name: 'get_weather', input: { city: 'Zürich' } }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_r580', content: 'forty-two' }] }], tool_choice: { type: 'auto' } };
+    const tW = await g('/v1/messages', kOa.key, trip, av), cT = lastOa(), tS = await g('/v1/messages', kOa.key, { ...trip, stream: true }, av), tFr = frames(tS.text);
+    const hl = await g('/v1/messages', kX.key, { model: 'tiny-local', max_tokens: 30, messages: [{ role: 'user', content: 'host local R580' }] }, av), cHl = lastOa();
+    const hlRaw = await g('/v1/chat/completions', kX.key, { model: 'tiny-local', stream: true, messages: [{ role: 'user', content: 'host local raw R580' }] }), cHr = lastOa();
+    const o1 = await by('openai'), recO = keyRec(kOa.id);
+    check('R584','an Anthropic request to an OpenAI-compatible provider (an endpoint, a host\'s server) arrives as chat completions: the system array as a system message, the image as an image_url data URL, the assistant\'s tool_use as tool_calls with the arguments as JSON text, the tool_result as a tool message and the text after it as the user turn, tools as functions, tool_choice any as required (disable_parallel_tool_use as parallel_tool_calls false), max_tokens, stop_sequences and temperature carried, stream_options.include_usage asked, thinking, thinking blocks, cache_control, top_k and metadata dropped, the provider\'s own bearer; the stream comes back as Anthropic events (message_start, a text block, a tool_use block with the arguments as input_json_delta pieces, message_delta with stop_reason tool_use and the usage, message_stop; event names as the data types), the whole answer as a message with a tool_use block and its usage, and a tool_result turn round-trips to the final text with stop_reason end_turn, whole and streamed; the usage counts in the ledger and the key; a host\'s server answers both ways',
+      sO.status === 200 && /^text\/event-stream/.test(sO.ct) && cO.headers.authorization === 'Bearer ' + R580_KEY && !cO.headers['x-api-key'] && !cO.headers['anthropic-beta']
+      && cO.body.model === 'm-r580-a' && cO.body.stream === true && same(cO.body.stream_options, { include_usage: true }) && cO.body.max_tokens === 77 && cO.body.temperature === 0.5 && same(cO.body.stop, ['END']) && cO.body.tool_choice === 'required' && cO.body.parallel_tool_calls === false
+      && !/cache_control|thinking|top_k|metadata/.test(JSON.stringify(cO.body))
+      && same(cO.body.messages, [{ role: 'system', content: 'You are R580 sys' }, { role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'toolu_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'toolu_prev', content: 'sunny' }, { role: 'user', content: 'and now?' }])
+      && same(cO.body.tools, [{ type: 'function', function: { name: 'get_weather', description: 'Weather of a city', parameters: toOa.tools[0].input_schema } }])
+      && same(fr.map((f) => f.ev), ['message_start', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop']) && fr.every((f) => f.d.type === f.ev)
+      && /^msg_/.test(fr[0].d.message.id) && fr[0].d.message.model === 'm-r580-a' && sBody === 'Let me check ' && tStart.d.content_block.id === 'call_r580' && tStart.d.content_block.name === 'get_weather' && tStart.d.index === 1
+      && same(argsJ.map((f) => f.d.delta.partial_json), ['{"city":', '"Zürich"}']) && mDelta.delta.stop_reason === 'tool_use' && same(mDelta.usage, { input_tokens: 40, output_tokens: 12, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+      && wO.status === 200 && cWO.body.stream === undefined && cWO.body.stream_options === undefined && wO.json.type === 'message' && wO.json.role === 'assistant' && wO.json.stop_reason === 'tool_use' && same(wO.json.content, [{ type: 'text', text: 'Let me check' }, { type: 'tool_use', id: 'call_r580', name: 'get_weather', input: { city: 'Zürich' } }]) && same(wO.json.usage, { input_tokens: 20, output_tokens: 8, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 })
+      && tW.status === 200 && cT.body.messages[cT.body.messages.length - 1].role === 'tool' && cT.body.messages[cT.body.messages.length - 1].tool_call_id === 'call_r580' && cT.body.tool_choice === 'auto' && tW.json.stop_reason === 'end_turn' && tW.json.content[0].text === 'R580 final: forty-two'
+      && tS.status === 200 && tFr.filter((f) => f.ev === 'content_block_delta').map((f) => f.d.delta.text).join('') === 'R580 final: forty-two' && (tFr.find((f) => f.ev === 'message_delta') || { d: { delta: {} } }).d.delta.stop_reason === 'end_turn'
+      && o1.turns - o0.turns === 4 && recO.calls === 4 && recO.tokensIn === 40 + 30 + 50 + 50 && recO.tokensOut === 12 + 8 + 6 + 6
+      && hl.status === 200 && hl.json.stop_reason === 'tool_use' && hl.json.content.some((c) => c.type === 'tool_use') && cHl.body.model === 'tiny-local' && cHl.url === '/oai/chat/completions' && hlRaw.status === 200 && hlRaw.text === fakeOa.stream && cHr.body.stream_options && cHr.body.stream_options.include_usage === true,
+      `stream ${sO.status} ${sO.ct} events ${fr.map((f) => f.ev)} text "${sBody}" args ${JSON.stringify(argsJ.map((f) => f.d.delta.partial_json))} delta ${JSON.stringify(mDelta).slice(0, 200)}; up ${JSON.stringify(cO.body || {}).slice(0, 700)}; whole ${wO.status} ${wO.text.slice(0, 250)}; trip ${tW.status} ${tW.text.slice(0, 150)} stream ${tS.status}; ledger +${o1.turns - o0.turns} key ${JSON.stringify({ calls: recO.calls, in: recO.tokensIn, out: recO.tokensOut })}; host ${hl.status} ${hl.text.slice(0, 120)} raw ${hlRaw.status} ${hlRaw.text === fakeOa.stream}`);
+
+    // R585: what cannot be carried is refused with a plain 400 naming it (nothing reaches the provider, nothing is counted), and the provider's errors come back in the caller's shape
+    const refCalls0 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, key: keyRec(kX.id).calls };
+    const doc = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, messages: [{ role: 'user', content: [{ type: 'text', text: 'R580' }, { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'd' } }] }] }, av);
+    const srv = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, tools: [{ type: 'web_search_20250305', name: 'web_search' }], messages: [{ role: 'user', content: 'R580' }] }, av);
+    const mcp = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, mcp_servers: [{ type: 'url', url: 'https://x.test', name: 'm' }], messages: [{ role: 'user', content: 'R580' }] }, av);
+    const audio = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: 'AA', format: 'wav' } }] }] });
+    const many = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', n: 2, messages: [{ role: 'user', content: 'x' }] });
+    const schema = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', response_format: { type: 'json_schema', json_schema: { name: 'x', schema: {} } }, messages: [{ role: 'user', content: 'x' }] });
+    const refCalls1 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, key: keyRec(kX.id).calls };
+    const e400 = (r, re) => r.status === 400 && r.json && r.json.error && r.json.error.type === 'invalid_request_error' && re.test(r.json.error.message);
+    const a400 = (r, re) => r.status === 400 && r.json && r.json.type === 'error' && r.json.error.type === 'invalid_request_error' && re.test(r.json.error.message);
+    const aLim = await g('/v1/chat/completions', kX.key, { model: 'claude-r580-a', tools: richOa.tools, messages: [{ role: 'user', content: 'R575-LIMIT' }] });
+    const oLim = await g('/v1/messages', kX.key, { model: 'm-r580-a', max_tokens: 9, messages: [{ role: 'user', content: 'R580-LIMIT' }] }, av);
+    check('R585', 'what cannot be carried to the other format is refused with a plain 400 in the caller\'s shape that names it, before anything reaches the provider or is counted: a document block, a server tool (web search) and MCP servers to an OpenAI provider; audio input, n above 1 and response_format json_schema to an Anthropic one; and the provider\'s own errors come back in the caller\'s shape with their status and retry-after (Anthropic\'s 429 as an OpenAI error, OpenAI\'s 429 as an Anthropic error)',
+      a400(doc, /document/) && a400(srv, /web_search/) && a400(mcp, /mcp_servers/) && e400(audio, /Audio input/) && e400(many, /"n"/) && e400(schema, /json_schema/)
+      && refCalls1.oa === refCalls0.oa && refCalls1.ant === refCalls0.ant && refCalls1.key === refCalls0.key
+      && aLim.status === 429 && aLim.retry === '7' && aLim.json && aLim.json.error.type === 'rate_limit_error' && /per-minute rate limit/.test(aLim.json.error.message) && !aLim.h.get('anthropic-ratelimit-unified-5h-status')
+      && oLim.status === 429 && oLim.retry === '5' && oLim.json && oLim.json.type === 'error' && oLim.json.error.type === 'rate_limit_error' && /Rate limit reached for requests/.test(oLim.json.error.message),
+      `doc ${doc.status} ${doc.text.slice(0, 100)}; srv ${srv.status}; mcp ${mcp.status}; audio ${audio.status} ${audio.text.slice(0, 100)}; n ${many.status}; schema ${schema.status}; calls ${JSON.stringify(refCalls0)}→${JSON.stringify(refCalls1)}; aLim ${aLim.status} ${aLim.retry} ${aLim.text.slice(0, 120)}; oLim ${oLim.status} ${oLim.retry} ${oLim.text.slice(0, 120)}`);
+
+    for (const k of [kX, kRelay, kU, kUA, kOne, kAnt, kOa]) await call('/api/apikey/revoke', A, { id: k.id });
+    await call('/api/providers/remove', A, { id: pAnt.id }); await call('/api/providers/remove', A, { id: pOai.id });
+  }
+
+  // R586-R590 (T-369, G5 of the API gateway): POST /v1/responses (OpenAI's Responses API, what Codex speaks with wire_api =
+  // "responses"): translated to an Anthropic provider and to an OpenAI chat provider and streamed back as Responses events,
+  // raw to a native Responses endpoint and to the AI host's Codex login; refusals; whole answers; the per-key usage by day and
+  // model (the roll-up file and GET /api/apikey/usage) and the page's Usage toggle. G2's fake Anthropic upstream, G3's fake
+  // OpenAI endpoint and fakeResponses record what arrives.
+  async function r586Check() {
+    const http = require('http'), assert = require('assert');
+    const same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json, retry: r.headers.get('retry-after'), ct: r.headers.get('content-type') || '', h: r.headers }; };
+    const lastOa = () => fakeOa.calls[fakeOa.calls.length - 1] || {}, lastAnt = () => fakeAnt.calls[fakeAnt.calls.length - 1] || {}, lastResp = () => fakeResp.calls[fakeResp.calls.length - 1] || {};
+    const keysFile = () => ((JSON.parse(fs.readFileSync(path.join(SB, 'api-keys.json'), 'utf8')) || {})['t-admin'] || {});
+    const keyRec = (id) => (keysFile().keys || []).find((k) => k.id === id) || {};
+    const by = async (kind) => ((((await call('/api/usage', A)).data || {}).answers || {}).by || {})[kind] || { turns: 0, input: 0, output: 0, cached: 0, written: 0 };
+    const mk = async (body, tok = A) => (await call('/api/apikey/create', tok, body)).data;
+    // a Responses stream: [{ ev, d }], the event line and the data's type must agree
+    const rframes = (text) => text.split('\n\n').filter((f) => f.trim()).map((f) => { const m = /^event: (.+)\ndata: (.*)$/s.exec(f) || []; let d = {}; try { d = JSON.parse(m[2]); } catch {} return { ev: m[1], d }; });
+    const numbered = (fr) => fr.length > 0 && fr.every((f, i) => f.d.type === f.ev && f.d.sequence_number === i);
+    const th = (await call('/api/hosts/new', A, {})).data.host || {}, thCfg = (await call('/api/hosts/config', A, { id: th.id })).data.config || {};
+    await fetch(H + '/node/hello', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-VR-Host': th.id, 'X-VR-Host-Token': thCfg.token }, body: JSON.stringify({ nonce: crypto.randomBytes(16).toString('hex') }) });
+    const pChat = (await call('/api/providers/add', A, { kind: 'openai', label: 'R586 Chat', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: R580_KEY, models: 'm-r580-c586' })).data.provider || {};
+    const pNat = (await call('/api/providers/add', A, { kind: 'openai', label: 'R586 Native', baseUrl: `http://127.0.0.1:${OLLAMA_PORT}/oai`, apiKey: R586_KEY, models: 'm-r586-native', responses: true })).data.provider || {};
+    const pAnt = (await call('/api/providers/add', A, { kind: 'anthropic', label: 'R586 Anthropic', apiKey: R575_KEY, models: 'claude-r586' })).data.provider || {};
+    await call('/api/hosts/remove', A, { id: th.id });
+    const plist = (await call('/api/providers', A)).data.providers || [];
+    const hostCodex = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-codex') || {}, hostClaude = plist.find((p) => /^h:test-node\//.test(p.id) && p.kind === 'host-claude') || {};
+    const kAll = await mk({ label: 'r586 all', providers: [pChat.id, pNat.id, pAnt.id] }), kCx = await mk({ label: 'r586 codex', providers: [hostCodex.id] }), kRelay = await mk({ label: 'r586 relay', providers: [hostClaude.id], models: ['claude-haiku-5-5'] });
+    const tool = { type: 'function', name: 'get_weather', description: 'Weather of a city', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }, strict: false };
+    // what Codex sends: instructions, input items (a developer note, the user's text and a picture, an earlier turn's reasoning, the
+    // assistant's words and its call, the call's output, the next question), a function tool, store / include / reasoning
+    const codexReq = (model, extra = {}) => ({ model, instructions: 'You are Codex R586', stream: true, store: true, include: ['reasoning.encrypted_content'], reasoning: { effort: 'medium' }, prompt_cache_key: 'pk-r586',
+      parallel_tool_calls: false, max_output_tokens: 300, tools: [tool], tool_choice: 'auto',
+      input: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'dev note R586' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Weather in Zürich? R580 R586' }, { type: 'input_image', image_url: 'data:image/png;base64,iVBORw0KGgo=' }] },
+        { type: 'reasoning', id: 'rs_r586', summary: [], encrypted_content: 'opaque' },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Checking Bern first' }] },
+        { type: 'function_call', id: 'fc_prev', call_id: 'call_prev', name: 'get_weather', arguments: '{"city":"Bern"}' },
+        { type: 'function_call_output', call_id: 'call_prev', output: 'sunny' },
+        { type: 'message', role: 'user', content: 'and now? R580' }], ...extra });
+
+    // R586: to an Anthropic provider, translated both ways
+    const sA = await g('/v1/responses', kAll.key, codexReq('claude-r586')), cA = lastAnt(), fA = rframes(sA.text);
+    const doneA = (fA[fA.length - 1] || { d: {} }).d.response || {}, fcA = fA.filter((f) => f.ev === 'response.function_call_arguments.delta');
+    const sub = await g('/v1/responses', kRelay.key, { model: 'claude-haiku-5-5', input: 'R575-SUB', tools: [tool] });
+    check('R586', 'a Responses request (Codex\'s shape: instructions, input items with a developer note, text and a picture, an earlier reasoning item, the assistant\'s words and its function_call, the function_call_output, a function tool, store, include, reasoning) to an Anthropic provider arrives as Messages: instructions and the developer note in system, the picture as a base64 block, the call as tool_use and its output as tool_result in one user turn with the next question, the tool with its schema, tool_choice auto with parallel calls off, max_output_tokens as max_tokens, the provider\'s own key; reasoning, store, include and the cache key dropped; the answer streams back as Responses events (each named as its type, sequence_number 0, 1, 2 ... in order): response.created, response.in_progress, a function_call item (output_item.added with call_id and name, the arguments in the pieces they came, function_call_arguments.done, output_item.done), and response.completed with the whole response (id resp_..., status completed, the call in output, usage 28 in with 5 cached, 17 out, 45 total); a Claude subscription login\'s refusal is a plain 403 in OpenAI\'s error shape',
+      sA.status === 200 && /^text\/event-stream/.test(sA.ct) && cA.via === 'api' && cA.headers['x-api-key'] === R575_KEY && !cA.headers.authorization && !JSON.stringify(cA.headers).includes(kAll.key)
+      && same(Object.keys(cA.body).sort(), ['max_tokens', 'messages', 'model', 'stream', 'system', 'tool_choice', 'tools']) && cA.body.model === 'claude-r586' && cA.body.system === 'You are Codex R586\n\ndev note R586' && cA.body.max_tokens === 300 && cA.body.stream === true
+      && same(cA.body.messages, [{ role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580 R586' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'Checking Bern first' }, { type: 'tool_use', id: 'call_prev', name: 'get_weather', input: { city: 'Bern' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_prev', content: 'sunny' }, { type: 'text', text: 'and now? R580' }] }])
+      && same(cA.body.tools, [{ name: 'get_weather', description: 'Weather of a city', input_schema: tool.parameters }]) && same(cA.body.tool_choice, { type: 'auto', disable_parallel_tool_use: true })
+      && numbered(fA) && same(fA.map((f) => f.ev), ['response.created', 'response.in_progress', 'response.output_item.added', 'response.function_call_arguments.delta', 'response.function_call_arguments.delta', 'response.function_call_arguments.done', 'response.output_item.done', 'response.completed'])
+      && fA[0].d.response.status === 'in_progress' && fA[2].d.item.type === 'function_call' && fA[2].d.item.call_id === 'toolu_r575' && fA[2].d.item.name === 'get_weather' && same(fcA.map((f) => f.d.delta), ['{"city":', '"Zürich"}']) && fcA.every((f) => f.d.item_id === fA[2].d.item.id)
+      && fA[5].d.arguments === '{"city":"Zürich"}' && fA[6].d.item.status === 'completed' && fA[6].d.item.arguments === '{"city":"Zürich"}'
+      && /^resp_/.test(doneA.id) && doneA.object === 'response' && doneA.status === 'completed' && doneA.model === 'claude-r586' && doneA.output.length === 1 && doneA.output[0].call_id === 'toolu_r575' && doneA.instructions === 'You are Codex R586' && doneA.store === false
+      && same(doneA.usage, { input_tokens: 28, input_tokens_details: { cached_tokens: 5 }, output_tokens: 17, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 45 })
+      && sub.status === 403 && sub.json && sub.json.error.type === 'permission_error' && /Claude subscription login: it serves Claude Code/.test(sub.json.error.message),
+      `stream ${sA.status} ${sA.ct} up ${JSON.stringify(cA.body || {}).slice(0, 600)} events ${fA.map((f) => f.ev + '#' + f.d.sequence_number)} done ${JSON.stringify(doneA).slice(0, 400)}; sub ${sub.status} ${sub.text.slice(0, 160)}`);
+
+    // R587: to an OpenAI chat provider, translated; to a native Responses endpoint and to the host's Codex login, raw
+    const sC = await g('/v1/responses', kAll.key, codexReq('m-r580-c586')), cC = lastOa(), fC = rframes(sC.text), doneC = (fC[fC.length - 1] || { d: {} }).d.response || {};
+    const textC = fC.filter((f) => f.ev === 'response.output_text.delta').map((f) => f.d.delta).join(''), argsC = fC.filter((f) => f.ev === 'response.function_call_arguments.delta').map((f) => f.d.delta);
+    const natReq = codexReq('m-r586-native', { input: [{ role: 'user', content: 'native R586' }], tools: [tool, { type: 'web_search' }] });
+    const sN = await g('/v1/responses', kAll.key, natReq), cN = lastResp(), streamN = fakeResp.stream;
+    const wN = await g('/v1/responses', kAll.key, { ...natReq, stream: false }), cWN = lastResp(), jsonN = fakeResp.json;
+    const limN = await g('/v1/responses', kAll.key, { ...natReq, stream: false, input: 'R586-LIMIT' });
+    const cxReq = { model: 'gpt-test', instructions: 'Codex R586', stream: true, store: true, input: [{ role: 'user', content: [{ type: 'input_text', text: 'codex R586' }] }], tools: [{ type: 'local_shell' }] };
+    const sX = await g('/v1/responses', kCx.key, cxReq), cX = lastResp(), streamX = fakeResp.stream;
+    const wX = await g('/v1/responses', kCx.key, { ...cxReq, stream: false }), cWX = lastResp();
+    let r587 = {};
+    const expectedC = ['response.created', 'response.in_progress', 'response.output_item.added', 'response.content_part.added', 'response.output_text.delta', 'response.output_text.delta', 'response.output_text.done', 'response.content_part.done', 'response.output_item.done',
+      'response.output_item.added', 'response.function_call_arguments.delta', 'response.function_call_arguments.delta', 'response.function_call_arguments.done', 'response.output_item.done', 'response.completed'];
+    check('R587', 'a Responses request to an OpenAI chat provider arrives as chat completions (instructions and the developer note as system messages, the picture as an image_url part, the assistant\'s words with its call as tool_calls, the output as a tool message, the tool nested under function, tool_choice, parallel_tool_calls false, max_tokens, stream_options.include_usage, the provider\'s own bearer; store, include, reasoning and the reasoning item dropped) and streams back as Responses events: a message item (content_part.added, the text deltas, output_text.done, content_part.done, output_item.done), then the function_call item with its argument pieces, then response.completed with both items and usage 40 in, 12 out; to an endpoint marked as speaking Responses the request goes raw (only the model swapped and store false, hosted tools included, its own bearer) and the stream, the whole JSON answer and its 429 (status, body, retry-after) come back exactly as sent; to the AI host\'s Codex login the same, through the host (its own login, never the caller\'s key): the stream byte for byte, and a whole answer asked of it is made from its stream (store false and stream true upstream)',
+      Object.values(r587 = {
+      chatUp: sC.status === 200 && /^text\/event-stream/.test(sC.ct) && cC.headers.authorization === 'Bearer ' + R580_KEY && cC.url === '/oai/chat/completions'
+      && same(cC.body, { model: 'm-r580-c586', messages: [{ role: 'system', content: 'You are Codex R586' }, { role: 'system', content: 'dev note R586' }, { role: 'user', content: [{ type: 'text', text: 'Weather in Zürich? R580 R586' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] },
+        { role: 'assistant', content: 'Checking Bern first', tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bern"}' } }] }, { role: 'tool', tool_call_id: 'call_prev', content: 'sunny' }, { role: 'user', content: 'and now? R580' }],
+        max_tokens: 300, stream: true, stream_options: { include_usage: true }, tools: [{ type: 'function', function: { name: 'get_weather', description: 'Weather of a city', parameters: tool.parameters, strict: false } }], tool_choice: 'auto', parallel_tool_calls: false }),
+      chatEvents: numbered(fC) && same(fC.map((f) => f.ev), expectedC) && textC === 'Let me check ' && fC[8].d.item.content[0].text === 'Let me check ' && fC[9].d.item.call_id === 'call_r580' && same(argsC, ['{"city":', '"Zürich"}']),
+      chatDone: doneC.status === 'completed' && doneC.output.map((o) => o.type).join() === 'message,function_call' && doneC.output[1].arguments === '{"city":"Zürich"}' && same(doneC.usage, { input_tokens: 40, input_tokens_details: { cached_tokens: 0 }, output_tokens: 12, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 52 }),
+      native: sN.status === 200 && sN.text === streamN && /^text\/event-stream/.test(sN.ct) && sN.h.get('x-ratelimit-remaining-requests') === '66' && !sN.h.get('x-internal-note') && cN.via === 'api' && cN.url === '/oai/responses' && cN.headers.authorization === 'Bearer ' + R586_KEY,
+      nativeUp: same(cN.body, { ...natReq, store: false }),
+      nativeWhole: wN.status === 200 && wN.text === jsonN && /application\/json/.test(wN.ct) && same(cWN.body, { ...natReq, stream: false, store: false }),
+      nativeLimit: limN.status === 429 && limN.retry === '4' && limN.json && limN.json.error.type === 'requests' && /r586/.test(limN.json.error.message),
+      codex: sX.status === 200 && sX.text === streamX && cX.via === 'codex' && cX.headers.authorization === 'Bearer fake-codex-token' && !JSON.stringify(cX.headers).includes(kCx.key) && same(cX.body, { ...cxReq, store: false }),
+      codexWhole: wX.status === 200 && !!wX.json && wX.json.object === 'response' && wX.json.status === 'completed' && wX.json.output[0].content[0].text === 'native ok' && wX.json.usage.input_tokens === 100 && cWX.body.stream === true && cWX.body.store === false,
+      }).every(Boolean),
+      `failing: ${Object.keys(r587).filter((k) => !r587[k]).join(', ') || 'none'}; native ${sN.ct} ${sN.h.get('x-ratelimit-remaining-requests')}/${sN.h.get('x-internal-note')} ${cN.via} ${cN.url} ${cN.headers && cN.headers.authorization}; chat ${sC.status} up ${JSON.stringify(cC.body || {}).slice(0, 500)} events ${fC.map((f) => f.ev)} done ${JSON.stringify(doneC.usage)}; native ${sN.status} same ${sN.text === streamN} up ${JSON.stringify(cN.body || {}).slice(0, 200)} whole ${wN.status} ${wN.text === jsonN}; limit ${limN.status} ${limN.retry} ${limN.text.slice(0, 100)}; codex ${sX.status} same ${sX.text === streamX} ${sX.text.slice(0, 120)} up ${JSON.stringify(cX.body || {}).slice(0, 200)}; codex whole ${wX.status} ${wX.text.slice(0, 200)}`);
+
+    // R588: refusals in OpenAI's error shape before anything goes out; the slot held for the stream and freed on hang-up
+    const ref0 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, resp: fakeResp.calls.length, key: keyRec(kAll.id).calls };
+    const e400 = (r, re) => r.status === 400 && r.json && r.json.error && r.json.error.type === 'invalid_request_error' && re.test(r.json.error.message);
+    const refusals = {
+      webChat: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x R580', tools: [{ type: 'web_search' }] }),
+      fileAnt: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', tools: [tool, { type: 'file_search', vector_store_ids: ['vs'] }] }),
+      computer: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', tools: [{ type: 'computer_use_preview', display_width: 1, display_height: 1 }] }),
+      interp: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x', tools: [{ type: 'code_interpreter', container: { type: 'auto' } }] }),
+      mcp: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', tools: [{ type: 'mcp', server_label: 's', server_url: 'https://x.test' }] }),
+      image: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x', tools: [{ type: 'image_generation' }] }),
+      prevChat: await g('/v1/responses', kAll.key, { model: 'm-r580-c586', input: 'x', previous_response_id: 'resp_old' }),
+      prevNative: await g('/v1/responses', kAll.key, { model: 'm-r586-native', input: 'x', previous_response_id: 'resp_old' }),
+      prevCodex: await g('/v1/responses', kCx.key, { model: 'gpt-test', input: 'x', previous_response_id: 'resp_old' }),
+      schemaAnt: await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'x', text: { format: { type: 'json_schema', name: 'w', schema: { type: 'object' } } } }),
+      notJson: await (async () => { const r = await fetch(H + '/v1/responses', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + kAll.key }, body: '{"model": "claude-r586", "input": ' }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json }; })(),
+    };
+    const ref1 = { oa: fakeOa.calls.length, ant: fakeAnt.calls.length, resp: fakeResp.calls.length, key: keyRec(kAll.id).calls };
+    const kOne = await mk({ label: 'r586 one', providers: [pChat.id], maxConcurrent: 1 });
+    const closed0 = fakeOa.hangClosed;
+    const hangOn = (key, body) => new Promise((resolve) => { const rq = http.request(H + '/v1/responses', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key } }, (res) => { res.once('data', (d) => resolve({ rq, res, first: d.toString() })); }); rq.on('error', () => {}); rq.end(JSON.stringify(body)); });
+    const hang = await hangOn(kOne.key, { model: 'm-r580-c586', stream: true, input: 'R580-HANG responses' });
+    const busy = await g('/v1/responses', kOne.key, { model: 'm-r580-c586', input: 'while one is open R580' });
+    hang.rq.destroy();
+    for (let i = 0; i < 50 && !(fakeOa.hangClosed > closed0); i++) await sleep(100);
+    let freed = null; for (let i = 0; i < 50 && !freed; i++) { const r = await g('/v1/responses', kOne.key, { model: 'm-r580-c586', input: 'after hang-up R580' }); if (r.status === 200) freed = r; else await sleep(100); }
+    check('R588', 'what /v1/responses cannot carry is refused with a 400 in OpenAI\'s error shape naming it, before anything reaches a provider or is counted: a hosted tool that is not a function (web_search, file_search, computer_use, code_interpreter, mcp, image_generation) to a translated provider, previous_response_id to every provider ("this hub keeps no response state; send the whole input"; a native one and the Codex login included), json_schema output to an Anthropic one, a body that is not JSON; the key\'s slot is held for the whole translated stream (a second request on a one-at-a-time key is a 429 with retry-after) and the caller hanging up closes the upstream and frees the slot',
+      e400(refusals.webChat, /"web_search"/) && e400(refusals.fileAnt, /"file_search"/) && e400(refusals.computer, /computer_use/) && e400(refusals.interp, /code_interpreter/) && e400(refusals.mcp, /"mcp"/) && e400(refusals.image, /image_generation/)
+      && e400(refusals.prevChat, /this hub keeps no response state; send the whole input/) && e400(refusals.prevNative, /keeps no response state/) && e400(refusals.prevCodex, /keeps no response state/) && e400(refusals.schemaAnt, /json_schema/) && e400(refusals.notJson, /not JSON/)
+      && same(ref0, ref1)
+      && /response\.created/.test(hang.first) && busy.status === 429 && !!busy.retry && busy.json && busy.json.error.type === 'rate_limit_error' && fakeOa.hangClosed - closed0 === 1 && !!freed && freed.json && freed.json.object === 'response',
+      `${Object.entries(refusals).map(([k, r]) => k + ' ' + r.status + ' ' + ((r.json && r.json.error && r.json.error.message) || r.text).slice(0, 70)).join('; ')}; calls ${JSON.stringify(ref0)}→${JSON.stringify(ref1)}; hang ${hang.first.slice(0, 40).replace(/\n/g, ' ')} busy ${busy.status} ${busy.retry} closed ${fakeOa.hangClosed - closed0} freed ${freed && freed.status}`);
+
+    // R589: whole (non-stream) answers are response objects; a max-tokens stop is incomplete; a tool output round-trips to text
+    const wA = await g('/v1/responses', kAll.key, { ...codexReq('claude-r586'), stream: false }), cWA = lastAnt();
+    const wC = await g('/v1/responses', kAll.key, { ...codexReq('m-r580-c586'), stream: false }), cWC = lastOa();
+    const trip = { model: 'm-r580-c586', input: [{ role: 'user', content: 'Weather? R580' }, { type: 'function_call', call_id: 'call_r580', name: 'get_weather', arguments: '{"city":"Zürich"}' }, { type: 'function_call_output', call_id: 'call_r580', output: 'forty-two' }], tools: [tool] };
+    const tW = await g('/v1/responses', kAll.key, trip), cT = lastOa(), tS = await g('/v1/responses', kAll.key, { ...trip, stream: true }), tFr = rframes(tS.text);
+    const maxW = await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'R580-TEXT-max_tokens' }), maxS = await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'R580-TEXT-max_tokens', stream: true }), mFr = rframes(maxS.text);
+    const lenS = await g('/v1/responses', kAll.key, { model: 'claude-r586', input: 'R580-TEXT-end_turn', stream: true }), lFr = rframes(lenS.text);
+    check('R589', 'a whole (non-stream) Responses answer is a response object: from an Anthropic provider (object response, an id resp_..., status completed, the model, output = the message item with its output_text and the function_call item with call_id and its arguments as JSON text, usage 12 in with 3 cached and 4 out, the request\'s tools and instructions echoed, store false) and from an OpenAI chat provider (the message and the call, usage 30 in with 10 cached, 8 out); a function_call_output turn reaches the chat provider as a tool message and comes back as the final text, whole and streamed; an answer stopped by max tokens is status incomplete with incomplete_details.reason max_output_tokens (whole, and streamed ending with response.incomplete), one that ended normally is completed',
+      wA.status === 200 && /application\/json/.test(wA.ct) && cWA.body.stream === undefined && wA.json && wA.json.object === 'response' && /^resp_/.test(wA.json.id) && wA.json.status === 'completed' && wA.json.model === 'claude-r586'
+      && same(wA.json.output.map((o) => o.type), ['message', 'function_call']) && same(wA.json.output[0].content, [{ type: 'output_text', text: 'checking', annotations: [] }]) && wA.json.output[0].role === 'assistant' && wA.json.output[1].call_id === 'toolu_r575' && same(JSON.parse(wA.json.output[1].arguments), { city: 'Zürich' })
+      && same(wA.json.usage, { input_tokens: 12, input_tokens_details: { cached_tokens: 3 }, output_tokens: 4, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 16 }) && wA.json.tools[0].name === 'get_weather' && wA.json.instructions === 'You are Codex R586' && wA.json.store === false && typeof wA.json.created_at === 'number'
+      && wC.status === 200 && cWC.body.stream === undefined && cWC.body.stream_options === undefined && wC.json.status === 'completed' && same(wC.json.output.map((o) => o.type), ['message', 'function_call']) && wC.json.output[0].content[0].text === 'Let me check' && wC.json.output[1].call_id === 'call_r580' && wC.json.usage.input_tokens === 30 && wC.json.usage.input_tokens_details.cached_tokens === 10 && wC.json.usage.output_tokens === 8
+      && tW.status === 200 && same(cT.body.messages.slice(-2), [{ role: 'assistant', content: null, tool_calls: [{ id: 'call_r580', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Zürich"}' } }] }, { role: 'tool', tool_call_id: 'call_r580', content: 'forty-two' }]) && tW.json.output[0].content[0].text === 'R580 final: forty-two'
+      && tS.status === 200 && numbered(tFr) && tFr.filter((f) => f.ev === 'response.output_text.delta').map((f) => f.d.delta).join('') === 'R580 final: forty-two' && (tFr.find((f) => f.ev === 'response.output_text.done') || { d: {} }).d.text === 'R580 final: forty-two' && tFr[tFr.length - 1].ev === 'response.completed'
+      && maxW.status === 200 && maxW.json.status === 'incomplete' && same(maxW.json.incomplete_details, { reason: 'max_output_tokens' }) && maxW.json.output[0].content[0].text === 'Hello wörld'
+      && numbered(mFr) && mFr[mFr.length - 1].ev === 'response.incomplete' && mFr[mFr.length - 1].d.response.status === 'incomplete' && !mFr.some((f) => f.ev === 'response.completed')
+      && lFr[lFr.length - 1].ev === 'response.completed' && lFr[lFr.length - 1].d.response.output[0].content[0].text === 'Hello wörld',
+      `anthropic ${wA.status} ${wA.text.slice(0, 300)}; chat ${wC.status} ${wC.text.slice(0, 200)}; trip ${tW.status} ${tW.text.slice(0, 150)} stream ${tFr.map((f) => f.ev).slice(-3)}; max ${maxW.status} ${maxW.text.slice(0, 160)} stream ${mFr.map((f) => f.ev).slice(-2)}; end ${lFr.map((f) => f.ev).slice(-1)}`);
+
+    // R590: usage to the ledger, the key's counters and the day roll-up; GET /api/apikey/usage (the caller's own keys only); the page
+    const kUse = await mk({ label: 'r586 usage', providers: [pAnt.id, pNat.id] }), a0 = await by('anthropic'), o0 = await by('openai');
+    const u1 = await g('/v1/responses', kUse.key, codexReq('claude-r586')), u2 = await g('/v1/responses', kUse.key, { ...natReq, stream: false }), u3 = await g('/v1/responses', kUse.key, { ...natReq, stream: true });
+    await sleep(300); // the stream's usage is noted when its pump ends
+    const a1 = await by('anthropic'), o1 = await by('openai'), rec = keyRec(kUse.id);
+    const today = new Date().toISOString().slice(0, 10), rollFile = path.join(SB, 'profiles', 't-admin', 'apikey-usage.json');
+    let roll = {}; try { roll = JSON.parse(fs.readFileSync(rollFile, 'utf8')); } catch {}
+    const rDay = ((roll[kUse.id] || {})[today]) || {}, rModels = rDay.models || {};
+    const view = (await call('/api/apikey/usage?days=30', A)).data || {}, v7 = (await call('/api/apikey/usage?days=7', A)).data || {};
+    const vk = (view.keys || []).find((k) => k.id === kUse.id) || {}, vDay = (vk.byDay || [])[(vk.byDay || []).length - 1] || {};
+    const kUser = await mk({ label: 'r586 t-user key' }, U), viewU = (await call('/api/apikey/usage', U)).data || {}, adminIds = (view.keys || []).map((k) => k.id);
+    const modelOf = (m, p) => (vk.byModel || []).find((x) => x.model === m && x.provider === p) || {};
+    // the page: the Usage toggle beside each key and the usage panel's code on a plain element stand-in
+    const page = await (await fetch(H + '/')).text(), sp = {};
+    try {
+      const mkEl = (tag) => { const e = { tag, children: [], text: '', className: '', attrs: {}, style: {}, title: '', append(...xs) { for (const x of xs) this.children.push(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); }, setAttribute(k, v) { this.attrs[k] = v; } }; Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } }); return e; };
+      const all = (e, f, out = []) => { if (f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
+      const src = (page.match(/\n(function renderApiUsage\([\s\S]*?\n\})/) || [])[1] || '';
+      const ctx = { document: { createElement: mkEl }, providerList: [{ id: pAnt.id, label: 'R586 Anthropic' }], Math, Number };
+      require('vm').runInNewContext(src + '\nthis.renderApiUsage = renderApiUsage;', ctx);
+      const panel = mkEl('div'); ctx.renderApiUsage(panel, vk, 30);
+      const bars = all(panel, (e) => e.className === 'apiBar'), heights = bars.map((b) => b.children[0].style.height);
+      sp.bars = bars.length === 30 && heights[29] === '100%' && heights.slice(0, 29).every((h) => h === '0%') && /calls/.test(bars[29].title) && bars[29].title.startsWith(today);
+      sp.totals = /Last 30 days: 3 calls/.test(panel.textContent) && /R586 Anthropic/.test(panel.textContent) && /claude-r586/.test(panel.textContent) && /m-r586-native/.test(panel.textContent);
+      const empty = mkEl('div'); ctx.renderApiUsage(empty, undefined, 30); sp.empty = /No usage recorded/.test(empty.textContent);
+    } catch (e) { sp.err = e.message; }
+    sp.toggle = /function renderApiUsage/.test(page) && /\/api\/apikey\/usage\?days=30/.test(page) && /<use href="#i-chart"\/><\/svg>'; ub\.append\(' Usage'\)/.test(page) && /<symbol id="i-chart"/.test(page) && /aria-expanded/.test(page);
+    const cxNote = (await (await fetch(H + '/apisetup.js')).text()); sp.codex = /wire_api = "responses"/.test(cxNote) && !/comes later/.test(cxNote);
+    check('R590', 'the usage of /v1/responses lands where it belongs and the person sees it per key: an Anthropic stream (28 in with 5 cached and 2 written, 17 out) and two native answers (100 in with 40 cached, 7 out each) add to the answer ledger (anthropic +1 turn, openai +2), to the key\'s counters (3 calls, 228 tokens in, 31 out) and to a new day roll-up in the person\'s profile folder (today: 3 calls, the same tokens, per provider and model); GET /api/apikey/usage?days=30 gives each of the caller\'s own keys with its totals, 30 days oldest first ending today and the calls and tokens per model and provider (days=7 gives 7), and never another person\'s keys; the page has a Usage toggle (SVG icon) beside each key whose panel shows the period\'s totals, one plain bar per day and the models; the Codex setup says wire_api = "responses"',
+      u1.status === 200 && u2.status === 200 && u3.status === 200 && a1.turns - a0.turns === 1 && a1.input - a0.input === 21 && a1.cached - a0.cached === 5 && a1.written - a0.written === 2 && a1.output - a0.output === 17 && o1.turns - o0.turns === 2 && o1.input - o0.input === 120 && o1.cached - o0.cached === 80 && o1.output - o0.output === 14
+      && rec.calls === 3 && rec.tokensIn === 228 && rec.tokensOut === 31
+      && rDay.calls === 3 && rDay.tokensIn === 228 && rDay.tokensOut === 31 && same(rModels[pAnt.id + ' claude-r586'], { provider: pAnt.id, model: 'claude-r586', calls: 1, tokensIn: 28, tokensOut: 17 }) && same(rModels[pNat.id + ' m-r586-native'], { provider: pNat.id, model: 'm-r586-native', calls: 2, tokensIn: 200, tokensOut: 14 })
+      && view.days === 30 && view.to === today && vk.label === 'r586 usage' && vk.calls === 3 && vk.tokensIn === 228 && (vk.byDay || []).length === 30 && vDay.day === today && vDay.calls === 3 && vDay.tokensIn === 228 && vk.period.calls === 3
+      && same(vk.byModel.map((m) => m.model), ['m-r586-native', 'claude-r586']) && modelOf('claude-r586', pAnt.id).tokensOut === 17 && modelOf('m-r586-native', pNat.id).calls === 2
+      && (v7.keys || []).every((k) => k.byDay.length === 7) && adminIds.includes(kAll.id) && !adminIds.includes(kUser.id) && (viewU.keys || []).some((k) => k.id === kUser.id) && !(viewU.keys || []).some((k) => adminIds.includes(k.id) && k.id !== 'default')
+      && Object.values(sp).every((x) => x === true),
+      `ledger anthropic +${a1.turns - a0.turns} in ${a1.input - a0.input} cached ${a1.cached - a0.cached} written ${a1.written - a0.written} out ${a1.output - a0.output}; openai +${o1.turns - o0.turns} in ${o1.input - o0.input} cached ${o1.cached - o0.cached} out ${o1.output - o0.output}; key ${JSON.stringify({ calls: rec.calls, in: rec.tokensIn, out: rec.tokensOut })}; roll ${JSON.stringify(rDay).slice(0, 400)}; view ${JSON.stringify(vk).slice(0, 300)} days ${view.days}/${view.to}; user keys ${(viewU.keys || []).map((k) => k.id)}; page ${JSON.stringify(sp)}`);
+
+    for (const k of [kAll, kCx, kRelay, kOne, kUse]) await call('/api/apikey/revoke', A, { id: k.id });
+    await call('/api/apikey/revoke', U, { id: kUser.id });
+    for (const p of [pChat, pNat, pAnt]) await call('/api/providers/remove', A, { id: p.id });
+  }
+
   // R488 (T-261, Mills' UI for plans/presence.md): what the page shows, driven over HTTP against the scratch hub, and the page's own
   // presence script evaluated in node (its pure helpers: one shape per label, do not disturb, the hover card's lines, nothing on a hub without presence)
   async function r488Check() {
@@ -7270,6 +8312,921 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.counterText === '3 working · 1 needs you | 1 working · 2 need you' && seen.room2 === 'Gee\'s host 3/5, Hub 5/5!' && seen.menu;
     check('R489', R489_LABEL, ok, JSON.stringify(seen));
   }
+  // R591-R592 (T-370, stage 1 of the split routing): an `openrouter` provider of the admin's with an allow-list of model + provider
+  // pairs, shared with the team; only the pairs are offered and routed; every request to OpenRouter carries the pair's model, the
+  // provider routing and the usage flag, the hub's referer and title, through every way in (chat raw, stream, Messages, Responses);
+  // the key is never shown back
+  async function r591Check() {
+    const assert = require('assert'), same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json }; };
+    const mk = async (body, tok = A) => (await call('/api/apikey/create', tok, body)).data;
+    const seenText = []; const note = (r) => { seenText.push(r.text !== undefined ? r.text : JSON.stringify(r.data)); return r; };
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic', 'amazon-bedrock'], allowFallbacks: false }, { id: 'or/qwen', label: 'Qwen', model: 'qwen/qwen3-coder', providers: 'cerebras', allowFallbacks: true }];
+    const add = { kind: 'openrouter', label: 'R591 OpenRouter', apiKey: R591_KEY, pairs, shared: true };
+    const notAdmin = note(await call('/api/providers/add', U, add)), noKey = note(await call('/api/providers/add', A, { ...add, apiKey: '' })), noPairs = note(await call('/api/providers/add', A, { ...add, pairs: [] }));
+    const dupPair = note(await call('/api/providers/add', A, { ...add, pairs: [pairs[0], pairs[0]] })), badId = note(await call('/api/providers/add', A, { ...add, pairs: [{ id: 'has space', model: 'm/x' }] }));
+    const made = note(await call('/api/providers/add', A, add)), pv = made.data.provider || {};
+    const listA = note(await call('/api/providers', A)), listU = note(await call('/api/providers', U)), check1 = note(await call('/api/check', U));
+    const inList = (r) => ((r.data.providers) || []).find((p) => p.id === pv.id) || {};
+    const stored = JSON.parse(fs.readFileSync(path.join(SB, 'providers.json'), 'utf8')).providers.find((p) => p.id === pv.id) || {};
+    const kA = await mk({ label: 'r591 admin', providers: [pv.id] }), kU = await mk({ label: 'r591 teammate' }, U), kOne = await mk({ label: 'r591 one', providers: [pv.id], models: ['or/qwen'] });
+    const ids = (r) => ((r.json && r.json.data) || []).map((m) => m.id).filter((x) => /^or\/|anthropic\/|qwen\//.test(x));
+    const mA = note(await g('/v1/models', kA.key)), mU = note(await g('/v1/models', kU.key)), mOne = note(await g('/v1/models', kOne.key));
+    fakeOr.calls.length = 0;
+    const ask = (key, model, content = 'hi r591') => g('/v1/chat/completions', key, { model, messages: [{ role: 'user', content }] });
+    const okA = note(await ask(kA.key, 'or/sonnet')), okU = note(await ask(kU.key, 'or/qwen'));
+    const rawId = note(await ask(kA.key, 'anthropic/claude-sonnet-4.5')), other = note(await ask(kA.key, 'openai/gpt-5')), oneNo = note(await ask(kOne.key, 'or/sonnet'));
+    const upd = note(await call('/api/providers/update', A, { id: pv.id, apiKey: R591_KEY, pairs: [pairs[0], { id: 'or/glm', model: 'z-ai/glm-4.6', providers: ['z-ai'] }] }));
+    const mA2 = note(await g('/v1/models', kA.key)), updNotAdmin = await call('/api/providers/update', U, { id: pv.id, pairs: [pairs[1]] });
+    const storedAfter = JSON.parse(fs.readFileSync(path.join(SB, 'providers.json'), 'utf8')).providers.find((p) => p.id === pv.id) || {};
+    check('R591', 'an admin adds an OpenRouter provider (a non-admin, a missing key, no pairs, a pair twice and a bad pair id are refused) with the team key and an allow-list of model + provider pairs, shared with the team; only the pairs are offered (/v1/models lists the pair ids and nothing of OpenRouter\'s catalogue, a key limited to one pair sees one) and only they are routed (a raw OpenRouter model id, another model and a pair the key may not use get a plain 404 and OpenRouter is never asked); the pairs are editable by the admin alone; the key is stored but never shown back (not by the add, the update, the provider lists or the page check)',
+      notAdmin.status === 400 && noKey.status === 400 && noPairs.status === 400 && dupPair.status === 400 && badId.status === 400
+      && made.status === 200 && pv.kind === 'openrouter' && pv.hasKey === true && pv.shared === true && same(pv.models, ['or/sonnet', 'or/qwen']) && pv.baseUrl === 'https://openrouter.ai/api/v1' && pv.pairs.length === 2 && pv.pairs[1].providers.join() === 'cerebras' && pv.pairs[1].allowFallbacks === true && pv.pairs[0].allowFallbacks === false
+      && inList(listA).kind === 'openrouter' && inList(listU).kind === 'openrouter' && inList(check1).kind === 'openrouter' && same(inList(listU).models, ['or/sonnet', 'or/qwen'])
+      && stored.apiKey === R591_KEY && seenText.every((t) => !t.includes(R591_KEY)) && !JSON.stringify(inList(listU)).includes('apiKey')
+      && same(ids(mA), ['or/sonnet', 'or/qwen']) && same(ids(mU), ['or/sonnet', 'or/qwen']) && same(ids(mOne), ['or/qwen']) && mA.json.data[0].owned_by === 'R591 OpenRouter'
+      && okA.status === 200 && okU.status === 200 && rawId.status === 404 && other.status === 404 && oneNo.status === 404 && fakeOr.calls.length === 2
+      && upd.status === 200 && same(upd.data.provider.models, ['or/sonnet', 'or/glm']) && same(ids(mA2), ['or/sonnet', 'or/glm']) && updNotAdmin.status === 400 && storedAfter.apiKey === R591_KEY && storedAfter.pairs.length === 2,
+      `refused ${notAdmin.status}/${noKey.status}/${noPairs.status}/${dupPair.status}/${badId.status}; made ${made.status} ${JSON.stringify(pv).slice(0, 160)}; models ${ids(mA)} / ${ids(mU)} / ${ids(mOne)}; asks ${okA.status}/${okU.status}/${rawId.status}/${other.status}/${oneNo.status} calls ${fakeOr.calls.length}; update ${upd.status} ${ids(mA2)}`);
+
+    // R592: the request OpenRouter gets, whichever way it came in
+    await call('/api/providers/update', A, { id: pv.id, pairs });
+    fakeOr.calls.length = 0;
+    const c1 = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', temperature: 0.2, messages: [{ role: 'user', content: 'whole r592' }] })), f1 = fakeOr.calls[0] || { body: {}, headers: {} };
+    const c2 = note(await g('/v1/chat/completions', kA.key, { model: 'or/qwen', stream: true, messages: [{ role: 'user', content: 'stream r592' }] })), f2 = fakeOr.calls[1] || { body: {}, headers: {} };
+    const c3 = note(await g('/v1/messages', kA.key, { model: 'or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'messages r592' }] }, { 'anthropic-version': '2023-06-01' })), f3 = fakeOr.calls[2] || { body: {}, headers: {} };
+    const c4 = note(await g('/v1/responses', kA.key, { model: 'or/qwen', input: 'responses r592' })), f4 = fakeOr.calls[3] || { body: {}, headers: {} };
+    const c5 = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'tools r592' }], tools: [{ type: 'function', function: { name: 'f', parameters: { type: 'object' } } }] })), f5 = fakeOr.calls[4] || { body: {}, headers: {} };
+    const sonnetRoute = (f) => f.body.model === 'anthropic/claude-sonnet-4.5' && same(f.body.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && same(f.body.usage, { include: true });
+    const qwenRoute = (f) => f.body.model === 'qwen/qwen3-coder' && same(f.body.provider, { allow_fallbacks: true, order: ['cerebras'] }) && same(f.body.usage, { include: true });
+    const hdr = (f) => f.headers.authorization === 'Bearer ' + R591_KEY && f.headers['x-title'] === 'VibeRoller' && /^https?:\/\//.test(f.headers['http-referer'] || '') && String(f.headers['content-type']).split(',').length === 1;
+    const streamUsage = c2.text.split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6))).find((e) => e.usage) || {};
+    check('R592', 'every request to OpenRouter carries what the pair says, whichever way it came in: a chat request (whole, streamed with the usage chunk on to the caller, with tools and the caller\'s own fields intact), a Messages request and a Responses request (both translated) all go with the pair\'s OpenRouter model id (never the pair id), provider { order, allow_fallbacks } from the pair, usage { include: true }, the team key as the bearer and the hub\'s HTTP-Referer and X-Title; the answers come back in the caller\'s shape and never carry the key',
+      c1.status === 200 && sonnetRoute(f1) && hdr(f1) && f1.body.temperature === 0.2 && /or says: whole r592/.test(c1.json.choices[0].message.content) && c1.json.usage.cost === 0.01
+      && c2.status === 200 && qwenRoute(f2) && hdr(f2) && /or says: stream r592/.test(c2.text) && streamUsage.usage && streamUsage.usage.total_tokens === 25 && /\[DONE\]/.test(c2.text)
+      && c3.status === 200 && c3.json.type === 'message' && sonnetRoute(f3) && hdr(f3) && /or says: messages r592/.test(c3.json.content[0].text)
+      && c4.status === 200 && c4.json.object === 'response' && qwenRoute(f4) && hdr(f4) && JSON.stringify(c4.json).includes('or says: responses r592')
+      && c5.status === 200 && sonnetRoute(f5) && f5.body.tools && f5.body.tools[0].function.name === 'f'
+      && seenText.every((t) => !t.includes(R591_KEY)),
+      `chat ${c1.status} ${JSON.stringify(f1.body.provider)} ${f1.body.model}; stream ${c2.status} ${JSON.stringify(f2.body.provider)}; messages ${c3.status} ${JSON.stringify(f3.body.provider)}; responses ${c4.status} ${JSON.stringify(f4.body.provider)}; tools ${c5.status}; headers ${JSON.stringify(f1.headers).slice(0, 200)}`);
+    // R593: the month budget counts the cost OpenRouter reports in each answer (usage.cost), stream or not, whichever way it came in
+    const bud = async (tok = U) => (await call('/api/openrouter/budget', tok)).data;
+    const settle = async (n, tok = U) => { let b = await bud(tok); for (let i = 0; i < 40 && b.calls < n; i++) { await sleep(100); b = await bud(tok); } return b; };
+    const b0 = await bud(), file0 = () => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'profiles', 't-user', 'openrouter.json'), 'utf8')); } catch { return {}; } };
+    note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'cost whole COST=0.5' }] }));
+    note(await g('/v1/chat/completions', kU.key, { model: 'or/qwen', stream: true, messages: [{ role: 'user', content: 'cost stream COST=0.25' }] }));
+    note(await g('/v1/messages', kU.key, { model: 'or/sonnet', max_tokens: 20, stream: true, messages: [{ role: 'user', content: 'cost messages COST=0.125' }] }, { 'anthropic-version': '2023-06-01' }));
+    note(await g('/v1/responses', kU.key, { model: 'or/qwen', input: 'cost responses COST=0.0625' }));
+    const b1 = await settle(b0.calls + 4), fileMonth = (file0().months || {})[b1.month] || {};
+    const adminBefore = await bud(A);
+    check('R593', 'the month budget is counted from the cost OpenRouter reports in each answer (usage.cost, asked for with usage { include: true }), whole or streamed, through a chat request, a streamed Messages request and a Responses request: four answers of 0.5, 0.25, 0.125 and 0.0625 USD make 0.9375 USD in 4 calls this month for the person who asked and nothing for anyone else; GET /api/openrouter/budget shows the person\'s month, cap (20 USD by default), what is left and when it resets (the first of next month, UTC); it is kept in the person\'s profile folder, add-only',
+      b0.spentUsd < 0.05 && b0.capUsd === 20 && b0.ownCap === false && /^\d{4}-\d{2}$/.test(b0.month) && b1.calls === b0.calls + 4 && Math.abs(b1.spentUsd - b0.spentUsd - 0.9375) < 1e-9 && b1.leftUsd > 19 && b1.over === false
+      && /^\d{4}-\d{2}-01T00:00:00Z$/.test(b1.resetsAt) && b1.resetsAt.slice(0, 7) > b1.month && Math.abs(fileMonth.usd - b1.spentUsd) < 1e-9 && fileMonth.calls === b1.calls && adminBefore.calls <= 6 && adminBefore.spentUsd < 0.2,
+      `before ${JSON.stringify(b0)}; after ${JSON.stringify(b1)}; file ${JSON.stringify(fileMonth)}; admin ${JSON.stringify(adminBefore)}`);
+
+    // R594: at the cap the next request is refused in plain words in the caller's shape; an admin sets a person's own cap and sees everyone's month
+    const capNotAdmin = await call('/api/openrouter/budget/cap', U, { username: 't-user', capUsd: 1000 }), allNotAdmin = await call('/api/openrouter/budget/all', U);
+    const capBad = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: -3 }), capNobody = await call('/api/openrouter/budget/cap', A, { username: 'nobody-here', capUsd: 3 });
+    const capSet = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 1 });
+    const mid = await bud();
+    fakeOr.calls.length = 0;
+    const lastOne = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'last one COST=0.1' }] }));
+    const atCap = await settle(b1.calls + 1);
+    const calls0 = fakeOr.calls.length;
+    const rChat = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'refused chat' }] }));
+    const rStream = note(await g('/v1/chat/completions', kU.key, { model: 'or/qwen', stream: true, messages: [{ role: 'user', content: 'refused stream' }] }));
+    const rAnt = note(await g('/v1/messages', kU.key, { model: 'or/sonnet', max_tokens: 5, messages: [{ role: 'user', content: 'refused messages' }] }, { 'anthropic-version': '2023-06-01' }));
+    const rResp = note(await g('/v1/responses', kU.key, { model: 'or/sonnet', input: 'refused responses' }));
+    const adminOk = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'admin still fine' }] }));
+    const callsRef = fakeOr.calls.length; // the refused ones never reached OpenRouter: only the admin request did
+    const all = (await call('/api/openrouter/budget/all', A)).data, mine = (all.people || []).find((p) => p.username === 't-user') || {}, adm = (all.people || []).find((p) => p.username === 't-admin') || {};
+    const capUp = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 5 }), again = note(await g('/v1/chat/completions', kU.key, { model: 'or/qwen', messages: [{ role: 'user', content: 'raised cap' }] }));
+    const capDefault = await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: null }), after = await bud();
+    const msg = (r) => (r.json && (r.json.error && r.json.error.message)) || '';
+    check('R594', 'at or over the month cap the next request is refused before OpenRouter is asked (429 with the cap, what was spent and the date it resets, in the caller\'s own shape: OpenAI error, Anthropic error, and Responses), streamed requests too, while another person goes on; an admin sets a person\'s own cap (not a non-admin, not a negative number or an unknown account) and sees everyone\'s month with their caps (a non-admin does not); raising the cap lets the person go on, and null gives the default back',
+      capNotAdmin.status === 403 && allNotAdmin.status === 403 && capBad.status === 400 && capNobody.status === 400 && capSet.status === 200 && mid.capUsd === 1 && mid.ownCap === true && mid.over === false
+      && lastOne.status === 200 && atCap.over === true && Math.abs(atCap.spentUsd - b1.spentUsd - 0.1) < 1e-9 && calls0 === 1
+      && rChat.status === 429 && /\d\.\d\d of 1\.00 USD/.test(msg(rChat)) && /resets on \d{4}-\d{2}-01/.test(msg(rChat)) && /budget/i.test(msg(rChat))
+      && rStream.status === 429 && !/^data:/.test(rStream.text) && rAnt.status === 429 && rAnt.json.type === 'error' && rAnt.json.error.type === 'rate_limit_error' && /\d\.\d\d of 1\.00 USD/.test(rAnt.json.error.message)
+      && rResp.status === 429 && /resets on/.test(msg(rResp)) && callsRef === calls0 + 1 && adminOk.status === 200
+      && all.defaultCapUsd === 20 && mine.capUsd === 1 && mine.ownCap === true && Math.abs(mine.spentUsd - atCap.spentUsd) < 1e-9 && mine.over === true && adm.over === false && adm.ownCap === false
+      && capUp.status === 200 && again.status === 200 && capDefault.status === 200 && after.capUsd === 20 && after.ownCap === false && after.over === false,
+      `caps ${capNotAdmin.status}/${allNotAdmin.status}/${capBad.status}/${capNobody.status}/${capSet.status}; at cap ${JSON.stringify(atCap)}; refused ${rChat.status} "${msg(rChat).slice(0, 160)}" stream ${rStream.status} ant ${rAnt.status} resp ${rResp.status}; fake calls ${fakeOr.calls.length}; all ${JSON.stringify(mine)} ${JSON.stringify(adm)}; raised ${again.status}; default ${JSON.stringify(after)}`);
+    // R595-R598 (stage 3, the router): the engine follows the provider. An OpenRouter session runs Jcode PGM on the server (the fake
+    // jcodepgm, config jcode.command) in the session's worktree; the hub's per-run relay stands between it and OpenRouter
+    const nodeOnline = async () => ((await call('/api/check', A)).data.aiNodes || []).some((h) => h.id === 'test-node' && h.online);
+    const waitNode = async (want) => { for (let i = 0; i < 80 && (await nodeOnline()) !== want; i++) await sleep(250); return (await nodeOnline()) === want; };
+    const kinds = (evs) => ({ info: evs.filter((e) => e.type === 'bridge_info').map((e) => e.text).join(' | '), init: evs.find((e) => e.type === 'system' && e.subtype === 'init') || {}, res: evs.find((e) => e.type === 'result') || {}, done: evs.find((e) => e.type === 'bridge_done') || {}, err: evs.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ') });
+    const pickOr = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    fakeOr.calls.length = 0;
+    const a0 = await bud(A);
+    const run1 = await chat(A, 'hello ORCALL MCP TOOL', { fresh: true }), t1 = texts(run1.events), k1 = kinds(run1.events);
+    const orCall = fakeOr.calls[0] || { body: {}, headers: {} };
+    const base1 = (/or\[base=(\S+) /.exec(t1) || [])[1] || '';
+    const toolUse = run1.events.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.name === 'bash')), toolRes = run1.events.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.tool_use_id === 't1'));
+    const a1 = await settle(a0.calls + 1, A);
+    const late = base1 ? await fetch(base1 + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'x', messages: [{ role: 'user', content: 'late' }] }) }) : { status: 0 };
+    const stray = await fetch(H + '/or-relay/' + '0'.repeat(48) + '/chat/completions', { method: 'POST', body: '{}' }), noTok = await fetch(H + '/or-relay/chat/completions', { method: 'POST', body: '{}' });
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: 0 });
+    const run2 = await chat(A, 'refused at the cap', { fresh: true }), k2 = kinds(run2.events);
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: null });
+    check('R595', 'a Work session whose provider is an OpenRouter one runs Jcode PGM on the server instead of Claude Code (jcode.command = the fake jcodepgm): `run --ndjson` in the session\'s own worktree with the pair\'s OpenRouter model (-m) and `-p openrouter`, its events reach the page stream in the usual shape (init, tool use and result, text, result, bridge_done 0), the team tools answer through its mcp.json; the hub\'s OpenRouter key is NOT in its command line or environment (a dummy key and a per-run relay address are), the pair\'s provider order and fallback switch are in its environment and pgm-proxy\'s shared pool is off; its model call through the relay reaches OpenRouter with the pair\'s model and routing, the usage flag and the real key, and is counted in the person\'s month; the relay is for that run only (gone when it ends, nothing for a stray or missing token); at the month cap the session is refused in plain words before anything runs',
+      pickOr.status === 200 && k1.init.harness === 'jcode' && /^fakej-/.test(k1.init.session_id || '') && /jcode-answer model=anthropic\/claude-sonnet-4\.5 provider=openrouter cwd=.*worktrees[\\/]t-admin/.test(t1) && /resume=no/.test(t1) && /overlay:yes/.test(t1) && /MCP:\{"ok":true/.test(t1)
+      && /^http:\/\/127\.0\.0\.1:\d+\/or-relay\/[0-9a-f]{48}$/.test(base1) && /key=viberoller-relay /.test(t1) && /order=anthropic,amazon-bedrock fallbacks=false shared=off leak=false/.test(t1) && /argv=.*run --ndjson --no-update -p openrouter -m anthropic\/claude-sonnet-4\.5 /.test(t1) && !t1.includes(R591_KEY)
+      && /orcall=200:or says: hello ORCALL/.test(t1) && orCall.body.model === 'anthropic/claude-sonnet-4.5' && same(orCall.body.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && same(orCall.body.usage, { include: true }) && orCall.headers.authorization === 'Bearer ' + R591_KEY && fakeOr.calls.length === 1
+      && toolUse && toolRes && k1.res.is_error === false && k1.res.harness === 'jcode' && k1.done.code === 0 && /Using Jcode PGM \(OpenRouter · Sonnet\)/.test(k1.info)
+      && a1.calls === a0.calls + 1 && Math.abs(a1.spentUsd - a0.spentUsd - 0.01) < 1e-9
+      && late.status === 401 && stray.status === 401 && noTok.status === 401
+      && k2.err && /budget/i.test(k2.err) && !k2.init.harness && fakeOr.calls.length === 1,
+      `pick ${pickOr.status}; init ${JSON.stringify(k1.init).slice(0, 100)}; text "${t1.slice(0, 420)}"; call ${JSON.stringify(orCall.body.provider)} ${orCall.body.model}; events ${toolUse}/${toolRes} ${k1.res.is_error} code ${k1.done.code}; info "${k1.info}"; month ${JSON.stringify(a0)} -> ${a1.spentUsd}/${a1.calls}; relay after ${late.status}/${stray.status}/${noTok.status}; capped "${k2.err.slice(0, 100)}"`);
+
+    // R596: Stop ends the run (the process dies, the session is free again); a Claude provider of an AI host still runs Claude Code
+    await call('/api/model', A, { provider: pv.id, model: 'or/qwen' });
+    const slow = chat(A, 'SLOW stop me r596'); await sleep(1500);
+    const tStop = Date.now(), stopped = await call('/api/stop', A, {}), rs = await slow, ks = kinds(rs.events), took = Date.now() - tStop;
+    const next596 = await chat(A, 'free again r596'), ka = kinds(next596.events), ta = texts(next596.events);
+    startAiNode(); const up1 = await waitNode(true);
+    const pickCl = await call('/api/model', A, { provider: 'h:test-node/claude', model: 'claude-haiku-5-5' });
+    const callsBefore = fakeOr.calls.length;
+    const runCl = await chat(A, 'claude path r596', { fresh: true }), kc = kinds(runCl.events), tc = texts(runCl.events);
+    check('R596', 'Stop works on an OpenRouter session (the jcodepgm process is killed, the run ends without a result and not with 0, and the session takes the next message at once); the router follows the provider: a Claude provider of an AI host runs Claude Code exactly as before (the relayed run here, its model call through the host, no jcode, no OpenRouter), the OpenRouter pair runs Jcode PGM',
+      stopped.status === 200 && ks.done.code !== 0 && !ks.res.type && took < 3000 && next596.status === 200 && ka.done.code === 0 && /jcode-answer model=qwen\/qwen3-coder provider=openrouter/.test(ta)
+      && up1 && pickCl.status === 200 && /echo: claude path r596/.test(tc) && /relay=200:upstream ok/.test(tc) && !/jcode-answer/.test(tc) && kc.init.harness !== 'jcode' && /work happens here on the server/.test(kc.info) && fakeOr.calls.length === callsBefore,
+      `stop ${stopped.status} code ${JSON.stringify(ks.done.code)} result ${!!ks.res.type} took ${took}ms; next "${ta.slice(0, 80)}" ${ka.done.code}; node ${up1}; claude pick ${pickCl.status} "${tc.slice(0, 160)}" info "${kc.info}"; or calls ${fakeOr.calls.length}/${callsBefore}`);
+
+    // R597: the opt-in fallback: Claude's host is offline, the person said "use OpenRouter then", the run uses the pair and says so
+    const fb0 = (await bud(A)).fallback;
+    const fbBadPair = await call('/api/openrouter/fallback', A, { on: true, provider: pv.id, pair: 'no/such' }), fbBadProv = await call('/api/openrouter/fallback', A, { on: true, provider: 'host', pair: 'or/qwen' });
+    stopAiNode(); const down = await waitNode(false);
+    const offRun = await chat(A, 'host is down, fallback off', { fresh: true }), ko = kinds(offRun.events);
+    const fbSet = await call('/api/openrouter/fallback', A, { on: true, provider: pv.id, pair: 'or/qwen' });
+    fakeOr.calls.length = 0;
+    const fbRun = await chat(A, 'host is down, fallback on ORCALL', { fresh: true }), kf = kinds(fbRun.events), tf = texts(fbRun.events);
+    const fbCall = fakeOr.calls[0] || { body: {}, headers: {} };
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: 0 });
+    const fbCap = await chat(A, 'fallback but over the cap', { fresh: true }), kcap = kinds(fbCap.events);
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: null });
+    startAiNode(); const up2 = await waitNode(true);
+    const backRun = await chat(A, 'host is back r597', { fresh: true }), kb = kinds(backRun.events), tb = texts(backRun.events);
+    const fbOffOk = await call('/api/openrouter/fallback', A, { on: false }), fbEnd = (await bud(A)).fallback;
+    check('R597', 'the opt-in fallback: off by default (the setting is { on: false }); a pair of an OpenRouter provider the person may use is required (an unknown pair or a provider that is not OpenRouter is refused); with the AI host offline and the fallback off the session is refused as before ("is offline right now"); with it on the same message runs through Jcode PGM on the server with the chosen pair (its OpenRouter model, routing and key at OpenRouter) and the transcript says so in one line naming the host and the pair; at the month cap there is no fallback (the plain offline refusal stands, nothing is spent); with the host back the session runs Claude Code again',
+      fb0.on === false && fbBadPair.status === 400 && fbBadProv.status === 400 && down
+      && /is offline right now/.test(ko.err) && !ko.init.harness
+      && fbSet.status === 200 && fbSet.data.fallback.on === true && fbSet.data.fallback.pair === 'or/qwen'
+      && kf.init.harness === 'jcode' && /jcode-answer model=qwen\/qwen3-coder provider=openrouter/.test(tf) && /orcall=200:or says: host is down, fallback on ORCALL/.test(tf)
+      && kf.info.split(' | ').filter((l) => /^Claude \(test-node\) is offline, so this run uses OpenRouter \(Qwen\) through Jcode PGM on the server/.test(l)).length === 1
+      && fbCall.body.model === 'qwen/qwen3-coder' && same(fbCall.body.provider, { allow_fallbacks: true, order: ['cerebras'] }) && fbCall.headers.authorization === 'Bearer ' + R591_KEY
+      && /is offline right now/.test(kcap.err) && !kcap.init.harness
+      && up2 && /echo: host is back r597/.test(tb) && !/jcode-answer/.test(tb) && fbOffOk.status === 200 && fbEnd.on === false,
+      `default ${JSON.stringify(fb0)}; bad ${fbBadPair.status}/${fbBadProv.status}; down ${down}; off "${ko.err.slice(0, 90)}"; on ${fbSet.status}; run "${tf.slice(0, 120)}" info "${kf.info.slice(0, 200)}"; call ${fbCall.body.model}; capped "${kcap.err.slice(0, 80)}"; back ${up2} "${tb.slice(0, 60)}"; end ${JSON.stringify(fbEnd)}`);
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+
+    // R598: jcode.command empty (or not there) = an OpenRouter model is not offered for Work, and the page says why; the API still serves it
+    const cfgFile = path.join(SB, 'config.json'), cfgOrig = fs.readFileSync(cfgFile, 'utf8');
+    const setJcode = (j) => { const c = JSON.parse(cfgOrig); if (j === undefined) delete c.jcode; else c.jcode = j; fs.writeFileSync(cfgFile, JSON.stringify(c, null, 2)); };
+    const workOffOf = async () => ((await call('/api/providers', A)).data.providers.find((p) => p.id === pv.id) || {}).workOff;
+    const onNow = { pick: (await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' })).status, off: await workOffOf() };
+    setJcode({ command: '' });
+    const emptyOff = await workOffOf(), emptyPick = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    const emptyRun = await chat(A, 'no jcode here', { fresh: true }), ke = kinds(emptyRun.events);
+    const emptyApi = await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'api still serves r598' }] });
+    setJcode({ command: '/nonexistent/jcodepgm' });
+    const goneOff = await workOffOf(), gonePick = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    setJcode(undefined);
+    const noneOff = await workOffOf();
+    fs.writeFileSync(cfgFile, cfgOrig);
+    const backOff = await workOffOf(), backPick = await call('/api/model', A, { provider: pv.id, model: 'or/sonnet' });
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    check('R598', 'with jcode.command empty, missing from the config or pointing at nothing, an OpenRouter model is not offered for Work and says why in plain words (the provider list carries workOff with the reason, picking it is a 400 with the same reason, a session already on it is refused with it before anything starts), while the same pair still answers through the API; setting the command again (no restart) offers it again',
+      onNow.pick === 200 && onNow.off === undefined
+      && /jcode\.command/.test(emptyOff || '') && /Jcode PGM/.test(emptyOff || '') && emptyPick.status === 400 && emptyPick.data.error === emptyOff && /jcode\.command/.test(ke.err) && !ke.init.harness && emptyApi.status === 200
+      && /\/nonexistent\/jcodepgm/.test(goneOff || '') && /not there/.test(goneOff || '') && gonePick.status === 400 && /jcode\.command/.test(noneOff || '') && backOff === undefined && backPick.status === 200,
+      `on ${JSON.stringify(onNow)}; empty "${(emptyOff || '').slice(0, 100)}" pick ${emptyPick.status} run "${ke.err.slice(0, 80)}" api ${emptyApi.status}; gone "${(goneOff || '').slice(0, 80)}" ${gonePick.status}; none ${!!noneOff}; back ${backOff} ${backPick.status}`);
+    // R599: the page: the provider form for an admin (key field and the pairs editor), the Work picker's two groups, the budget box
+    const pageOr = await (await fetch(H + '/')).text();
+    const blkPick = pageOr.slice(pageOr.indexOf('function showModels(d)'), pageOr.indexOf('// The project picker (Work header)'));
+    const blkOr = pageOr.slice(pageOr.indexOf('function pairsEditor('), pageOr.indexOf('// ── AI Admin → My AIs: providers'));
+    const aiAdm = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'); // T-379: the team's OpenRouter is AI Admin → Global
+    const blkProv = pageOr.slice(pageOr.indexOf('async function renderProviders()'), pageOr.indexOf('function sysSettings('));
+    const orIcons = (blkOr + blkProv).match(/href="#(i-[a-z-]+)"/g) || [], symbols = pageOr.match(/<symbol id="(i-[a-z-]+)"/g) || [];
+    check('R599', 'the page: AI Admin → Global → Team OpenRouter (Settings → My AIs before T-379) offers the OpenRouter kind (the key field, a pairs editor with id, label, OpenRouter model, provider order and allow-fallbacks per row, add and remove a pair; the owner can edit the pairs and replace the key later, the key is never filled back in); the Work AI picker shows two kinds of group, "Claude (<host>)" and "OpenRouter" (a pair shows its label, a provider the server cannot run is greyed with its reason); Settings has an OpenRouter budget box (the month\'s spend against the cap with a meter, the opt-in fallback switch with its pair, and for admins everyone\'s month with a cap field per person); only SVG icons from the page\'s own set, no emoji',
+      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /id="agOrBox"/.test(pageOr) && /kind: 'openrouter', label: label\.value, apiKey: key\.value, pairs: pe\.get\(\)/.test(aiAdm) && /orProviderEditor\(p, renderTeamOr\)/.test(aiAdm) && /pairsEditor\(p\.pairs/.test(blkOr) && /body\.apiKey = nk\.value/.test(blkOr) && !/nk\.value = p/.test(blkOr) && !/'openrouter', 'OpenRouter/.test(blkProv)
+      && /allow fallbacks/.test(blkOr) && /OpenRouter model, e\.g\./.test(blkOr) && /providers in order/.test(blkOr) && /Add a pair/.test(blkOr)
+      && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
+      && /\/api\/openrouter\/budget'\)/.test(blkOr) && /\/api\/openrouter\/fallback/.test(blkOr) && /\/api\/openrouter\/budget\/all/.test(aiAdm) && /\/api\/openrouter\/budget\/cap/.test(aiAdm) && /Use OpenRouter when Claude is unavailable/.test(blkOr) && /'orMeter'/.test(blkOr)
+      && orIcons.length >= 3 && orIcons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blkOr),
+      `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
+    await call('/api/providers/remove', A, { id: pv.id });
+    for (const k of [kA, kU, kOne]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
+  }
+  // R614-R618 (T-375): /transfer driven over HTTP against the fake Claude (the handoff writer answers with what it got) and the fake jcodepgm
+  async function r614Check() {
+    const parse = (t) => { try { return JSON.parse(String(t || '').split('\n\n## From the hub')[0].replace(/^ENHANCED:/, '')); } catch { return {}; } };
+    const mk = async (tok, title, project = 'VibeRoller') => (await call('/api/work/sessions/new', tok, { project, title, background: true })).data;
+    const xfer = (tok, body) => call('/api/work/sessions/transfer', tok, body);
+    const listOf = async (tok) => (await call('/api/work/sessions?archived=1', tok)).data;
+    const byId = (l, id) => (l.sessions || []).find((x) => x.id === id) || {};
+    const setTr = (tok, session, transcript) => call('/api/work/current', tok, { session, transcript });
+    const runEnd = async (tok, sid, run) => { let d = {}; for (let i = 0; i < 80; i++) { d = (await call('/api/work/attach?session=' + sid + '&run=' + encodeURIComponent(run || '') + '&after=0', tok)).data || {}; if (!d.busy) break; await sleep(250); } return d; };
+    const evText = (evs) => texts((evs || []).filter((e) => e.type === 'assistant' && e.message && Array.isArray(e.message.content)));
+    const journalOf = (sid) => { for (const base of [path.join(SB, 'profiles'), SB]) { const dirs = base === SB ? [SB] : (fs.existsSync(base) ? fs.readdirSync(base).map((d) => path.join(base, d)) : []); for (const d of dirs) { const f = path.join(d, 'work-sessions', sid + '.jsonl'); if (fs.existsSync(f)) return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } }); } } return []; };
+    const model0 = (() => { try { return JSON.parse(fs.readFileSync(path.join(SB, 'config.json'), 'utf8')).models[0].id; } catch { return ''; } })();
+    const FIRST = '[transfer from session ';
+    { // R614 + R616: the usual transfer of a Claude session with a project, then what happens to its worktree
+      const seen = {}, seen6 = {};
+      const n = await mk(U, 'r614 dark mode');
+      const folder = (await call('/api/work/folders/new', U, { name: 'r614 folder' })).data.id;
+      await call('/api/work/sessions/move', U, { id: n.id, folder });
+      seen.model = (await call('/api/model', U, { session: n.id, provider: 'host', model: model0 })).status;
+      await chat(U, 'r614 first run', { session: n.id });
+      await setTr(U, n.id, [{ cls: 'me', text: 'r614 goal: a dark mode toggle' }, { cls: 'tool', text: 'Edit  web/r614.css' }, { cls: 'tool', text: 'Read  web/index.html' }, { cls: 'claude', text: 'r614 done: the toggle is in the header' }]);
+      fs.writeFileSync(path.join(n.dir, 'r614-left.txt'), 'uncommitted r614\n');
+      const t = await xfer(U, { session: n.id, focus: 'r614 keep the API part' });
+      const d = t.data || {}, got = parse(d.handoff && d.handoff.text), inp = String(got.input || '');
+      seen.status = t.status; seen.by = d.handoff && d.handoff.by;
+      seen.writer = { writer: got.writer, tools: got.tools, mcp: got.mcp, resume: got.resume, noPersist: got.noPersist };
+      seen.input = { goal: inp.includes('r614 goal: a dark mode toggle'), last: inp.includes('r614 done: the toggle'), left: /\?\? r614-left\.txt/.test(inp), focus: inp.includes('r614 keep the API part'), edited: inp.includes('- web/r614.css'), read: inp.includes('- web/index.html'), branch: inp.includes('Branch: ' + n.branch) };
+      seen.facts = /## From the hub \(exact, at the transfer\)[\s\S]*\?\? r614-left\.txt/.test((d.handoff && d.handoff.text) || '');
+      const l = await listOf(U), o = byId(l, n.id), w = byId(l, d.to);
+      seen.same = { project: w.project === o.project, provider: w.provider === o.provider, model: w.model === o.model && w.model === model0, harness: w.harness === o.harness, tree: !!(w.worktree && w.worktree.path === n.dir) && !!(d.worktree && d.worktree.path === n.dir && d.worktree.kept), title: w.title === 'r614 dark mode (continued)' && d.title === w.title, folder: w.folder === folder };
+      seen.links = { from: w.transferredFrom && w.transferredFrom.id === n.id && w.transferredFrom.title === 'r614 dark mode', to: o.transferredTo && o.transferredTo.id === d.to && o.transferredTo.title === w.title, gave: o.gaveTree === true, current: l.current === d.to };
+      const end = await runEnd(U, d.to, d.run), jl = journalOf(d.to), firstUser = (jl.find((x) => typeof x.user === 'string') || {}).user || '';
+      const cur = (await call('/api/work/current?session=' + d.to, U)).data || {};
+      seen.run = { started: d.started === true && !!d.run, first: firstUser.startsWith(FIRST + 'r614 dark mode · ') && /----- HANDOFF -----/.test(firstUser) && firstUser.includes('confirm in a few lines'), cwd: evText(end.events).includes('cwd=' + n.dir), saved: ((cur.transcript || [])[0] || {}).text === firstUser && (cur.run || {}).id === d.run };
+      check('R614', L614.R614, t.status === 200 && seen.by === 'model' && seen.writer.writer && seen.writer.tools === '' && !seen.writer.mcp && !seen.writer.resume && seen.writer.noPersist && Object.values(seen.input).every(Boolean) && seen.facts
+        && Object.values(seen.same).every(Boolean) && Object.values(seen.links).every(Boolean) && Object.values(seen.run).every(Boolean), JSON.stringify(seen));
+      // R616: the old one runs no more; deleting it leaves the worktree to the new one
+      const again = await chat(U, 'r616 to the old one', { session: n.id });
+      seen6.oldRefused = again.status;
+      const del = await call('/api/work/sessions/delete', U, { id: n.id });
+      seen6.del = del.status; seen6.delTree = del.data.worktree; seen6.left = fs.existsSync(path.join(n.dir, 'r614-left.txt'));
+      const after = await chat(U, 'r616 in the new one', { session: d.to });
+      seen6.newRuns = after.status === 200 && texts(after.events).includes('cwd=' + n.dir);
+      seen6.stillLeft = fs.existsSync(path.join(n.dir, 'r614-left.txt'));
+      const l2 = await listOf(U), w2 = byId(l2, d.to);
+      seen6.linkGone = !!(w2.transferredFrom && w2.transferredFrom.gone === true);
+      const del2 = await call('/api/work/sessions/delete', U, { id: d.to });
+      seen6.del2 = del2.status; seen6.treeGone = !fs.existsSync(n.dir);
+      check('R616', L614.R616, seen6.oldRefused === 409 && seen6.del === 200 && !seen6.delTree && seen6.left && seen6.newRuns && seen6.stillLeft && seen6.linkGone && seen6.del2 === 200 && seen6.treeGone, JSON.stringify(seen6));
+      await call('/api/work/folders/delete', U, { id: folder });
+    }
+    { // R615: the writer fails: a plain handoff; a task the run left claimed gets a note naming the new session
+      const seen = {};
+      const n = await mk(U, 'r615 held');
+      const held = await chat(U, 'BOARDHOLD r615', { session: n.id });
+      const hold = JSON.parse((texts(held.events).match(/HOLD:(\{.*?\})(?=\s*$|\n)/) || [])[1] || '{}');
+      // the run's own automatic note ("run ended", R517) is written in the background as the run ends: wait for it, so the transfer's note is the latest
+      for (let i = 0; i < 40 && !/· run ended/.test(((await call('/api/board/task?id=' + hold.id, U)).data.task || {}).body || ''); i++) await sleep(200);
+      await setTr(U, n.id, [{ cls: 'me', text: 'r615 goal: hold the task' }, { cls: 'claude', text: 'r615 holding it' }]);
+      const t = await xfer(U, { session: n.id, focus: 'HANDOFFFAIL r615 focus' });
+      const d = t.data || {}, h = d.handoff || {}, txt = h.text || '';
+      seen.status = t.status; seen.by = h.by; seen.why = h.why;
+      seen.plain = { head: txt.startsWith('## Handoff (made without a model: '), goal: txt.includes('> r615 goal: hold the task'), focus: txt.includes('## Focus for this handoff\nHANDOFFFAIL r615 focus'), state: txt.includes('Branch: ' + n.branch) && /Uncommitted changes/.test(txt), started: d.started === true };
+      const task = (await call('/api/board/task?id=' + hold.id, U)).data || {};
+      seen.board = { held: hold.claimed === true, noted: (d.board || []).includes(hold.id), kind: task.handoff && task.handoff.kind, names: String(task.handoff && task.handoff.next || '').includes('r615 held (continued)'), state: String(task.handoff && task.handoff.state || '').includes(d.to) };
+      await runEnd(U, d.to, d.run);
+      check('R615', L614.R615, t.status === 200 && seen.by === 'plain' && /could not write it/.test(seen.why || '') && Object.values(seen.plain).every(Boolean) && seen.board.held && seen.board.noted && seen.board.kind === 'session transferred' && seen.board.names && seen.board.state, JSON.stringify(seen));
+      if (hold.id) await call('/api/board/delete', U, { id: hold.id });
+      await call('/api/work/sessions/delete', U, { id: d.to }); await call('/api/work/sessions/delete', U, { id: n.id });
+    }
+    { // R617: the refusals
+      const seen = {};
+      const n = await mk(U, 'r617 busy');
+      await setTr(U, n.id, [{ cls: 'me', text: 'r617 goal' }]);
+      const before = ((await listOf(U)).sessions || []).length;
+      const slow = chat(U, 'SLOW r617', { session: n.id }); await sleep(800);
+      const busyT = await xfer(U, { session: n.id }); seen.working = busyT.status; seen.workingWhy = busyT.data.error;
+      seen.madeNone = ((await listOf(U)).sessions || []).length === before;
+      await slow;
+      seen.other = (await xfer(A, { session: n.id })).status;
+      const e = await mk(U, 'r617 empty'); seen.empty = (await xfer(U, { session: e.id })).status;
+      const ok = await xfer(U, { session: n.id }); seen.first = ok.status;
+      const twice = await xfer(U, { session: n.id }); seen.twice = twice.status; seen.twiceWhy = twice.data.error;
+      seen.anon = (await xfer(null, { session: n.id })).status;
+      if (ok.data && ok.data.to) { await runEnd(U, ok.data.to, ok.data.run); await call('/api/work/sessions/delete', U, { id: ok.data.to }); }
+      for (const id of [n.id, e.id]) await call('/api/work/sessions/delete', U, { id });
+      check('R617', L614.R617, seen.working === 409 && /still working/.test(seen.workingWhy || '') && seen.madeNone && seen.other === 404 && seen.empty === 400 && seen.first === 200 && seen.twice === 409 && /transferred already/.test(seen.twiceWhy || '') && seen.anon === 401, JSON.stringify(seen));
+    }
+    { // R618: a Jcode PGM session (OpenRouter) transfers through its own provider and the new one runs Jcode PGM too
+      const seen = {};
+      const pv = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R618 or', apiKey: R591_KEY, pairs: [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic'], allowFallbacks: false }], shared: false })).data.provider || {};
+      const n = await mk(A, 'r618 jcode');
+      seen.pick = (await call('/api/model', A, { session: n.id, provider: pv.id, model: 'or/sonnet' })).status;
+      const first = await chat(A, 'r618 first run', { session: n.id });
+      seen.firstJcode = (first.events.find((x) => x.type === 'system' && x.subtype === 'init') || {}).harness === 'jcode';
+      await setTr(A, n.id, [{ cls: 'me', text: 'r618 goal: port it' }, { cls: 'claude', text: 'r618 half ported' }]);
+      fakeOr.calls.length = 0;
+      const t = await xfer(A, { session: n.id });
+      const d = t.data || {}, h = d.handoff || {}, call0 = fakeOr.calls[0] || { body: {}, headers: {} };
+      seen.status = t.status; seen.by = h.by;
+      seen.viaOr = { said: /^or says: /.test(h.text || '') && (h.text || '').includes('r618 goal: port it'), writer: JSON.stringify(call0.body.messages || []).includes('You are a handoff writer'), key: call0.headers.authorization === 'Bearer ' + R591_KEY, model: call0.body.model === 'anthropic/claude-sonnet-4.5' };
+      const l = await listOf(A), o = byId(l, n.id), w = byId(l, d.to);
+      seen.same = { provider: w.provider === pv.id && o.provider === pv.id, model: w.model === 'or/sonnet', harness: w.harness === 'jcode', tree: !!(w.worktree && w.worktree.path === n.dir) };
+      const end = await runEnd(A, d.to, d.run);
+      seen.run = { started: d.started === true, jcode: ((end.events || []).find((x) => x.type === 'system' && x.subtype === 'init') || {}).harness === 'jcode', cwd: evText(end.events).includes('cwd=' + n.dir) };
+      await call('/api/work/sessions/delete', A, { id: d.to }); await call('/api/work/sessions/delete', A, { id: n.id });
+      await call('/api/providers/remove', A, { id: pv.id });
+      check('R618', L614.R618, seen.pick === 200 && seen.firstJcode && t.status === 200 && seen.by === 'model' && Object.values(seen.viaOr).every(Boolean) && Object.values(seen.same).every(Boolean) && Object.values(seen.run).every(Boolean), JSON.stringify(seen));
+    }
+  }
+  // R619 (T-375): the page's parts of /transfer (static: there is no browser here; the hub side is R614-R618)
+  function r619Check() {
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), list = fs.readFileSync(path.join(MILLS, 'web', 'sessions.js'), 'utf8');
+    const entry = (page.match(/\{ cmd: '\/transfer'[^\n]*\n/) || [''])[0];
+    const fnT = (page.match(/async function transferSession\([\s\S]*?\n\}\n/) || [''])[0], fnP = (page.match(/function paintTransfer\(\)[\s\S]*?\n\}\n/) || [''])[0];
+    const ask = (page.match(/const TRANSFER_ASK = '[^\n]*/) || [''])[0];
+    const icons = [...(fnT + fnP).matchAll(/\bic\(([^)]*)\)/g)].flatMap((m) => [...m[1].matchAll(/'([a-z0-9-]+)'/g)].map((x) => x[1])).filter((x) => x !== 'lead');
+    const seen = {
+      entry: /args: '\[focus\]'/.test(entry) && /hint: '/.test(entry) && /confirm: TRANSFER_ASK/.test(entry) && /local: \(a\) => transferSession\(a\)/.test(entry) && /same project and worktree/.test(entry),
+      ask: /handoff/.test(ask) && /fresh session/.test(ask) && /same project and worktree/.test(ask) && /switch to it/.test(ask),
+      modal: /if \(n\.confirm && n\.input\) return done\(field\.value\.trim\(\)\)/.test(page) && /field\.value = s\.prefill \|\| ''/.test(page),
+      route: /'\/api\/work\/sessions\/transfer'/.test(fnT) && /focus: words/.test(fnT) && /openWorkSession\(d\.to\)/.test(fnT) && /Transferring: writing the handoff/.test(fnT),
+      links: /'Transferred to '/.test(fnP) && /'Continued from '/.test(fnP) && /openWorkSession\(l\.id\)/.test(fnP) && /id="xferNote"/.test(page) && /paintTransfer\(\); \/\/ its transfer links/.test(page),
+      list: /transferred → /.test(list),
+      svg: icons.length >= 3 && icons.every((i) => page.includes('<symbol id="i-' + i + '"')) && !/\p{Extended_Pictographic}/u.test(entry + ask + fnT + fnP),
+    };
+    check('R619', L614.R619, Object.values(seen).every(Boolean), JSON.stringify(seen) + ' icons ' + icons.join(','));
+  }
+  // R606-R612 (T-372): a person's own OpenRouter key next to the team's (plans/pgm-accounts-keys-app.md section 2). The fake OpenRouter accepts
+  // the team key, t-admin's own (R606_KEY) and t-user's own (R606_KEY_U) and says 401 to every other one.
+  async function r606Check() {
+    const assert = require('assert'), same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (p, key, body, headers = {}) => { const r = await fetch(H + p, { method: body !== undefined ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}), ...headers }, body: body !== undefined ? JSON.stringify(body) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json }; };
+    const mkKey = async (body, tok = A) => (await call('/api/apikey/create', tok, body)).data;
+    const seenText = []; const note = (r) => { seenText.push(r.text !== undefined ? r.text : JSON.stringify(r.data)); return r; };
+    const secrets = [R591_KEY, R606_KEY, R606_KEY_U, R606_REVOKED], leaked = () => seenText.filter((t) => secrets.some((k) => t.includes(k))).length;
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic', 'amazon-bedrock'], allowFallbacks: false }, { id: 'or/qwen', label: 'Qwen', model: 'qwen/qwen3-coder', providers: 'cerebras', allowFallbacks: true }];
+    const tp = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R606 team', apiKey: R591_KEY, pairs, shared: true })).data.provider || {};
+    const my = (tok, p = '/api/openrouter/mykey', body) => call(p, tok, body);
+    const ids = (r) => ((r.json && r.json.data) || []).map((m) => m.id).filter((x) => /^(my\/)?(or|mine)\//.test(x));
+    const bud = async (tok) => (await call('/api/openrouter/budget', tok)).data;
+    const settleMine = async (n, tok) => { let b = await bud(tok); for (let i = 0; i < 40 && b.mineCalls < n; i++) { await sleep(100); b = await bud(tok); } return b; };
+    const listIds = async (tok) => ((await call('/api/providers', tok)).data.providers || []).map((p) => p.id);
+    const adminKeyFile = path.join(SB, 'profiles', 't-admin', 'openrouter-key.json'), userKeyFile = path.join(SB, 'profiles', 't-user', 'openrouter-key.json');
+    for (const t of [A, U]) await my(t, '/api/openrouter/mykey/remove', {});
+
+    // R606: the key is stored privately and never comes back, only its last four characters
+    const get0 = note(await my(A));
+    const bad = [note(await my(A, '/api/openrouter/mykey', { apiKey: '' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-ant-api03-abcdefghijklmnopqrstuvwx' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-or-short' })), note(await my(A, '/api/openrouter/mykey', { apiKey: 'sk-or-v1-has space in it-0123456789' })), note(await my(A, '/api/openrouter/mykey', { pairs: [] }))];
+    const setA = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY })), getA = note(await my(A)), budA = note(await call('/api/openrouter/budget', A)), listA = note(await call('/api/providers', A)), chkA = note(await call('/api/check', A));
+    const stKey = fs.statSync(adminKeyFile), storedA = JSON.parse(fs.readFileSync(adminKeyFile, 'utf8'));
+    const tOk = note(await my(A, '/api/openrouter/mykey/test', {}));
+    const rmA = note(await my(A, '/api/openrouter/mykey/remove', {})), goneFile = !fs.existsSync(adminKeyFile);
+    const setA2 = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY }));
+    const delRes = await fetch(H + '/api/openrouter/mykey', { method: 'DELETE', headers: { Authorization: 'Bearer ' + A } }); note({ text: await delRes.text() });
+    const goneFile2 = !fs.existsSync(adminKeyFile);
+    note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY }));
+    const pA = ((await call('/api/providers', A)).data.providers || []).find((p) => p.id === 'or-me:t-admin') || {};
+    check('R606', 'a person\'s own OpenRouter key is stored owner-only in their profile (openrouter-key.json, mode 0600) and never comes back: the settings, the budget, the provider lists and every answer carry only hasKey and the last four characters (…1111); only a key shaped sk-or-… of a plausible length is accepted (an empty one, an Anthropic one, a short one, one with a space are a plain 400, and no call to OpenRouter is made to save it); "test" asks OpenRouter\'s key endpoint through the configured base and says it works; removing it (POST …/mykey/remove or DELETE …/mykey) deletes the file',
+      get0.data.hasKey === false && get0.data.last4 === null && get0.data.personalKeys === true && bad.every((b) => b.status === 400 && b.data.error)
+      && setA.status === 200 && setA.data.hasKey === true && setA.data.last4 === '…1111' && getA.data.last4 === '…1111' && budA.data.hasOwnKey === true && budA.data.personalKeys === true
+      && storedA.apiKey === R606_KEY && (stKey.mode & 0o777) === 0o600 && pA.hasKey === true && pA.apiKey === undefined && !JSON.stringify(inListOr(chkA)).includes(R606_KEY)
+      && tOk.status === 200 && tOk.data.ok === true && tOk.data.label === 'r606 key'
+      && rmA.status === 200 && rmA.data.hasKey === false && goneFile && setA2.status === 200 && delRes.status === 200 && goneFile2 && leaked() === 0,
+      `empty ${get0.status}; bad ${bad.map((b) => b.status)}; set ${setA.status} ${JSON.stringify(setA.data).slice(0, 140)}; mode ${(stKey.mode & 0o777).toString(8)}; test ${JSON.stringify(tOk.data)}; removed ${rmA.status}/${goneFile}; delete ${delRes.status}/${goneFile2}; leaks ${leaked()}`);
+    function inListOr(r) { return ((r.data && r.data.providers) || []).filter((p) => p.personal); }
+    await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY });
+
+    // R607: the provider "my OpenRouter" is offered to its owner alone (the team's pairs unless they list their own, which only they use)
+    const uBefore = await listIds(U);
+    const kA = await mkKey({ label: 'r606 admin' }), kU = await mkKey({ label: 'r606 user' }, U);
+    const mUBefore = note(await g('/v1/models', kU.key));
+    const setU = note(await my(U, '/api/openrouter/mykey', { apiKey: R606_KEY_U }));
+    const aIds = await listIds(A), uIds = await listIds(U);
+    const mA = note(await g('/v1/models', kA.key)), mU = note(await g('/v1/models', kU.key));
+    const pinOther = await call('/api/apikey/create', A, { label: 'r606 pin', providers: ['or-me:t-user'] }), pickOther = await call('/api/model', A, { provider: 'or-me:t-user', model: 'or/sonnet' });
+    const uAsksMy = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'hi r607' }] }));
+    const own = [{ id: 'mine/q', label: 'Mine', model: 'qwen/qwen3-coder', providers: 'cerebras', allowFallbacks: true }];
+    const setOwn = note(await my(A, '/api/openrouter/mykey', { pairs: own })), badOwn = note(await my(A, '/api/openrouter/mykey', { pairs: [{ id: 'has space', model: 'm/x' }] }));
+    const mA2 = note(await g('/v1/models', kA.key)), mU2 = note(await g('/v1/models', kU.key));
+    fakeOr.calls.length = 0;
+    const ownPlain = note(await g('/v1/chat/completions', kA.key, { model: 'mine/q', messages: [{ role: 'user', content: 'own pair r607' }] })), fOwn = fakeOr.calls[0] || { body: {}, headers: {} };
+    const uMine = note(await g('/v1/chat/completions', kU.key, { model: 'mine/q', messages: [{ role: 'user', content: 'not yours r607' }] })), uMy2 = note(await g('/v1/chat/completions', kU.key, { model: 'my/mine/q', messages: [{ role: 'user', content: 'not yours r607' }] }));
+    const aOldTeam = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'no longer yours r607' }] }));
+    const pOwn = ((await call('/api/providers', A)).data.providers || []).find((p) => p.id === 'or-me:t-admin') || {};
+    const calls607 = fakeOr.calls.length;
+    const clrOwn = note(await my(A, '/api/openrouter/mykey', { pairs: [] })), mA3 = note(await g('/v1/models', kA.key));
+    check('R607', 'the provider "my OpenRouter" (or-me:<user>) is offered to the person with the key and to nobody else: it is in their provider list with the team\'s pairs (their own key never shown), /v1/models lists their pair ids as my/<id> next to the team\'s, another person without a key sees none of it (and gets 404 for my/<id>, a key limited to it or a pick of it is refused); the person may list their own pairs, which replace the team\'s for them alone (the plain id and my/<id> route there, another person asking for them gets 404, the team\'s my/ ids are gone for them) and an empty list gives the team\'s back',
+      !uBefore.includes('or-me:t-user') && !uBefore.includes('or-me:t-admin') && ids(mUBefore).every((x) => !x.startsWith('my/')) && same(ids(mUBefore), ['or/sonnet', 'or/qwen'])
+      && setU.status === 200 && aIds.includes('or-me:t-admin') && !aIds.includes('or-me:t-user') && uIds.includes('or-me:t-user') && !uIds.includes('or-me:t-admin')
+      && same(ids(mA), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen']) && same(ids(mU), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen']) && mA.json.data.find((m) => m.id === 'my/or/sonnet').owned_by === 'my OpenRouter'
+      && pinOther.status === 400 && pickOther.status === 400 && uAsksMy.status === 200
+      && setOwn.status === 200 && same(setOwn.data.pairs.map((p) => p.id), ['mine/q']) && badOwn.status === 400
+      && same(ids(mA2), ['or/sonnet', 'or/qwen', 'mine/q', 'my/mine/q']) && same(ids(mU2), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen'])
+      && ownPlain.status === 200 && fOwn.headers.authorization === 'Bearer ' + R606_KEY && fOwn.body.model === 'qwen/qwen3-coder' && same(fOwn.body.provider, { allow_fallbacks: true, order: ['cerebras'] })
+      && uMine.status === 404 && uMy2.status === 404 && aOldTeam.status === 404 && same(pOwn.models, ['mine/q']) && calls607 === 1
+      && clrOwn.status === 200 && same(ids(mA3), ['or/sonnet', 'or/qwen', 'my/or/sonnet', 'my/or/qwen']) && leaked() === 0,
+      `before ${uBefore.filter((x) => /or-me/.test(x))}; lists ${aIds.filter((x) => /or-me/.test(x))} / ${uIds.filter((x) => /or-me/.test(x))}; models ${ids(mA)} / ${ids(mA2)} / ${ids(mU2)}; refused ${pinOther.status}/${pickOther.status}; own ${setOwn.status}/${badOwn.status} ask ${ownPlain.status} ${fOwn.headers.authorization === 'Bearer ' + R606_KEY}; not theirs ${uMine.status}/${uMy2.status}/${aOldTeam.status}; fake calls ${calls607}`);
+
+    // R608: a request through it carries the person's own key to OpenRouter and the team's never; OpenRouter refusing the key says so plainly and nothing falls back to the team's
+    const authOf = (f) => (f || { headers: {} }).headers.authorization;
+    fakeOr.calls.length = 0;
+    const m1 = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'whole r608' }] })), f1 = fakeOr.calls[0];
+    const m2 = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/qwen', stream: true, messages: [{ role: 'user', content: 'stream r608' }] })), f2 = fakeOr.calls[1];
+    const m3 = note(await g('/v1/messages', kA.key, { model: 'my/or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'messages r608' }] }, { 'anthropic-version': '2023-06-01' })), f3 = fakeOr.calls[2];
+    const m4 = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team r608' }] })), f4 = fakeOr.calls[3];
+    const m5 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/qwen', messages: [{ role: 'user', content: 'other person r608' }] })), f5 = fakeOr.calls[4];
+    const sonnetRoute = (f) => f && f.body.model === 'anthropic/claude-sonnet-4.5' && same(f.body.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && same(f.body.usage, { include: true });
+    const refusedBefore = fakeOr.refused.length, callsBefore = fakeOr.calls.length;
+    note(await my(U, '/api/openrouter/mykey', { apiKey: R606_REVOKED }));
+    const r1 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'revoked r608' }] }));
+    const r2 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', stream: true, messages: [{ role: 'user', content: 'revoked stream r608' }] }));
+    const r3 = note(await g('/v1/messages', kU.key, { model: 'my/or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'revoked messages r608' }] }, { 'anthropic-version': '2023-06-01' }));
+    const tBad = note(await my(U, '/api/openrouter/mykey/test', {}));
+    const refusedAfter = fakeOr.refused.length, callsAfter = fakeOr.calls.length;
+    const teamStill = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team still works r608' }] })), fTeam = fakeOr.calls[fakeOr.calls.length - 1];
+    note(await my(U, '/api/openrouter/mykey', { apiKey: R606_KEY_U }));
+    const msgOf = (r) => (r.json && ((r.json.error && r.json.error.message) || '')) || '';
+    check('R608', 'a request through "my OpenRouter" (my/<id> as a chat request whole or streamed, as a Messages request) goes to OpenRouter with the person\'s own key as the bearer, the pair\'s model and routing and usage cost asked for, while the team\'s pair ids still use the team key and another person\'s my/<id> uses theirs, never the first person\'s; when OpenRouter refuses the person\'s key (401: revoked) every way in answers a plain "Your own OpenRouter key was refused" (in the caller\'s shape, the key tester too) and nothing is sent again with the team key, while the team pairs still work for them',
+      m1.status === 200 && authOf(f1) === 'Bearer ' + R606_KEY && sonnetRoute(f1) && /or says: whole r608/.test(m1.json.choices[0].message.content)
+      && m2.status === 200 && authOf(f2) === 'Bearer ' + R606_KEY && f2.body.model === 'qwen/qwen3-coder' && /or says: stream r608/.test(m2.text) && /\[DONE\]/.test(m2.text)
+      && m3.status === 200 && m3.json.type === 'message' && authOf(f3) === 'Bearer ' + R606_KEY && sonnetRoute(f3)
+      && m4.status === 200 && authOf(f4) === 'Bearer ' + R591_KEY && m5.status === 200 && authOf(f5) === 'Bearer ' + R606_KEY_U
+      && r1.status === 502 && /Your own OpenRouter key was refused/.test(msgOf(r1)) && r2.status === 502 && !/^data:/.test(r2.text) && /Your own OpenRouter key was refused/.test(msgOf(r2))
+      && r3.status === 502 && r3.json.type === 'error' && /Your own OpenRouter key was refused/.test(r3.json.error.message)
+      && refusedAfter - refusedBefore === 3 && fakeOr.refused.slice(refusedBefore).every((a) => a === 'Bearer ' + R606_REVOKED) && callsAfter === callsBefore
+      && tBad.status === 200 && tBad.data.ok === false && /Your own OpenRouter key was refused/.test(tBad.data.error)
+      && teamStill.status === 200 && authOf(fTeam) === 'Bearer ' + R591_KEY && leaked() === 0,
+      `calls ${[f1, f2, f3, f4, f5].map((f) => (authOf(f) || '').slice(-6))}; refused ${r1.status}/${r2.status}/${r3.status} "${msgOf(r1).slice(0, 70)}"; fake refused ${refusedAfter - refusedBefore}, accepted ${callsAfter - callsBefore}; tester ${JSON.stringify(tBad.data).slice(0, 80)}; team ${teamStill.status}; leaks ${leaked()}`);
+
+    // R609: no hub budget on a person's own key: a person at their team cap still uses it; their own spending is counted separately and shown with the team key's
+    const b0 = await bud(U);
+    note(await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 0 }));
+    const capped = note(await g('/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team key over the cap r609' }] }));
+    const w1 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'own key whole COST=0.5' }] }));
+    const w2 = note(await g('/v1/chat/completions', kU.key, { model: 'my/or/qwen', stream: true, messages: [{ role: 'user', content: 'own key stream COST=0.25' }] }));
+    const w3 = note(await g('/v1/messages', kU.key, { model: 'my/or/sonnet', max_tokens: 20, messages: [{ role: 'user', content: 'own key messages COST=0.125' }] }, { 'anthropic-version': '2023-06-01' }));
+    const b1 = await settleMine(b0.mineCalls + 3, U);
+    const fileM = ((JSON.parse(fs.readFileSync(path.join(SB, 'profiles', 't-user', 'openrouter.json'), 'utf8')).months || {})[b1.month]) || {};
+    const allV = (await call('/api/openrouter/budget/all', A)).data, mineP = (allV.people || []).find((p) => p.username === 't-user') || {};
+    await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: null });
+    check('R609', 'no hub budget applies to a person\'s own key: with their team cap at 0 the team pair is refused (429) while "my OpenRouter" answers (whole, streamed, Messages); the three answers (0.5, 0.25 and 0.125 USD) are counted in the month file\'s separate "mine" counter (0.875 USD in 3 answers) and shown in the budget view next to the team key\'s spend, which does not move (spentUsd and calls stay, the person\'s team figure in the admin\'s list too)',
+      capped.status === 429 && /budget/i.test(msgOf(capped)) && w1.status === 200 && w2.status === 200 && w3.status === 200
+      && b1.mineCalls === b0.mineCalls + 3 && Math.abs(b1.mineUsd - b0.mineUsd - 0.875) < 1e-9 && b1.spentUsd === b0.spentUsd && b1.calls === b0.calls && b1.hasOwnKey === true && b1.over === true
+      && fileM.mine && Math.abs(fileM.mine.usd - b1.mineUsd) < 1e-9 && fileM.mine.calls === b1.mineCalls && Math.abs((fileM.usd || 0) - b1.spentUsd) < 1e-9 && (fileM.calls || 0) === b1.calls
+      && mineP.spentUsd === b1.spentUsd && mineP.calls === b1.calls,
+      `capped ${capped.status}; own ${w1.status}/${w2.status}/${w3.status}; before ${JSON.stringify([b0.spentUsd, b0.calls, b0.mineUsd, b0.mineCalls])} after ${JSON.stringify([b1.spentUsd, b1.calls, b1.mineUsd, b1.mineCalls])}; file ${JSON.stringify(fileM)}`);
+
+    // R610: a Jcode PGM Work session on "my OpenRouter" runs through the per-run relay with the person's key (not in its command line or environment, no hub budget); the opt-in fallback can name it
+    const nodeOnline = async () => ((await call('/api/check', A)).data.aiNodes || []).some((h) => h.id === 'test-node' && h.online);
+    const waitNode = async (want) => { for (let i = 0; i < 80 && (await nodeOnline()) !== want; i++) await sleep(250); return (await nodeOnline()) === want; };
+    const kinds = (evs) => ({ info: evs.filter((e) => e.type === 'bridge_info').map((e) => e.text).join(' | '), init: evs.find((e) => e.type === 'system' && e.subtype === 'init') || {}, res: evs.find((e) => e.type === 'result') || {}, done: evs.find((e) => e.type === 'bridge_done') || {}, err: evs.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ') });
+    const pick = await call('/api/model', A, { provider: 'or-me:t-admin', model: 'or/sonnet' });
+    fakeOr.calls.length = 0;
+    const a0 = await bud(A);
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: 0 }); // over the team cap: their own key is not counted
+    const run1 = await chat(A, 'hello ORCALL r610', { fresh: true }), t1 = texts(run1.events), k1 = kinds(run1.events), c1 = fakeOr.calls[0];
+    await call('/api/openrouter/budget/cap', A, { username: 't-admin', capUsd: null });
+    const a1 = await settleMine(a0.mineCalls + 1, A);
+    const base1 = (/or\[base=(\S+) /.exec(t1) || [])[1] || '';
+    const late = base1 ? await fetch(base1 + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'x', messages: [{ role: 'user', content: 'late' }] }) }) : { status: 0 };
+    if (!(await nodeOnline())) startAiNode(); const up0 = await waitNode(true);
+    const pickCl = await call('/api/model', A, { provider: 'h:test-node/claude', model: 'claude-haiku-5-5' });
+    const fbOther = await call('/api/openrouter/fallback', U, { on: true, provider: 'or-me:t-admin', pair: 'or/qwen' }), fbSet = await call('/api/openrouter/fallback', A, { on: true, provider: 'or-me:t-admin', pair: 'or/qwen' });
+    stopAiNode(); const down = await waitNode(false);
+    fakeOr.calls.length = 0;
+    const fbRun = await chat(A, 'host is down, fallback on ORCALL r610', { fresh: true }), kf = kinds(fbRun.events), tf = texts(fbRun.events), cf = fakeOr.calls[0];
+    startAiNode(); const up1 = await waitNode(true);
+    await call('/api/openrouter/fallback', A, { on: false });
+    await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
+    check('R610', 'a Work session whose provider is "my OpenRouter" runs Jcode PGM on the server through the same per-run relay: jcode gets the relay\'s address and a dummy key (the person\'s own key is in neither its command line nor its environment nor its answer, the relay dies with the run), the call reaches OpenRouter with the person\'s own key and the pair\'s model, the run goes on while the person\'s team cap is 0, and its cost lands in their own counter (0.01 USD) and not in the team\'s; the opt-in fallback accepts their own provider (not another person\'s) and, with the AI host offline, the run goes through it with their own key and says so',
+      pick.status === 200 && k1.init.harness === 'jcode' && /jcode-answer model=anthropic\/claude-sonnet-4\.5 provider=openrouter/.test(t1) && /^http:\/\/127\.0\.0\.1:\d+\/or-relay\/[0-9a-f]{48}$/.test(base1) && /key=viberoller-relay /.test(t1) && /leak=false/.test(t1) && !t1.includes(R606_KEY) && !t1.includes(R591_KEY)
+      && /orcall=200:or says: hello ORCALL r610/.test(t1) && c1 && c1.headers.authorization === 'Bearer ' + R606_KEY && c1.body.model === 'anthropic/claude-sonnet-4.5' && k1.done.code === 0 && /Using Jcode PGM \(my OpenRouter · Sonnet\)/.test(k1.info)
+      && a1.mineCalls === a0.mineCalls + 1 && Math.abs(a1.mineUsd - a0.mineUsd - 0.01) < 1e-9 && a1.spentUsd === a0.spentUsd && a1.calls === a0.calls && late.status === 401
+      && up0 && pickCl.status === 200 && fbOther.status === 400 && fbSet.status === 200 && fbSet.data.fallback.provider === 'or-me:t-admin' && down
+      && kf.init.harness === 'jcode' && /jcode-answer model=qwen\/qwen3-coder provider=openrouter/.test(tf) && /orcall=200:or says: host is down, fallback on ORCALL r610/.test(tf) && cf && cf.headers.authorization === 'Bearer ' + R606_KEY && !tf.includes(R606_KEY)
+      && /Claude \(test-node\) is offline, so this run uses OpenRouter \(Qwen\) through Jcode PGM on the server/.test(kf.info) && up1,
+      `pick ${pick.status}; init ${JSON.stringify(k1.init).slice(0, 80)}; text "${t1.slice(0, 300)}"; call ${c1 && c1.headers.authorization.slice(-6)}; info "${k1.info}"; mine ${JSON.stringify([a0.mineUsd, a0.mineCalls])} -> ${JSON.stringify([a1.mineUsd, a1.mineCalls])}, team ${a1.spentUsd}/${a0.spentUsd}; late ${late.status}; fallback ${fbOther.status}/${fbSet.status} down ${down} run "${tf.slice(0, 120)}" call ${cf && cf.headers.authorization.slice(-6)} info "${kf.info.slice(0, 160)}"`);
+
+    // R611: the admin switch: off = nobody can create a key (a plain message) and the personal providers are not offered (stored keys stay, unused); on = they are back
+    const localCfgFile = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(localCfgFile);
+    const noAdmin = await call('/api/openrouter/personal', U, { on: false }), badBody = await call('/api/openrouter/personal', A, { on: 'maybe' });
+    const off = await call('/api/openrouter/personal', A, { on: false });
+    const offA = await listIds(A), offU = await listIds(U), offM = note(await g('/v1/models', kA.key));
+    const offAsk = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'switched off r611' }] }));
+    const offPick = await call('/api/model', A, { provider: 'or-me:t-admin', model: 'or/sonnet' });
+    const offCreate = note(await my(U, '/api/openrouter/mykey', { apiKey: R606_KEY_U })), offReplace = note(await my(A, '/api/openrouter/mykey', { apiKey: R606_KEY })), offView = note(await my(A)), offBud = await bud(A);
+    const stillFiles = fs.existsSync(adminKeyFile) && fs.existsSync(userKeyFile);
+    const localCfg = JSON.parse(fs.readFileSync(path.join(SB, 'config.local.json'), 'utf8'));
+    const teamOff = note(await g('/v1/chat/completions', kA.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'team pairs still work r611' }] }));
+    fakeOr.calls.length = 0;
+    const on = await call('/api/openrouter/personal', A, { on: true });
+    const onA = await listIds(A), onAsk = note(await g('/v1/chat/completions', kA.key, { model: 'my/or/sonnet', messages: [{ role: 'user', content: 'switched on again r611' }] })), fOn = fakeOr.calls[0];
+    check('R611', 'config openrouter.personalKeys (default true) is an admin\'s switch (POST /api/openrouter/personal { on }: not for a non-admin, not for a non-boolean): off, creating or replacing a key is refused with a plain message (403) and "my OpenRouter" is not offered to anyone (not in the provider lists or /v1/models, my/<id> gives 404, picking it is refused) while the stored key files stay in place and the team\'s pairs go on; on again, the same stored key is back in use',
+      noAdmin.status === 403 && badBody.status === 400 && off.status === 200 && off.data.personalKeys === false && localCfg.openrouter.personalKeys === false
+      && !offA.includes('or-me:t-admin') && !offU.includes('or-me:t-user') && ids(offM).every((x) => !x.startsWith('my/')) && offAsk.status === 404 && offPick.status === 400
+      && offCreate.status === 403 && /switched off/.test(offCreate.data.error) && offReplace.status === 403 && offView.data.personalKeys === false && offView.data.hasKey === true && offView.data.offered === false && offBud.personalKeys === false && stillFiles && teamOff.status === 200
+      && on.status === 200 && on.data.personalKeys === true && onA.includes('or-me:t-admin') && onAsk.status === 200 && fOn && fOn.headers.authorization === 'Bearer ' + R606_KEY && leaked() === 0,
+      `switch ${noAdmin.status}/${badBody.status}/${off.status}; off lists ${offA.filter((x) => /or-me/.test(x))}/${offU.filter((x) => /or-me/.test(x))} ask ${offAsk.status} pick ${offPick.status}; create ${offCreate.status} "${(offCreate.data.error || '').slice(0, 60)}" replace ${offReplace.status}; files ${stillFiles}; team ${teamOff.status}; on ${on.status} ${onA.includes('or-me:t-admin')} ask ${onAsk.status}`);
+
+    // R612: the page: the key box in Settings → OpenRouter budget, the admin switch, the picker
+    const page = await (await fetch(H + '/')).text();
+    const blk = page.slice(page.indexOf('async function renderOrBudget()'), page.indexOf('// ── AI Admin → My AIs: providers'));
+    const aiAdm = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'); // T-379: the personal-keys switch is in AI Admin → Global
+    const blkP = page.slice(page.indexOf('async function renderProviders()'), page.indexOf('function sysSettings('));
+    const blkPick = page.slice(page.indexOf('function showModels(d)'), page.indexOf('// The project picker (Work header)'));
+    const icons = blk.match(/href="#(i-[a-z-]+)"/g) || [], symbols = page.match(/<symbol id="(i-[a-z-]+)"/g) || [];
+    check('R612', 'the page: AI Admin → My OpenRouter (Settings → OpenRouter budget before T-379) has "My OpenRouter key" (a password field to paste or replace it, "Stored: …abcd" from the last four characters the hub sends, Test and a Remove with an icon, the key never filled back in), "My own models (optional)" with the same pairs editor, a line for what the person spent on their own key beside the team key\'s, and for admins the "Allow personal OpenRouter keys" switch; Settings → My AIs lists "my OpenRouter" without share, remove or edit buttons; the Work picker names its group "OpenRouter · my OpenRouter"; icons are SVG symbols that exist and no emoji',
+      /My OpenRouter key/.test(blk) && /ki\.type = 'password'/.test(blk) && /'Stored: ' \+ mykey\.last4/.test(blk) && !/ki\.value = mykey/.test(blk) && /\/api\/openrouter\/mykey'/.test(blk) && /\/api\/openrouter\/mykey\/remove/.test(blk) && /\/api\/openrouter\/mykey\/test/.test(blk) && /\/api\/openrouter\/personal/.test(aiAdm)
+      && /My own models \(optional\)/.test(blk) && /pairsEditor\(mykey\.pairs/.test(blk) && /Your own key: /.test(blk) && /team key /.test(blk) && /Allow personal OpenRouter keys/.test(aiAdm) && /Which key pays/.test(blk)
+      && /owner === me\.username && !p\.personal/.test(blkP) && /p\.personal/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick)
+      && icons.length >= 3 && icons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blk + blkP),
+      `served ${page.length}b; icons ${icons.join(',')}`);
+
+    for (const t of [A, U]) await my(t, '/api/openrouter/mykey/remove', {});
+    if (!hadLocal) { try { fs.unlinkSync(localCfgFile); } catch {} } else await call('/api/openrouter/personal', A, { on: true });
+    await call('/api/providers/remove', A, { id: tp.id });
+    for (const k of [kA, kU]) await call('/api/apikey/revoke', k === kU ? U : A, { id: k.id });
+  }
+  // R620-R626 (T-376, stage 1; team note plans/jcode-pgm-server.md B.1): the hub's side of the Jcode PGM Server. The server is a
+  // fake here (a node HTTP server that records what reaches it and checks the hub's signed x-pgm-hub-user with the shared secret);
+  // config pgmServer is switched in config.local.json (read fresh by the hub).
+  async function r620Check() {
+    const http = require('http'), assert = require('assert'), same = (a, b) => { try { assert.deepStrictEqual(a, b); return true; } catch { return false; } };
+    const g = async (method, p, token, body, headers = {}) => { try { const r = await fetch(H + p, { method, headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers }, body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch {} return { status: r.status, text, json: json || {}, headers: r.headers }; } catch (e) { return { status: 0, text: String(e.message), json: {} }; } };
+    const secretFile = path.join(SB, 'pgm-server.secret');
+    const secret = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8').split('\n')[0].trim() : '';
+    const S = { 'x-pgm-secret': secret };
+    const api = (method, p, body, headers = S) => g(method, '/__pgm/' + p, null, body, headers);
+    const seenText = []; const note = (r) => { seenText.push(r.text); return r; };
+    const defer = () => { let res; const p = new Promise((x) => { res = x; }); return { p, res }; };
+    const within = (p, ms) => Promise.race([p, sleep(ms).then(() => null)]);
+    // the fake Jcode PGM Server
+    const fp = { reqs: [] }; const gates = { two: defer(), three: defer(), part1: defer(), longClosed: defer() };
+    const srv = http.createServer((req, res) => {
+      const rec = { method: req.method, url: req.url, headers: req.headers, parts: [], body: '' }; fp.reqs.push(rec);
+      if (req.url === '/pgm/upload') { req.on('data', (c) => { rec.parts.push(c.toString()); if (rec.parts.length === 1) gates.part1.res(true); }); req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ parts: rec.parts })); }); return; }
+      req.on('data', (c) => { rec.body += c; });
+      req.on('end', async () => {
+        if (req.url === '/pgm/stream') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write('data: one\n\n'); await within(gates.two.p, 8000); res.write('data: two\n\n'); await within(gates.three.p, 8000); res.end('data: three\n\n'); return; }
+        if (req.url === '/pgm/long') { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write('data: first\n\n'); const t = setInterval(() => res.write('data: more\n\n'), 100); res.on('close', () => { clearInterval(t); gates.longClosed.res({ ended: res.writableEnded }); }); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'x-fake': 'pgm' }); res.end(JSON.stringify({ server: 'fake', url: req.url, method: req.method }));
+      });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const fakeUrl = `http://127.0.0.1:${srv.address().port}`;
+    const vouched = (rec) => { // the fake's check of the hub's header: HMAC-SHA256 with the shared secret over the payload
+      const h = (rec && rec.headers['x-pgm-hub-user']) || ''; const [payload, sig] = h.split('.');
+      if (!payload || !sig || crypto.createHmac('sha256', secret).update(payload).digest('base64url') !== sig) return null;
+      try { return JSON.parse(Buffer.from(payload, 'base64url').toString()); } catch { return null; }
+    };
+    const localCfgFile = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(localCfgFile), local0 = hadLocal ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : null;
+    const setPgm = (pgm) => { const c = fs.existsSync(localCfgFile) ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : {}; if (pgm) c.pgmServer = pgm; else delete c.pgmServer; fs.writeFileSync(localCfgFile, JSON.stringify(c, null, 2)); };
+    const stateDir = path.join(SB, 'pgm-state'), SIGN = 'r620SignKey_' + 'A'.repeat(31), SIGN_CFG = 'r620CfgKey_' + 'B'.repeat(32);
+    fs.mkdirSync(stateDir, { recursive: true }); fs.writeFileSync(path.join(stateDir, 'server.json'), JSON.stringify({ signKey: SIGN, version: 'fake' }));
+    // people, tokens, providers
+    const devTok = async (tok, client, device, extra = {}) => { const s = (await call('/api/device/start', null, { client, device, ...extra })).data || {}; await call('/api/device/approve', tok, { userCode: s.userCode }); const p = (await call('/api/device/poll', null, { deviceCode: s.deviceCode })).data || {}; return { token: p.token, id: p.deviceId }; };
+    const dev = await devTok(U, 'jcode', 'r620-laptop');
+    const kp = crypto.generateKeyPairSync('ed25519'), pub = kp.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
+    const mach = await devTok(U, 'vr-machine', 'r620-box', { publicKey: pub, machineId: 'mach-r620-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r620' });
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic', 'amazon-bedrock'], allowFallbacks: false }, { id: 'r620/qwen', label: 'Qwen', model: 'qwen/qwen3-coder', providers: [], allowFallbacks: true }];
+    const tp = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R620 team', apiKey: R591_KEY, pairs, shared: true })).data.provider || {};
+    const myA0 = (await call('/api/openrouter/mykey', A)).data || {};
+    await call('/api/openrouter/mykey', U, { apiKey: R606_KEY_U });
+    await call('/api/openrouter/mykey', A, { apiKey: R606_KEY, pairs: [{ id: 'r620/own-a', label: 'Admin own', model: 'x/admin-only', providers: [] }] });
+    const kU = (await call('/api/apikey/create', U, { label: 'r620 user' })).data;
+    const secrets = () => [R591_KEY, R606_KEY, R606_KEY_U, secret, dev.token, mach.token, U, A, kU.key].filter(Boolean);
+    const leaks = (texts) => texts.filter((t) => secrets().some((k) => String(t).includes(k))).length;
+    try {
+      // R620: the gate
+      const st = fs.statSync(secretFile);
+      const gate = { none: (await api('POST', 'whoami', { token: U }, {})).status, wrong: (await api('POST', 'whoami', { token: U }, { 'x-pgm-secret': secret.replace(/.$/, (c) => c === '0' ? '1' : '0') })).status, short: (await api('POST', 'whoami', { token: U }, { 'x-pgm-secret': secret.slice(0, 20) })).status,
+        xff: (await api('POST', 'whoami', { token: U }, { ...S, 'X-Forwarded-For': '203.0.113.9' })).status, xri: (await api('POST', 'whoami', { token: U }, { ...S, 'X-Real-IP': '203.0.113.9' })).status, cf: (await api('GET', 'models?user=t-user', undefined, { ...S, 'CF-Connecting-IP': '203.0.113.9' })).status,
+        routeNoSecret: note(await api('POST', 'route', { user: 't-user', pair: 'or/sonnet' }, {})), ok: (await api('POST', 'whoami', { token: U })).status };
+      const ignored = spawnSync('git', ['check-ignore', '-q', 'bridge/pgm-server.secret'], { cwd: MILLS }).status === 0;
+      check('R620', 'the hub\'s API for the Jcode PGM Server (/__pgm/*) answers only a program on this machine that has the shared secret: without x-pgm-secret, with a wrong or a cut-off one, and through a proxy (X-Forwarded-For, X-Real-IP, CF-Connecting-IP, even with the right secret) it is a plain 403 and no key comes out; the secret is bridge/pgm-server.secret, 64 hex characters the hub made, readable by its owner only and never shipped (gitignored)',
+        /^[0-9a-f]{64}$/.test(secret) && (st.mode & 0o777) === 0o600 && ignored && [gate.none, gate.wrong, gate.short, gate.xff, gate.xri, gate.cf].every((s) => s === 403) && gate.routeNoSecret.status === 403 && !gate.routeNoSecret.text.includes(R591_KEY) && gate.ok === 200,
+        `secret ${secret.length} chars mode ${(st.mode & 0o777).toString(8)} ignored ${ignored}; refused ${[gate.none, gate.wrong, gate.short, gate.xff, gate.xri, gate.cf, gate.routeNoSecret.status]}; with it ${gate.ok}`);
+
+      // R621: whoami
+      const wDev = note(await api('POST', 'whoami', { token: dev.token })), wSes = note(await api('POST', 'whoami', { token: U })), wAdm = note(await api('POST', 'whoami', { token: A }));
+      const wBad = note(await api('POST', 'whoami', { token: 'not-a-token-r620' })), wEmpty = note(await api('POST', 'whoami', {})), wMach = note(await api('POST', 'whoami', { token: mach.token }));
+      check('R621', 'the Jcode PGM Server asks who a token is (POST /__pgm/whoami): a person\'s device token gives their username, that device\'s id (the one their device list shows) and admin false; their page session gives the same person with a session device id (s-…); an admin\'s session says admin true; an unknown or missing token is 401, a linked machine\'s token is 403 (never a sign-in)',
+        wDev.status === 200 && wDev.json.username === 't-user' && wDev.json.deviceId === dev.id && wDev.json.admin === false && wDev.json.kind === 'device'
+        && wSes.status === 200 && wSes.json.username === 't-user' && /^s-[0-9a-f]{16}$/.test(wSes.json.deviceId) && wSes.json.kind === 'session' && wAdm.status === 200 && wAdm.json.username === 't-admin' && wAdm.json.admin === true
+        && wBad.status === 401 && wEmpty.status === 401 && wMach.status === 403 && leaks([wDev.text, wSes.text, wAdm.text, wBad.text, wMach.text]) === 0,
+        `device ${wDev.status} ${JSON.stringify(wDev.json)} (id ${dev.id}); session ${wSes.status} ${JSON.stringify(wSes.json)}; admin ${wAdm.json.admin}; bad ${wBad.status}/${wEmpty.status}; machine ${wMach.status}`);
+
+      // R622: models = the Work dropdown's OpenRouter pairs for that person, with the budget
+      const chk = (await call('/api/check', U)).data, bud = (await call('/api/openrouter/budget', U)).data;
+      const want = []; for (const p of (chk.providers || []).filter((x) => x.kind === 'openrouter').sort((a, b) => (a.personal === true) - (b.personal === true))) for (const pr of p.pairs || []) { const id = (p.personal ? 'my/' : '') + pr.id; if (!want.some((w) => w.id === id)) want.push({ id, source: p.personal ? 'mine' : 'team', model: pr.model }); }
+      const mU = note(await api('GET', 'models?user=t-user')), mA = note(await api('GET', 'models?user=t-admin')), mNo = note(await api('GET', 'models?user=nobody-r620'));
+      const got = (mU.json.pairs || []).map((p) => ({ id: p.id, source: p.source, model: p.model }));
+      const sonnet = (mU.json.pairs || []).find((p) => p.id === 'or/sonnet') || {};
+      check('R622', 'the models the Jcode PGM Server offers a person (GET /__pgm/models?user=) are the OpenRouter pairs the Work dropdown shows them, in its order: the team\'s by their ids, then their own key\'s as my/<id> (source team / mine, with model, providers and fallbacks), never another person\'s own pairs, with their month budget (cap, spent, reset); an unknown person is 404 and no key is in the answer',
+        mU.status === 200 && want.length >= 4 && same(got, want) && got.some((p) => p.id === 'my/or/sonnet' && p.source === 'mine') && !got.some((p) => /r620\/own-a/.test(p.id))
+        && same(sonnet.providers, ['anthropic', 'amazon-bedrock']) && sonnet.allowFallbacks === false && sonnet.label === 'Sonnet'
+        && mU.json.budget && mU.json.budget.capUsd === bud.capUsd && mU.json.budget.spentUsd === bud.spentUsd && mU.json.budget.resetsAt === bud.resetsAt
+        && (mA.json.pairs || []).some((p) => p.id === 'my/r620/own-a') && mNo.status === 404 && leaks([mU.text, mA.text]) === 0,
+        `got ${got.map((p) => p.id + ':' + p.source)}; dropdown ${want.map((p) => p.id + ':' + p.source)}; budget ${JSON.stringify(mU.json.budget)} vs ${bud.capUsd}/${bud.spentUsd}; admin has own ${(mA.json.pairs || []).some((p) => p.id === 'my/r620/own-a')}; unknown ${mNo.status}`);
+
+      // R623: route
+      const rTeam = await api('POST', 'route', { user: 't-user', pair: 'or/sonnet' }), rMine = await api('POST', 'route', { user: 't-user', pair: 'my/or/sonnet' }), rQwen = await api('POST', 'route', { user: 't-user', pair: 'r620/qwen' });
+      const rNope = note(await api('POST', 'route', { user: 't-user', pair: 'or/nope' })), rOther = note(await api('POST', 'route', { user: 't-user', pair: 'my/r620/own-a' })), rOther2 = note(await api('POST', 'route', { user: 't-user', pair: 'r620/own-a' })), rNoUser = note(await api('POST', 'route', { user: 'nobody-r620', pair: 'or/sonnet' }));
+      await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: 0 });
+      const rOver = note(await api('POST', 'route', { user: 't-user', pair: 'or/sonnet' })), rOverMine = await api('POST', 'route', { user: 't-user', pair: 'my/or/sonnet' });
+      await call('/api/openrouter/budget/cap', A, { username: 't-user', capUsd: null });
+      const orBase = `http://127.0.0.1:${OLLAMA_PORT}/orapi`;
+      check('R623', 'the key for one request (POST /__pgm/route {user, pair}): a team pair gives the team key with OpenRouter\'s address, the pair\'s model and exactly the provider routing the hub itself sends (order and no fallbacks; no order when the pair lists none, fallbacks as set) and kind team; my/<id> gives the person\'s own key and kind mine; a pair that is not theirs (unknown, another person\'s own, as my/<id> or plain) is 403 with a plain reason, over their month budget a team pair is 403 naming the budget while their own key still routes, an unknown person 404; no refusal carries a key',
+        rTeam.status === 200 && rTeam.json.apiKey === R591_KEY && rTeam.json.baseUrl === orBase && rTeam.json.model === 'anthropic/claude-sonnet-4.5' && same(rTeam.json.provider, { allow_fallbacks: false, order: ['anthropic', 'amazon-bedrock'] }) && rTeam.json.kind === 'team' && rTeam.json.pair === 'or/sonnet' && rTeam.json.headers && rTeam.json.headers['X-Title'] === 'VibeRoller'
+        && rQwen.status === 200 && same(rQwen.json.provider, { allow_fallbacks: true }) && rQwen.json.model === 'qwen/qwen3-coder'
+        && rMine.status === 200 && rMine.json.apiKey === R606_KEY_U && rMine.json.kind === 'mine' && rMine.json.pair === 'my/or/sonnet' && rMine.json.model === 'anthropic/claude-sonnet-4.5'
+        && [rNope, rOther, rOther2].every((r) => r.status === 403 && /may use/.test(r.json.error || '')) && rNoUser.status === 404
+        && rOver.status === 403 && /budget/i.test(rOver.json.error || '') && rOverMine.status === 200 && rOverMine.json.apiKey === R606_KEY_U && leaks([rNope.text, rOther.text, rOther2.text, rOver.text, rNoUser.text]) === 0,
+        `team ${rTeam.status} key ${rTeam.json.apiKey === R591_KEY} ${JSON.stringify(rTeam.json.provider)} ${rTeam.json.baseUrl}; qwen ${JSON.stringify(rQwen.json.provider)}; mine ${rMine.status} ${rMine.json.apiKey === R606_KEY_U} ${rMine.json.kind}; refused ${rNope.status}/${rOther.status}/${rOther2.status} "${(rNope.json.error || '').slice(0, 60)}"; unknown ${rNoUser.status}; over ${rOver.status} "${(rOver.json.error || '').slice(0, 50)}" own ${rOverMine.status}`);
+
+      // R624: charge = a hub OpenRouter call of theirs; the sessions report; the security log
+      const bud0 = async () => (await call('/api/openrouter/budget', U)).data, ans = async () => (((await call('/api/usage', U)).data.answers || {}).by || {}).openrouter || { turns: 0, input: 0, output: 0 };
+      const settle = async (n) => { let b = await bud0(); for (let i = 0; i < 50 && b.calls < n; i++) { await sleep(100); b = await bud0(); } return b; };
+      const b0 = await bud0(), a0 = await ans();
+      const hubCall = note(await g('POST', '/v1/chat/completions', kU.key, { model: 'or/sonnet', messages: [{ role: 'user', content: 'r624 hub call COST=0.03' }] }));
+      const b1 = await settle(b0.calls + 1), a1 = await ans();
+      const ch = note(await api('POST', 'charge', { user: 't-user', pair: 'or/sonnet', kind: 'team', usd: 0.03, tokensIn: 20, tokensOut: 5, model: 'anthropic/claude-sonnet-4.5' }));
+      const b2 = await bud0(), a2 = await ans();
+      const chMine = note(await api('POST', 'charge', { user: 't-user', pair: 'my/or/sonnet', kind: 'mine', usd: 0.125, tokensIn: 7, tokensOut: 3, model: 'anthropic/claude-sonnet-4.5' }));
+      const b3 = await bud0();
+      const chBad = [note(await api('POST', 'charge', { user: 't-user', pair: 'or/sonnet', kind: 'team', usd: -1 })), note(await api('POST', 'charge', { user: 't-user', pair: 'or/sonnet', kind: 'other', usd: 0.1 })), note(await api('POST', 'charge', { user: 't-user', kind: 'team', usd: 0.1 }))].map((r) => r.status);
+      const chNo = note(await api('POST', 'charge', { user: 'nobody-r620', pair: 'or/sonnet', kind: 'team', usd: 0.1 })).status;
+      const d = (x, y, k) => Math.round(((y[k] || 0) - (x[k] || 0)) * 1e6) / 1e6;
+      const dHub = { usd: d(b0, b1, 'spentUsd'), calls: d(b0, b1, 'calls'), turns: d(a0, a1, 'turns'), input: d(a0, a1, 'input'), output: d(a0, a1, 'output') };
+      const dCh = { usd: d(b1, b2, 'spentUsd'), calls: d(b1, b2, 'calls'), turns: d(a1, a2, 'turns'), input: d(a1, a2, 'input'), output: d(a1, a2, 'output') };
+      const rep = note(await api('POST', 'sessions/report', { user: 't-user', device: 'r624-server', sessions: [{ id: 'pgm-r624', title: 'R624 server session', state: 'working', project: 'Jcode-PGM' }], ttlSec: 120 }));
+      const ext = ((await call('/api/work/sessions', U)).data.external || []).find((x) => x.id === 'pgm-r624') || {};
+      const audit = fs.readFileSync(path.join(SB, 'security', 'audit.jsonl'), 'utf8');
+      const actions = ['pgm.refused', 'pgm.whoami', 'pgm.models', 'pgm.route', 'pgm.charge', 'pgm.sessions'].filter((x) => audit.includes('"' + x + '"'));
+      check('R624', 'an answer the Jcode PGM Server charges (POST /__pgm/charge) moves the person\'s month exactly as the same answer through the hub\'s own OpenRouter call does (spent +0.03 USD, one more call, one more turn with its tokens in the usage view under the OpenRouter model); kind mine adds to their own-key counter and never to the team spend; a bad charge (negative cost, unknown kind, no pair) is 400 and an unknown person 404; the server\'s session report shows on the person\'s session list as source pgm-server; the security log has every kind of /__pgm/ call (refused, whoami, models, route, charge, sessions) and no key, token or secret',
+        hubCall.status === 200 && ch.status === 200 && ch.json.ok === true && same(dCh, dHub) && dHub.usd === 0.03 && dHub.calls === 1 && dHub.turns === 1 && dHub.input > 0 && a2.model === 'anthropic/claude-sonnet-4.5'
+        && chMine.status === 200 && Math.round((b3.mineUsd - b2.mineUsd) * 1e6) === 125000 && b3.mineCalls === b2.mineCalls + 1 && b3.spentUsd === b2.spentUsd && b3.calls === b2.calls
+        && chBad.every((s) => s === 400) && chNo === 404 && rep.status === 200 && rep.json.accepted === 1 && ext.source === 'pgm-server' && ext.state === 'working' && ext.device === 'r624-server'
+        && actions.length === 6 && leaks([audit]) === 0,
+        `hub ${hubCall.status} ${JSON.stringify(dHub)}; charge ${ch.status} ${JSON.stringify(dCh)}; mine ${chMine.status} +${Math.round((b3.mineUsd - b2.mineUsd) * 1e6) / 1e6}; bad ${chBad} unknown ${chNo}; report ${rep.status} ${JSON.stringify(ext)}; log ${actions}; leaks ${leaks([audit])}`);
+
+      // R625: the forward
+      setPgm({ url: fakeUrl, stateFile: 'pgm-state/server.json' });
+      const n0 = fp.reqs.length;
+      const hello = note(await g('POST', '/pgm/hello?v=1', dev.token, { proto: [1] }, { 'x-pgm-hub-user': 'forged.sig', 'x-pgm-secret': 'guess', 'X-PGM-Other': '1', 'x-vr-user': 't-admin', Cookie: 'a=b' })), recH = fp.reqs[fp.reqs.length - 1] || { headers: {} };
+      const vH = vouched(recH);
+      const helloS = note(await g('POST', '/pgm/hello', U, { proto: [1] })), vS = vouched(fp.reqs[fp.reqs.length - 1]);
+      const n1 = fp.reqs.length;
+      const anon = note(await g('POST', '/pgm/hello', null, { proto: [1] })), bad = note(await g('POST', '/pgm/v1/call', 'not-a-token-r620', {})), anonGet = note(await g('GET', '/pgm/models', null));
+      const mHello = note(await g('POST', '/pgm/hello', mach.token, { proto: [1] })), mInfo = note(await g('GET', '/pgm/info', mach.token));
+      const n2 = fp.reqs.length;
+      const info = note(await g('GET', '/pgm/info', null)), recI = fp.reqs[fp.reqs.length - 1] || { headers: {} };
+      setPgm(null);
+      const noSrv = note(await g('GET', '/pgm/info', null)), noSrv2 = note(await g('POST', '/pgm/hello', dev.token, {}));
+      const n3 = fp.reqs.length;
+      const sentHeaders = Object.keys(recH.headers);
+      check('R625', 'the hub forwards /pgm/* to the Jcode PGM Server with the person it vouches for: a device token or a page session as the bearer goes on (path, query, body and the server\'s answer as they are) with x-pgm-hub-user signed by the shared secret (the fake server checks the HMAC: that person, that device, a fresh time) and without the client\'s own x-pgm-* (a forged one is replaced), x-vr-*, cookie or bearer; nobody signed in, a bad token and a linked machine\'s token never reach the server (401, 401, 403), except GET /pgm/info, which goes on without one (and unsigned); with no pgmServer.url /pgm/ is a plain 404 "this hub has no Jcode PGM Server"',
+        hello.status === 200 && hello.json.url === '/pgm/hello?v=1' && recH.body === JSON.stringify({ proto: [1] }) && hello.headers.get('x-fake') === 'pgm' && vH && vH.user === 't-user' && vH.deviceId === dev.id && Math.abs(Date.now() - vH.at) < 60000
+        && !sentHeaders.some((h) => (h.startsWith('x-pgm-') && h !== 'x-pgm-hub-user') || h.startsWith('x-vr-') || h === 'cookie' || h === 'authorization')
+        && helloS.status === 200 && vS && vS.user === 't-user' && /^s-/.test(vS.deviceId) && n1 - n0 === 2
+        && anon.status === 401 && bad.status === 401 && anonGet.status === 401 && mHello.status === 403 && mInfo.status === 403 && n2 === n1
+        && info.status === 200 && info.json.server === 'fake' && !recI.headers['x-pgm-hub-user'] && noSrv.status === 404 && noSrv.json.error === 'this hub has no Jcode PGM Server' && noSrv2.status === 404 && n3 === n2 + 1 && leaks(seenText) === 0,
+        `hello ${hello.status} ${JSON.stringify(hello.json)} vouched ${JSON.stringify(vH)} headers ${sentHeaders.filter((h) => /^x-|cookie|authorization/.test(h))}; session ${helloS.status} ${vS && vS.deviceId}; refused ${anon.status}/${bad.status}/${anonGet.status} machine ${mHello.status}/${mInfo.status} reached ${n2 - n1}; info ${info.status} signed ${!!recI.headers['x-pgm-hub-user']}; none ${noSrv.status} "${noSrv.json.error}"/${noSrv2.status}; leaks ${leaks(seenText)}`);
+
+      // R626: streaming both ways, the hang-up, and /api/check
+      setPgm({ url: fakeUrl, stateFile: 'pgm-state/server.json' });
+      const s = {};
+      { // the answer, chunk by chunk: the second chunk is written only after the client has the first
+        const r = await fetch(H + '/pgm/stream', { method: 'POST', headers: { Authorization: 'Bearer ' + dev.token }, body: '{}' });
+        const rd = r.body.getReader(), dec = new TextDecoder(); let got = '';
+        const until = async (w) => { while (!got.includes(w)) { const x = await within(rd.read(), 5000); if (!x || x.done) return false; got += dec.decode(x.value); } return true; };
+        s.one = await until('one'); s.twoBefore = got.includes('two'); gates.two.res(); s.two = await until('two'); s.threeBefore = got.includes('three'); gates.three.res(); s.three = await until('three');
+        s.sse = r.headers.get('content-type'); s.buffering = r.headers.get('x-accel-buffering');
+      }
+      { // the request body, piece by piece: the server has the first piece before the client sends the second
+        let ctl; const rs = new ReadableStream({ start(c) { ctl = c; } }); const enc = new TextEncoder();
+        const pr = fetch(H + '/pgm/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + dev.token, 'Content-Type': 'application/octet-stream' }, body: rs, duplex: 'half' });
+        ctl.enqueue(enc.encode('part-one;')); s.early = (await within(gates.part1.p, 5000)) === true; ctl.enqueue(enc.encode('part-two;')); ctl.close();
+        const ur = await pr; s.upload = (await ur.json()).parts || [];
+      }
+      { // a client that hangs up closes the server's side
+        const ac = new AbortController(); const lr = await fetch(H + '/pgm/long', { headers: { Authorization: 'Bearer ' + dev.token }, signal: ac.signal }); const rd = lr.body.getReader(); await within(rd.read(), 5000); ac.abort();
+        s.closed = await within(gates.longClosed.p, 5000);
+      }
+      const c1 = (await call('/api/check', U)).data.pgmServer;
+      setPgm({ url: fakeUrl, signKey: SIGN_CFG }); const c2 = (await call('/api/check', U)).data.pgmServer;
+      setPgm({ url: fakeUrl }); const c3 = (await call('/api/check', U)).data.pgmServer;
+      setPgm(null); const c4 = (await call('/api/check', U)).data;
+      check('R626', 'a stream passes through /pgm/ as it is made, both ways: the client has the server\'s first SSE chunk before the server writes the second (and the second before the third), the server has the first piece of a streamed request body before the client sends the next, nginx is told not to buffer; a client that hangs up mid-stream closes the server\'s side within moments; /api/check carries pgmServer {url: <hub>/pgm, signKey} from the server\'s state file (else config pgmServer.signKey) when the server is set up, and no pgmServer at all without a sign key or without pgmServer.url',
+        s.one && !s.twoBefore && s.two && !s.threeBefore && s.three && /event-stream/.test(s.sse || '') && s.buffering === 'no' && s.early && same(s.upload.join(''), 'part-one;part-two;') && s.upload.length >= 2
+        && s.closed && s.closed.ended === false && c1 && /^https?:\/\/.+\/pgm$/.test(c1.url) && c1.signKey === SIGN && c2 && c2.signKey === SIGN_CFG && c3 === undefined && c4.username === 't-user' && c4.pgmServer === undefined,
+        `stream ${JSON.stringify({ one: s.one, twoBefore: s.twoBefore, two: s.two, three: s.three, sse: s.sse, buffering: s.buffering })}; upload early ${s.early} ${JSON.stringify(s.upload)}; hang-up ${JSON.stringify(s.closed)}; check ${JSON.stringify(c1)} / ${c2 && c2.signKey} / ${JSON.stringify(c3)} / ${JSON.stringify(c4.pgmServer)}`);
+    } finally {
+      for (const gt of Object.values(gates)) gt.res(null);
+      if (hadLocal) fs.writeFileSync(localCfgFile, JSON.stringify(local0, null, 2)); else { try { fs.unlinkSync(localCfgFile); } catch {} }
+      srv.close(); if (srv.closeAllConnections) srv.closeAllConnections();
+      try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch {}
+      await call('/api/openrouter/mykey/remove', U, {});
+      if (myA0.hasKey) await call('/api/openrouter/mykey', A, { pairs: (myA0.pairs || []).length ? myA0.pairs : [] }); else await call('/api/openrouter/mykey/remove', A, {});
+      await call('/api/providers/remove', A, { id: tp.id });
+      await call('/api/apikey/revoke', U, { id: kU.id });
+      await call('/api/devices/revoke', U, { id: dev.id }); await call('/api/devices/revoke', U, { id: mach.id });
+    }
+  }
+  // R627-R633 (T-376 stage 3, team note plans/jcode-pgm-server-stage3.md F.3 / F.4): Work on a PGM session goes through the Jcode
+  // PGM Server. A fake server implements F.3 (/__srv/*, the secret checked on every call, its sessions with events and an SSE
+  // stream); R633 runs the real jcodepgm server (env VR_TEST_JCODEPGM) against the hub and the suite's fake OpenRouter.
+  async function r627Check() {
+    const http = require('http');
+    const secretFile = path.join(SB, 'pgm-server.secret');
+    const secret = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8').split('\n')[0].trim() : '';
+    // a chat to its end, or the time limit: then what came so far (timedOut)
+    const within = (p, ms) => Promise.race([p, sleep(ms).then(() => (p.evs ? { status: 0, events: p.evs, timedOut: true } : null))]);
+    const chatP = (tok, msg, opts = {}) => { const evs = []; const p = chat(tok, msg, { ...opts, onEvent: (e) => evs.push(e) }); p.evs = evs; return p; };
+    const fk = { reqs: [], refused: 0, sessions: new Map(), subs: new Map(), n: 0 };
+    const pub = (x) => { const o = { ...x }; delete o.events; delete o.mode; return o; };
+    const send = (x, v) => { for (const r of fk.subs.get(x.id) || []) r.write('data: ' + JSON.stringify(v) + '\n\n'); };
+    // the frames as Jcode PGM 0.99.9 sends them (F.8): {type: "event", session, event, ...the event}, {type: "session", ...state}
+    const push = (x, ev) => { const e = { seq: ++x.seq, at: Date.now(), ...ev }; x.events.push(e); x.updatedAt = Date.now(); send(x, { type: 'event', session: x.id, event: e, ...e }); return e; };
+    const state = (x, running) => { x.running = running; send(x, { type: 'session', session: x.id, ...pub(x) }); };
+    const make = (o) => { const id = 'ps-' + crypto.randomBytes(6).toString('hex'); const x = { id, user: o.user, title: o.title || '', project: o.project || '', branch: o.branch || '', pair: o.pair || '', worktree: o.worktree || '', runner: o.runner || { kind: 'server', since: Date.now() }, running: !!o.running, events: [], seq: 0, mode: o.mode || 'server', createdAt: Date.now(), updatedAt: Date.now() }; fk.sessions.set(id, x); return x; };
+    const serverRun = async (x, text) => { state(x, true); await sleep(80); push(x, { from: 'server', kind: 'tool', text: 'ran ls', tool: { name: 'bash', input: { command: 'ls' }, output: 'a.txt b.txt' } }); await sleep(50); push(x, { from: 'server', kind: 'assistant', text: 'server says: ' + text }); if (/SLOW/.test(text)) return; await sleep(50); state(x, false); };
+    const srv = http.createServer((req, res) => {
+      let body = ''; req.on('data', (c) => { body += c; });
+      req.on('end', async () => {
+        const u = new URL(req.url, 'http://x'), b = (() => { try { return JSON.parse(body || '{}'); } catch { return {}; } })();
+        const rec = { method: req.method, path: u.pathname, query: Object.fromEntries(u.searchParams), body: b }; fk.reqs.push(rec);
+        const out = (st, v) => { res.writeHead(st, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(v)); };
+        if (req.headers['x-pgm-secret'] !== secret) { fk.refused++; return out(403, { error: 'wrong secret' }); }
+        const m = /^\/__srv\/sessions(?:\/(ps-[0-9a-z]+))?(?:\/(events|message|stop))?$/.exec(u.pathname);
+        if (!m) return out(404, { error: 'no such route' });
+        const user = b.user || u.searchParams.get('user') || '', x = m[1] && fk.sessions.get(m[1]);
+        if (!m[1]) {
+          if (req.method === 'GET') return out(200, { sessions: [...fk.sessions.values()].filter((s) => s.user === user).map(pub) });
+          const s = make({ user, title: b.title, project: b.project, branch: b.branch, pair: b.pair, worktree: b.worktree, mode: fk.nextMode }); return out(200, { id: s.id, session: pub(s) });
+        }
+        if (!x || x.user !== user) return out(404, { error: 'no such session' });
+        const after = Number(u.searchParams.get('after') || 0);
+        if (!m[2] && req.method === 'GET') return out(200, { session: pub(x), events: x.events.filter((e) => e.seq > after) });
+        if (m[2] === 'events') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }); res.write('data: ' + JSON.stringify({ type: 'session', session: x.id, ...pub(x) }) + '\n\n');
+          for (const e of x.events.filter((e) => e.seq > after)) res.write('data: ' + JSON.stringify({ type: 'event', session: x.id, event: e, ...e }) + '\n\n');
+          if (!fk.subs.has(x.id)) fk.subs.set(x.id, new Set()); fk.subs.get(x.id).add(res); res.on('close', () => fk.subs.get(x.id).delete(res));
+          return;
+        }
+        if (m[2] === 'stop') { const was = x.running; push(x, { from: 'server', kind: 'note', text: 'stopped from the website' }); state(x, false); return out(200, { ok: true, stopped: was }); }
+        // message (F.3)
+        const text = String(b.text || ''), dev = (x.runner && x.runner.device) || 'r628-laptop';
+        if (x.mode === 'never') return out(409, { error: 'the work is on ' + dev + ', which is offline, and was never pushed' });
+        push(x, { from: 'website', kind: 'user', text });
+        if (x.mode === 'device' && b.target === 'server') { // F.8: jcode is open, the website asks for the server: the handover first
+          x.runner = { kind: 'server', since: Date.now() }; x.mode = 'server';
+          out(200, { routed: 'server', run: 'r-' + (++fk.n), from: 'handover', handover: { device: dev + '-4242', label: dev, branch: 'work/r629', commit: 'abc123def4567890' } }); serverRun(x, text); return;
+        }
+        if (x.mode === 'device') {
+          out(200, { routed: 'device', device: dev + '-4242', label: dev, seq: x.seq });
+          state(x, true); await sleep(150); push(x, { from: 'device:' + dev, kind: 'assistant', text: 'jcode says: ' + text }); await sleep(80); state(x, false); return;
+        }
+        const ans = x.mode === 'handover' ? { routed: 'server', run: 'r-' + (++fk.n), handover: { device: dev, branch: 'work/r629', commit: 'abc123def4567890' } }
+          : x.mode === 'lastpush' ? { routed: 'server', run: 'r-' + (++fk.n), from: 'last-push', note: 'the newest work is on ' + dev + '; continued from abc1234' } : { routed: 'server', run: 'r-' + (++fk.n) };
+        x.runner = { kind: 'server', since: Date.now() };
+        out(200, ans); serverRun(x, text);
+      });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const fakeUrl = `http://127.0.0.1:${srv.address().port}`;
+    const localCfgFile = path.join(SB, 'config.local.json'), hadLocal = fs.existsSync(localCfgFile), local0 = hadLocal ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : null;
+    const setLocal = (k, v) => { const c = fs.existsSync(localCfgFile) ? JSON.parse(fs.readFileSync(localCfgFile, 'utf8')) : {}; if (v === undefined) delete c[k]; else c[k] = v; fs.writeFileSync(localCfgFile, JSON.stringify(c, null, 2)); };
+    const pairs = [{ id: 'or/sonnet', label: 'Sonnet', model: 'anthropic/claude-sonnet-4.5', providers: ['anthropic'], allowFallbacks: false }];
+    const tp = (await call('/api/providers/add', A, { kind: 'openrouter', label: 'R627 team', apiKey: R591_KEY, pairs, shared: true })).data.provider || {};
+    const info = (evs) => evs.filter((e) => e.type === 'bridge_info').map((e) => e.text).join(' | ');
+    const errs = (evs) => evs.filter((e) => e.type === 'bridge_error').map((e) => e.text).join(' | ');
+    const done = (evs) => (evs.find((e) => e.type === 'bridge_done') || {}).code;
+    const result = (evs) => evs.find((e) => e.type === 'result') || {};
+    const srvReqs = (from, p) => fk.reqs.slice(from).filter((r) => !p || p(r));
+    const list = async () => (await call('/api/work/sessions?archived=1', U)).data;
+    const mine = async (sid) => ((await list()).sessions || []).find((s) => s.id === sid) || {};
+    const newSession = async (title) => (await call('/api/work/sessions/new', U, { title, provider: tp.id, model: 'or/sonnet', background: true })).data.id;
+    const others = [];
+    try {
+      setLocal('pgmServer', { url: fakeUrl });
+      // R627: create on the first send, then message; the server's events are the page's transcript
+      const sid = await newSession('R627 PGM session'); others.push(sid);
+      const n0 = fk.reqs.length;
+      const r1 = await within(chatP(U,'hello r627', { session: sid }), 30000) || { events: [] }, e1 = r1.events;
+      const created = srvReqs(n0, (r) => r.method === 'POST' && r.path === '/__srv/sessions'), msg1 = srvReqs(n0, (r) => /\/message$/.test(r.path));
+      const s1 = await mine(sid), pid = (s1.pgm || {}).id || '', wt = (s1.worktree || {}).path || '';
+      const toolUse = e1.some((e) => e.type === 'assistant' && e.message.content.some((c) => c.type === 'tool_use' && c.name === 'bash')), toolRes = e1.some((e) => e.type === 'user' && e.message.content.some((c) => c.type === 'tool_result' && c.content === 'a.txt b.txt'));
+      const n1 = fk.reqs.length;
+      const r2 = await within(chatP(U,'second r627', { session: sid }), 30000) || { events: [] }, e2 = r2.events;
+      const created2 = srvReqs(n1, (r) => r.method === 'POST' && r.path === '/__srv/sessions').length, msg2 = srvReqs(n1, (r) => /\/message$/.test(r.path))[0] || { body: {} };
+      const leaked = [...e1, ...e2].some((e) => JSON.stringify(e).includes(secret));
+      check('R627', 'a Work session on the team\'s OpenRouter goes through the Jcode PGM Server when the hub has one: the first message creates the PGM session (POST /__srv/sessions with the person, the session\'s title, its branch, the pair and the session\'s own worktree), every message goes to /__srv/sessions/<id>/message with the worktree, project, branch and pair, target "auto", and the hub\'s MCP servers and system prompt for a run on the server (as the hub\'s own Work runs get them), and the server\'s events come back as the usual Work transcript (a tool use and its result, the answer\'s text, Done with that text, bridge_done 0) without the website\'s own message twice; the Work session keeps the PGM id, the second message reuses it, every call carries the shared secret (never shown on the page) and the hub runs no jcodepgm itself',
+        created.length === 1 && created[0].body.user === 't-user' && created[0].body.title === 'R627 PGM session' && created[0].body.pair === 'or/sonnet' && /^work\/t-user/.test(created[0].body.branch || '') && !!wt && created[0].body.worktree === wt && fs.existsSync(wt)
+        && msg1.length === 1 && msg1[0].path === '/__srv/sessions/' + pid + '/message' && msg1[0].body.text === 'hello r627' && msg1[0].body.worktree === wt && msg1[0].body.branch === created[0].body.branch && 'project' in msg1[0].body
+        && msg1[0].body.target === 'auto' && msg1[0].body.pair === 'or/sonnet' && !!(msg1[0].body.mcp && msg1[0].body.mcp.mcpServers && msg1[0].body.mcp.mcpServers.board) && /Worktree law|t-user/.test(msg1[0].body.systemPrompt || '')
+        && /^ps-/.test(pid) && toolUse && toolRes && /server says: hello r627/.test(texts(e1)) && result(e1).result === 'server says: hello r627' && result(e1).is_error === false && done(e1) === 0 && /Using the Jcode PGM Server \(OpenRouter · Sonnet\)/.test(info(e1))
+        && !/You \(website\): hello r627/.test(info(e1)) && !/jcode-answer/.test(texts(e1))
+        && created2 === 0 && msg2.path === '/__srv/sessions/' + pid + '/message' && /server says: second r627/.test(texts(e2)) && !/server says: hello r627/.test(texts(e2)) && done(e2) === 0 && fk.refused === 0 && !leaked,
+        `events ${e1.map((e) => e.type).join(',')}${r1.timedOut ? ' (timed out)' : ''}; server saw ${fk.reqs.slice(n0, n0 + 12).map((r) => r.method + ' ' + r.path.replace(/ps-[0-9a-f]+/, '<id>') + (r.query.after ? '?after=' + r.query.after : '')).join(', ')}; created ${created.length} ${JSON.stringify(created[0] && created[0].body)} wt ${wt}; msg ${JSON.stringify(msg1[0] && msg1[0].body)}; pid ${pid}; tool ${toolUse}/${toolRes}; text "${texts(e1).slice(0, 120)}" result "${result(e1).result}" done ${done(e1)}; info "${info(e1).slice(0, 200)}" err "${errs(e1)}"; second created ${created2} "${texts(e2).slice(0, 80)}" done ${done(e2)}; refused ${fk.refused} leaked ${leaked}`);
+
+      // R628: routed to jcode on the device; what was typed in jcode meanwhile shows too
+      const x = fk.sessions.get(pid) || make({ user: 't-user' });
+      x.mode = 'device'; x.runner = { kind: 'device', device: 'r628-laptop', since: Date.now() };
+      push(x, { from: 'device:r628-laptop', kind: 'user', text: 'typed in jcode r628' }); push(x, { from: 'device:r628-laptop', kind: 'assistant', text: 'jcode answered in jcode r628' });
+      const r3 = await within(chatP(U,'device please r628', { session: sid }), 30000) || { events: [] }, e3 = r3.events;
+      const iSent = e3.findIndex((e) => e.type === 'bridge_info' && /^Sent to jcode on r628-laptop/.test(e.text)), iDev = e3.findIndex((e) => e.type === 'assistant' && /jcode says: device please r628/.test(JSON.stringify(e)));
+      check('R628', 'a message to a PGM session that jcode runs on the person\'s computer is sent to jcode: the page says "Sent to jcode on <device>", jcode\'s answer streams into the same transcript after it and the run ends with it (Done, bridge_done 0); a turn typed in jcode meanwhile shows when the website sends next (the person\'s jcode message as a line, jcode\'s answer as text), and the session says it runs in jcode on that device',
+        iSent >= 0 && iDev > iSent && /You in jcode on r628-laptop: typed in jcode r628/.test(info(e3)) && /jcode answered in jcode r628/.test(texts(e3)) && result(e3).result === 'jcode says: device please r628' && done(e3) === 0 && /running in jcode on r628-laptop/.test(info(e3)),
+        `sent at ${iSent} device answer at ${iDev}; info "${info(e3).slice(0, 300)}"; text "${texts(e3).slice(0, 160)}"; done ${done(e3)} err "${errs(e3)}"`);
+
+      // R629: the handover, the last push and the 409, in plain lines
+      // "continue on the server" while jcode has it (target server): the handover is waited for inside the message call (F.8)
+      x.mode = 'device'; x.runner = { kind: 'device', device: 'r628-laptop', label: 'r628-laptop', since: Date.now() }; const nH = fk.reqs.length;
+      const r4 = await within(chatP(U,'handover r629', { session: sid, target: 'server' }), 30000) || { events: [] }, e4 = r4.events;
+      const hoTarget = (srvReqs(nH, (r) => /\/message$/.test(r.path))[0] || { body: {} }).body.target;
+      x.mode = 'lastpush'; const r5 = await within(chatP(U,'last push r629', { session: sid }), 30000) || { events: [] }, e5 = r5.events;
+      x.mode = 'never'; x.runner = { kind: 'device', device: 'r629-laptop', since: Date.now() };
+      const r6 = await within(chatP(U,'never pushed r629', { session: sid }), 30000) || { events: [] }, e6 = r6.events;
+      x.mode = 'server'; const r7 = await within(chatP(U,'free again r629', { session: sid }), 30000) || { events: [] }, e7 = r7.events;
+      check('R629', 'what the server answers about unfinished work is said plainly: "continue on the server" while jcode has the session sends target "server" and its handover ("jcode on <device> handed its unfinished work over: committed and pushed <branch> at <commit>") and a continue from the last push (the server\'s note) are lines before the server\'s answer; "the work is on <device>, which is offline, and was never pushed" (409) is the run\'s error as the server says it, the run ends (not 0) and the session takes the next message at once',
+        hoTarget === 'server' && /jcode on r628-laptop handed its unfinished work over: committed and pushed work\/r629 at abc123def456/.test(info(e4)) && /server says: handover r629/.test(texts(e4)) && done(e4) === 0
+        && /The newest work is on r628-laptop; continued from abc1234/.test(info(e5)) && /server says: last push r629/.test(texts(e5)) && done(e5) === 0
+        && /the work is on r629-laptop, which is offline, and was never pushed/i.test(errs(e6)) && done(e6) !== 0 && !result(e6).type
+        && r7.status === 200 && /server says: free again r629/.test(texts(e7)) && done(e7) === 0,
+        `handover target ${hoTarget} "${info(e4).slice(0, 200)}" ${done(e4)}; last push "${info(e5).slice(0, 200)}" ${done(e5)}; never "${errs(e6)}" ${done(e6)}; next ${r7.status} ${done(e7)}`);
+
+      // R630: Stop
+      const n2 = fk.reqs.length;
+      const slow = within(chatP(U,'SLOW stop me r630', { session: sid }), 30000); await sleep(1200);
+      const t0 = Date.now(), st = await call('/api/stop', U, { session: sid }), r8 = await slow || { events: [] }, took = Date.now() - t0, e8 = r8.events;
+      const stopReq = srvReqs(n2, (r) => /\/stop$/.test(r.path))[0] || { body: {} };
+      const r9 = await within(chatP(U,'after stop r630', { session: sid }), 30000) || { events: [] };
+      check('R630', 'Stop on a PGM session asks the server to stop (POST /__srv/sessions/<id>/stop for that person) and the run ends at once without a Done and not with 0; the session takes the next message straight after',
+        st.status === 200 && stopReq.path === '/__srv/sessions/' + pid + '/stop' && stopReq.body.user === 't-user' && done(e8) !== 0 && !result(e8).type && took < 4000 && /server says: SLOW stop me r630/.test(texts(e8)) && r9.status === 200 && done(r9.events) === 0,
+        `stop ${st.status} ${stopReq.path} ${JSON.stringify(stopReq.body)} done ${JSON.stringify(done(e8))} result ${!!result(e8).type} took ${took}ms; next ${r9.status} ${done(r9.events)}`);
+
+      // R631: the list has the person's PGM sessions (one started in jcode, no report); opening it attaches a Work session, live
+      const j = make({ user: 't-user', title: 'R631 started in jcode', project: 'UnityAILab/r631-not-here', branch: 'work/r631', pair: 'or/sonnet', runner: { kind: 'device', device: 'r631-laptop', since: Date.now() }, running: true, mode: 'device' });
+      push(j, { from: 'device:r631-laptop', kind: 'user', text: 'start in jcode r631' }); push(j, { from: 'device:r631-laptop', kind: 'assistant', text: 'jcode answer one r631' });
+      const other = make({ user: 't-admin', title: 'R631 someone else\'s' });
+      const l1 = await list(), ex = (l1.external || []).find((e) => e.id === j.id) || {}, exOther = (l1.external || []).some((e) => e.id === other.id);
+      const op = await call('/api/work/sessions/pgm/open', U, { id: j.id }), wsid = op.data.id;
+      const l2 = await list(), ws = (l2.sessions || []).find((s) => s.id === wsid) || {}, stillExt = (l2.external || []).some((e) => e.id === j.id);
+      if (wsid) others.push(wsid);
+      // the page joins the session's run (GET /api/work/attach, as loadConversation does) and reads until the history is there
+      const at1 = (await call('/api/work/attach?session=' + wsid + '&run=&after=0', U)).data || {};
+      const ev1 = [...(at1.events || [])];
+      for (let i = 0; i < 20 && at1.busy && !texts(ev1).includes('jcode answer one r631'); i++) { const d = (await call('/api/work/attach?session=' + wsid + '&run=' + (at1.run || '') + '&after=' + (at1.next || 0), U)).data || {}; ev1.push(...(d.events || [])); at1.next = d.next; at1.busy = d.busy; }
+      at1.busy = at1.busy && fk.sessions.get(j.id).running;
+      push(j, { from: 'device:r631-laptop', kind: 'assistant', text: 'jcode answer two r631' }); setTimeout(() => state(j, false), 300);
+      let at2 = {}, ev2 = []; for (let i = 0; i < 20; i++) { at2 = (await call('/api/work/attach?session=' + wsid + '&run=' + (at1.run || '') + '&after=' + (at1.next || 0), U)).data || {}; ev2.push(...(at2.events || [])); if (!at2.busy) break; at1.next = at2.next; }
+      const again = await call('/api/work/sessions/pgm/open', U, { id: j.id });
+      j.mode = 'server'; const n3 = fk.reqs.length;
+      const r10 = await within(chatP(U,'continue on the website r631', { session: wsid }), 30000) || { events: [] };
+      const createdNew = srvReqs(n3, (r) => r.method === 'POST' && r.path === '/__srv/sessions').length, msgJ = srvReqs(n3, (r) => /\/message$/.test(r.path))[0] || {};
+      const bad = await call('/api/work/sessions/pgm/open', U, { id: other.id }), badId = await call('/api/work/sessions/pgm/open', U, { id: '../etc' });
+      check('R631', 'the session list has the person\'s PGM sessions from the server (GET /__srv/sessions, no report needed), saying "running in jcode on <device>", and never another person\'s; opening one started in jcode makes its Work session on the fly with the same title and branch, the PGM id and the OpenRouter pair, on screen, and it leaves "Other tools"; the page joining the session gets its transcript (what was typed and answered in jcode) and follows it live until jcode is done; opening it again finds the same session; sending continues that PGM session (no new one); another person\'s or a malformed id is refused',
+        ex.source === 'pgm-server' && ex.pgm === true && ex.where === 'running in jcode on r631-laptop' && ex.title === 'R631 started in jcode' && !exOther
+        && op.status === 200 && op.data.created === true && ws.title === 'R631 started in jcode' && (ws.pgm || {}).id === j.id && /running in jcode on r631-laptop/.test((ws.pgm || {}).where || '') && !!ws.provider && ws.provider !== 'host' && ws.model === 'or/sonnet' && l2.current === wsid && !stillExt
+        && at1.busy === true && ev1.some((e) => e.type === 'bridge_info' && e.text === 'You in jcode on r631-laptop: start in jcode r631') && texts(ev1).includes('jcode answer one r631') && ev1.some((e) => e.type === 'bridge_info' && /running in jcode on r631-laptop/.test(e.text))
+        && texts(ev2).includes('jcode answer two r631') && at2.busy === false
+        && again.status === 200 && again.data.id === wsid && again.data.created === false
+        && createdNew === 0 && msgJ.path === '/__srv/sessions/' + j.id + '/message' && /server says: continue on the website r631/.test(texts(r10.events)) && done(r10.events) === 0
+        && bad.status === 404 && badId.status === 400,
+        `ext ${JSON.stringify(ex)} other ${exOther}; open ${op.status} ${JSON.stringify(op.data)} ws ${JSON.stringify({ t: ws.title, pgm: ws.pgm, p: ws.provider, m: ws.model })} current ${l2.current === wsid} ext ${stillExt}; attach busy ${at1.busy} "${texts(ev1).slice(0, 80)}" info "${info(ev1).slice(0, 200)}"; live "${texts(ev2).slice(0, 80)}" busy ${at2.busy}; again ${again.status} ${JSON.stringify(again.data)}; send new ${createdNew} ${msgJ.path} done ${done(r10.events)}; refused ${bad.status}/${badId.status}`);
+
+      // R632: without a server the old engine runs; with one, OpenRouter Work needs no jcode.command
+      setLocal('jcode', { command: '' });
+      const wo = ((await call('/api/providers', U)).data.providers || []).find((p) => p.id === tp.id) || {};
+      const pick = await call('/api/model', U, { session: sid, provider: tp.id, model: 'or/sonnet' });
+      const rNo = await within(chatP(U,'no jcode needed r632', { session: sid }), 30000) || { events: [] };
+      setLocal('jcode', undefined); setLocal('pgmServer', undefined);
+      const n4 = fk.reqs.length;
+      const rOld = await within(chatP(U,'old engine r632 ORCALL', { session: sid, fresh: true }), 30000) || { events: [] };
+      check('R632', 'without a Jcode PGM Server (no pgmServer.url) an OpenRouter session runs Jcode PGM through the hub\'s own relay exactly as before (the fake jcodepgm answers, the server is never called); with a server, OpenRouter Work is offered and runs even when jcode.command is empty (no workOff, picking it is 200, the message goes to the server)',
+        wo.workOff === undefined && pick.status === 200 && /server says: no jcode needed r632/.test(texts(rNo.events)) && done(rNo.events) === 0
+        && /jcode-answer model=anthropic\/claude-sonnet-4\.5 provider=openrouter/.test(texts(rOld.events)) && done(rOld.events) === 0 && srvReqs(n4).length === 0,
+        `workOff ${wo.workOff} pick ${pick.status}; with server "${texts(rNo.events).slice(0, 80)}" ${done(rNo.events)} err "${errs(rNo.events)}"; old "${texts(rOld.events).slice(0, 120)}" ${done(rOld.events)} err "${errs(rOld.events)}"; server calls ${srvReqs(n4).length}`);
+
+      // R633: the real jcodepgm server (VR_TEST_JCODEPGM) with the hub and the fake OpenRouter
+      const bin = process.env.VR_TEST_JCODEPGM || '';
+      if (!bin || !fs.existsSync(bin)) skip('R633', 'a real Jcode PGM Server with the hub: create + message, a server run streams its answer', bin ? 'VR_TEST_JCODEPGM points at nothing (' + bin + ')' : 'VR_TEST_JCODEPGM is not set (the path of a jcodepgm binary with stage 3)');
+      else {
+        // a free port, never 7783-7792 (the PGM products and dev's Jcode PGM Server live there)
+        let port = await freePort(PORT + 90); if (port >= 7783 && port <= 7792) port = await freePort(7800);
+        const stateDir = path.join(SCRATCH, 'r633-pgm-state'); fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+        const log = []; const ps = spawn(bin, ['server', '--listen', '127.0.0.1:' + port, '--hub', H, '--hub-secret-file', secretFile, '--state', stateDir, '--openrouter-base', `http://127.0.0.1:${OLLAMA_PORT}/orapi`, '--quiet-log'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        ps.stdout.on('data', (d) => log.push(String(d))); ps.stderr.on('data', (d) => log.push(String(d)));
+        try {
+          let up = false; for (let i = 0; i < 60 && !up; i++) { try { up = (await fetch(`http://127.0.0.1:${port}/pgm/info`)).status === 200; } catch {} if (!up) await sleep(250); }
+          setLocal('pgmServer', { url: `http://127.0.0.1:${port}`, stateFile: path.join(stateDir, 'server.json') });
+          const rsid = await newSession('R633 real server'); others.push(rsid);
+          const rr = await within(chatP(U,'real server r633 ORCALL', { session: rsid }), 120000) || { events: [] }, rs = await mine(rsid);
+          check('R633', 'a real Jcode PGM Server (jcodepgm server, VR_TEST_JCODEPGM) next to the hub: the hub creates the PGM session there and sends the message, the server runs it with the fake OpenRouter through the hub\'s routing, and its answer streams into the Work transcript (Done, bridge_done 0)',
+            up && /^ps-/.test((rs.pgm || {}).id || '') && /or says/.test(texts(rr.events)) && done(rr.events) === 0,
+            `up ${up}; pgm ${JSON.stringify(rs.pgm)}; text "${texts(rr.events).slice(0, 160)}" done ${done(rr.events)} err "${errs(rr.events)}" info "${info(rr.events).slice(0, 200)}"; log ${log.join('').slice(-300)}`);
+        } finally { try { ps.kill(); } catch {} try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch {} }
+      }
+    } finally {
+      if (hadLocal) fs.writeFileSync(localCfgFile, JSON.stringify(local0, null, 2)); else { try { fs.unlinkSync(localCfgFile); } catch {} }
+      for (const s of fk.subs.values()) for (const r of s) { try { r.end(); } catch {} }
+      srv.close(); if (srv.closeAllConnections) srv.closeAllConnections();
+      for (const s of others) await call('/api/work/sessions/delete', U, { id: s });
+      await call('/api/providers/remove', A, { id: tp.id });
+    }
+  }
   // R546 (T-318): Settings in groups, Find a setting, and the site's ways back. The served page keeps every Settings control
   // it had (each id once, inside the Settings box) and every group has a heading and a one-line hint; the page's own Save
   // app settings body (taken from the served page, run in vm on a stand-in form) goes to /api/prefs as t-user and the hub
@@ -7278,19 +9235,24 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
   async function r546Check() {
     const seen = {};
     const page = await (await fetch(H + '/')).text(), pjs = await fetch(H + '/profile.js'), src = pjs.status === 200 ? await pjs.text() : '';
-    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
+    const box = (page.match(/<div id="settings" class="modal" hidden>([\s\S]*?)<div id="downloads" class="modal" hidden>/) || [])[1] || '';
+    const dlBox = (page.match(/<div id="downloads" class="modal" hidden>([\s\S]*?)<div id="profileCard"/) || [])[1] || '';
     const ids = ['setNick', 'setColors', 'setSound', 'volMessage', 'volMention', 'volReply', 'volCall', 'volBoard', 'volAsk', 'soundSet', 'setAskAuto', 'setAskMin', 'setAskActivity', 'setAskTts',
       'setToasts', 'setReopen', 'setEnhance', 'setAutoScroll', 'setTtsAll', 'setTtsUnity', 'setTts', 'ttsVolume', 'ttsTest', 'ttsRate', 'ttsRateVal', 'ttsVoice', 'ttsScope', 'audNoise', 'audEcho', 'audAgc',
-      'callVolume', 'callQuality', 'clipVolume', 'clipAuto', 'ttsStop', 'setAutosave', 'setTheme', 'saveSettings', 'setMsg', 'aboutVibeRoller', 'aboutModules', 'apiBox', 'devBox', 'machBox', 'srcBox',
-      'hostBox', 'provBox', 'fjBox', 'projBox', 'dlVersion', 'dlBody', 'appBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
-    seen.missing = ids.filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !box.includes('id="' + id + '"'));
+      'callVolume', 'callQuality', 'clipVolume', 'clipAuto', 'ttsStop', 'setAutosave', 'setTheme', 'saveSettings', 'setMsg', 'aboutVibeRoller', 'aboutModules', 'apiBox', 'devBox', 'machBox',
+      'fjBox', 'projBox', 'profilePreview', 'profileBox', 'closeSettings', 'setTabs'];
+    const aiBox = (page.match(/<div id="aiAdmin" class="screen" hidden>([\s\S]*?)<div id="admin" class="screen" hidden>/) || [])[1] || ''; // T-379: the AI groups live in AI Admin
+    seen.missing = ids.filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !box.includes('id="' + id + '"'))
+      .concat(['dlVersion', 'dlBody', 'appBox', 'closeDownloads'].filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !dlBox.includes('id="' + id + '"')))
+      .concat(['srcBox', 'provBox', 'orBox', 'hostBox'].filter((id) => (page.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1 || !aiBox.includes('id="' + id + '"')));
     const groups = [...box.matchAll(/<section class="setGroup"[^>]*>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
     seen.groups = groups.length; seen.headless = groups.filter((g) => !/^\s*<h3>[^<]+<\/h3><p class="setHint">[\s\S]+?<\/p>/.test(g)).length;
+    seen.aiGroups = (aiBox.split('id="aiPersonal"')[1] || '').match(/<h3>[^<]+<\/h3>/g)?.map((h) => h.slice(4, -5)).join(','); // T-379: the four AI groups moved to AI Admin → Yours
     const pane = (n) => (box.match(new RegExp('<div data-setpane="' + n + '"[^>]*>([\\s\\S]*?)\\n     </div>')) || [])[1] || '';
     const strip = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
     const served = (n) => [...pane(n).matchAll(/<section class="setGroup"[^>]*>\s*<h3>([^<]+)<\/h3><p class="setHint">([\s\S]*?)<\/p>([\s\S]*?)<\/section>/g)].map((m) => ({ title: m[1], text: m[1] + ' ' + strip(m[2]), rows: [strip(m[3])] }));
-    const app = served('app'), conn = served('connections');
-    seen.appGroups = app.map((g) => g.title).join(','); seen.connGroups = conn.length;
+    const app = served('app'), work = served('work'), sound = served('sound'), conn = served('connections');
+    seen.appGroups = app.map((g) => g.title).join(','); seen.workGroups = work.map((g) => g.title).join(','); seen.soundGroups = sound.map((g) => g.title).join(','); seen.connGroups = conn.map((g) => g.title).join(',');
     // the page's own Save app settings body, on a stand-in form
     const bodySrc = (page.match(/\$\('saveSettings'\)\.onclick = async \(\) => \{\s*try \{\s*const d = await json\('\/api\/prefs', \{ method: 'POST', body: JSON\.stringify\((\{[\s\S]*?\n    \})\) \}\);/) || [])[1] || '';
     seen.saveIds = [...bodySrc.matchAll(/\$\('(\w+)'\)/g)].map((m) => m[1]).filter((id) => !box.includes('id="' + id + '"'));
@@ -7317,18 +9279,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const shape = (r) => r.groups.map((g) => (g.show ? g.rows.map((x) => (x ? 1 : 0)).join('') : '-')).join(' ') + (r.any ? '' : ' none');
       seen.empty = shape(M('', G)); seen.echo = shape(M('  ECHO ', G)); seen.voice = shape(M('voice', G)); seen.style = shape(M('style sound', G)); seen.nothing = shape(M('zzz', G));
       const titles = (q, gs) => { const r = M(q, gs); return gs.filter((g, i) => r.groups[i].show).map((g) => g.title).join(','); };
-      seen.realEcho = titles('echo', app); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn);
+      seen.realEcho = titles('echo', sound); seen.realTheme = titles('theme', app); seen.realForgejo = titles('forgejo token', conn); seen.realAsks = titles('if i do not respond', work);
     }
     seen.wired = /id="setFind" type="search"/.test(box) && /id="setNone"/.test(box) && /findBox\.addEventListener\('input', \(\) => find\(findBox\.value\)\)/.test(src) && /settingsMatch\(q, groups\.map/.test(src);
     // every screen: a title and ← Menu, which goes to the menu; Settings: Close, beside it and Escape are one way out
     const screens = [...page.matchAll(/<div id="(\w+)" class="screen"[^>]*>\s*<header>([\s\S]*?)<\/header>/g), ...page.matchAll(/<div id="(shell)" hidden>\s*<header>([\s\S]*?)<\/header>/g)];
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
-    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
-    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 17 && !seen.headless && seen.appGroups === 'Sounds,When the AI asks,Chat and Work,Read aloud,Calls and voice clips,Appearance,Desktop Unity' && seen.connGroups === 8
+    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings' && !\$\('settings'\)\.classList\.contains\('asPage'\)\) \$\('closeSettings'\)\.click\(\); \};/.test(page) // the modal; the page (T-380) has its own way back && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
+    const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 13 && !seen.headless && seen.aiGroups === 'AI source,My AIs,My OpenRouter,My AI hosts' && seen.appGroups === 'Appearance,Desktop Unity' && seen.workGroups === 'Chat and Work,My projects,When the AI asks' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
+      && seen.connGroups === 'API access,Signed-in devices,My machines,My Forgejo'
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'
       && !!M && seen.empty === '111 11 11' && seen.echo === '- - 10' && seen.voice === '- 11 11' && seen.style === '001 - -' && seen.nothing === '- - - none'
-      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.wired
+      && seen.realEcho === 'Calls and voice clips' && seen.realTheme === 'Appearance' && seen.realForgejo === 'My Forgejo' && seen.realAsks === 'When the AI asks' && seen.wired
       && seen.screens >= 9 &&!seen.noWayBack.length && seen.back && seen.close;
     check('R546', 'Settings keeps every setting it had (each control once, with its id, inside a group that has a heading and a one-line explanation) and the page\'s own Save app settings still saves through /api/prefs, where the hub keeps what it sent; Find a setting shows only the groups and rows that have every word typed (any case; a heading match shows the whole group; nothing matching says so); every screen has a title and a way back to the menu, and Settings closes the same way from Close, a click beside it and Escape',
       ok, JSON.stringify(seen));
@@ -7382,6 +9345,72 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       && seen.plain === '[attached: x.txt, y.png] | just text';
     check('R526', 'the Work queue panel (T-188) lists every message still to go in the open session, "Send now" first, then the queue in order, with the attachments named; copy one and copy all give the messages as written (a rule between them) and a refused clipboard says so; cancel one removes just that one, cancel all asks once more and then clears the queue and the "Send now" text; the badge and the summary count the other sessions\' waiting messages too (not archived ones), each a click away; a refresh with nothing changed does not redraw it; hiding it is remembered; the hub serves queue.js and the page loads it with its button and sidebar',
       ok, JSON.stringify(seen));
+  }
+  // R568-R570 (T-369, G4): Settings -> API access, page side. R568 drives web/apisetup.js (pure), R569 reads the served
+  // page (keys list, Create, Revoke, Connect panel, old single key kept), R570 runs the page's key list code on a stand-in.
+  async function r565Check() {
+    const page = await (await fetch(H + '/')).text(), jsr = await fetch(H + '/apisetup.js'), src = jsr.status === 200 ? await jsr.text() : '';
+    const seen = {};
+    let A = null; try { const ctx = { window: {} }; require('vm').runInNewContext(src, ctx); A = ctx.window.APISETUP; } catch (e) { seen.load = e.message; }
+    let ok = false;
+    if (A) {
+      const get = (arr, id) => (arr.find((s) => s.id === id) || {}).text || '';
+      const withKey = A.setups({ origin: 'https://hub.example.org/', key: 'mills_SECRET123', model: 'claude-opus-5-5' });
+      const noKey = A.setups({ origin: 'https://hub.example.org/v1' });
+      const cc = get(withKey, 'claude-code'), cx = get(withKey, 'codex'), jc = get(withKey, 'jcode'), oc = get(withKey, 'opencode'), oa = get(withKey, 'openai'), c1 = get(withKey, 'curl-openai'), c2 = get(withKey, 'curl-anthropic');
+      seen.ids = withKey.map((s) => s.id).join(',');
+      seen.cc = cc.includes('export ANTHROPIC_BASE_URL=https://hub.example.org\n') && cc.includes('export ANTHROPIC_AUTH_TOKEN=mills_SECRET123') && cc.includes('export ANTHROPIC_MODEL=claude-opus-5-5')
+        && cc.includes('$env:ANTHROPIC_BASE_URL = "https://hub.example.org"') && cc.includes('$env:ANTHROPIC_AUTH_TOKEN = "mills_SECRET123"') && cc.includes('$env:ANTHROPIC_MODEL = "claude-opus-5-5"');
+      seen.cx = cx.includes('model_provider = "viberoller"') && cx.includes('[model_providers.viberoller]') && cx.includes('base_url = "https://hub.example.org/v1"') && cx.includes('env_key = "VIBEROLLER_API_KEY"') && cx.includes('wire_api = "responses"') && !cx.includes('wire_api = "chat"') && cx.includes('mills_SECRET123') && cx.includes('model = "claude-opus-5-5"')
+        && /Responses API/.test((withKey.find((s) => s.id === 'codex') || {}).note || '') && !/comes later/.test((withKey.find((s) => s.id === 'codex') || {}).note || ''); // G5: the hub serves /v1/responses
+      seen.jc = jc.includes('jcode provider add viberoller') && jc.includes('--base-url https://hub.example.org/v1') && jc.includes('--model claude-opus-5-5') && jc.includes('mills_SECRET123') && jc.includes('--api-key-stdin');
+      let oj = {}; try { oj = JSON.parse(oc); } catch {}
+      seen.oc = ((((oj.provider || {}).viberoller || {}).options || {}).baseURL === 'https://hub.example.org/v1') && oj.provider.viberoller.options.apiKey === 'mills_SECRET123' && !!oj.provider.viberoller.models['claude-opus-5-5'];
+      seen.oa = oa.includes('https://hub.example.org/v1') && oa.includes('mills_SECRET123') && oa.includes('claude-opus-5-5');
+      seen.curl = c1.includes('https://hub.example.org/v1/chat/completions') && c1.includes('Authorization: Bearer mills_SECRET123') && c1.includes('"model":"claude-opus-5-5"')
+        && c2.includes('https://hub.example.org/v1/messages') && c2.includes('x-api-key: mills_SECRET123') && c2.includes('anthropic-version') && c2.includes('"model":"claude-opus-5-5"');
+      seen.noKey = noKey.every((s) => s.text.includes('<your key>') && !/mills_/.test(s.text) && s.text.includes('https://hub.example.org')) && !noKey.some((s) => s.text.includes('/v1/v1') || s.text.includes('org//'));
+      seen.pick = A.pickModel('', ['m1', 'm2']) === 'm1' && A.pickModel('x', ['m1']) === 'x' && A.pickModel('', []) === '' && A.originOf('https://h.org/v1') === 'https://h.org';
+      ok = seen.ids === 'claude-code,codex,jcode,opencode,openai,curl-openai,curl-anthropic' && seen.cc && seen.cx && seen.jc && seen.oc && seen.oa && seen.curl && seen.noKey && seen.pick;
+    }
+    check('R568', 'the "Connect a tool" setups (web/apisetup.js) give, for Claude Code, Codex, jcode, opencode, Cursor / Continue / any OpenAI client and curl (both APIs), a ready-to-paste text with the hub address, the key and the model filled in and the right names (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL in bash and PowerShell forms, a Codex model_providers block with base_url, env_key and wire_api "responses" (the Responses API, G5), a jcode provider add, an opencode baseURL, the two curl calls), the address never doubles /v1, and with no key every one says <your key> and never a real-looking key', ok && !!A, JSON.stringify(seen));
+    const i = page.indexOf('<h3>API access</h3>'), sec = i < 0 ? '' : page.slice(i, page.indexOf('</section>', page.indexOf('id="apiConnect"', i)) + 10);
+    const s2 = {
+      served: jsr.status === 200 && /<script src="apisetup\.js(\?[^"]*)?"><\/script>/.test(page),
+      section: sec.includes('id="apiBox"') && sec.includes('id="apiConnect"') && /Connect a tool/.test(sec) && /Claude subscription login serves Claude Code only/.test(sec),
+      icon: /<symbol id="i-copy"/.test(page) && /#i-copy/.test(page),
+      keys: /function renderApiKeys/.test(page) && /\/api\/apikey\/create/.test(page) && /\/api\/apikey\/revoke', \{ method: 'POST', body: JSON\.stringify\(\{ id: k\.id/.test(page) && /Click again to revoke/.test(page) && /Create key/.test(page),
+      oldKept: /Array\.isArray\(st\.keys\)\) renderApiKeys/.test(page) && /\/api\/apikey\/rotate/.test(page) && /\/api\/apikey\/settings/.test(page) && /\/api\/apikey\/revoke', \{ method: 'POST', body: '\{\}' \}/.test(page) && /Rotate key/.test(page) && /Make my key/.test(page),
+    };
+    check('R569', 'the page serves web/apisetup.js and Settings → API access has the key list with Create key and a confirmed Revoke, the "Connect a tool" panel with Copy buttons (SVG icon) and the note that a Claude subscription login serves Claude Code only, while the single-key section (Rotate / Make my key, expiry, provider and model, Revoke) is kept and the key list only shows when the hub sends `keys`', Object.values(s2).every(Boolean), JSON.stringify(s2));
+    // R570: the page's own key-list code on a plain element stand-in
+    const s3 = {};
+    try {
+      const mkEl = (tag) => {
+        const e = { tag, children: [], text: '', className: '', dataset: {}, attrs: {}, value: '', checked: false, onclick: null, type: '',
+          append(...xs) { for (const x of xs) this.children.push(typeof x === 'string' ? { tag: '#text', text: x, children: [] } : x); }, setAttribute(k, v) { this.attrs[k] = v; } };
+        Object.defineProperty(e, 'textContent', { get: () => e.text + e.children.map((c) => (c.tag === '#text' ? c.text : c.textContent)).join(''), set: (v) => { e.children = []; e.text = String(v); } });
+        return e;
+      };
+      const all = (e, f, out = []) => { if (f(e)) out.push(e); for (const c of e.children || []) all(c, f, out); return out; };
+      const from = page.indexOf('function apiKeyLimits'), to = page.indexOf('// One key\'s usage (GET /api/apikey/usage)') > 0 ? page.indexOf('// One key\'s usage (GET /api/apikey/usage)') : page.indexOf('// Connect a tool: ready-to-paste');
+      const calls = [], rendered = [];
+      const ctx = { document: { createElement: mkEl }, providerList: [{ id: 'host', label: 'Host', models: ['m-a'] }, { id: 'p2', label: 'Mine', models: ['m-b'] }], Date, Number, JSON,
+        json: async (u, o) => { calls.push(u + ' ' + (o && o.body)); return { key: 'mills_new' }; }, renderApiAccess: (k) => rendered.push(k || '') };
+      require('vm').runInNewContext(page.slice(from, to) + '\nthis.renderApiKeys = renderApiKeys;', ctx);
+      const box = mkEl('div'), info = mkEl('div');
+      ctx.renderApiKeys(box, { keys: [{ id: 'k1', label: 'Laptop', prefix: 'mills_ab', createdAt: 1, expiresDays: 30, lastUsed: 0, calls: 3, enabled: true, models: ['m-a'], maxConcurrent: 2 }, { id: 'k2', label: 'Old', prefix: 'mills_cd', createdAt: 1, calls: 0 }] }, info);
+      const rows = all(box, (e) => /^apiKeyRow/.test(e.className));
+      s3.rows = rows.length === 2 && /Laptop/.test(rows[0].textContent) && /mills_ab/.test(rows[0].textContent) && /3 calls/.test(rows[0].textContent) && /models: m-a/.test(rows[0].textContent) && /2 at once/.test(rows[0].textContent) && /never used/.test(rows[1].textContent);
+      const rv = all(rows[0], (e) => e.tag === 'button' && e.textContent === 'Revoke')[0]; // (G5 put a Usage toggle next to it)
+      await rv.onclick(); s3.confirm = calls.length === 0 && /again/.test(rv.textContent);
+      await rv.onclick(); await new Promise((r) => setTimeout(r, 0)); s3.revoked = calls.join('|') === '/api/apikey/revoke {"id":"k1"}' && rendered.length === 1;
+      const lab = all(box, (e) => e.tag === 'input' && e.attrs['aria-label'] === 'Key label')[0], go = all(box, (e) => e.tag === 'button' && e.textContent === 'Create key')[0];
+      const mchk = all(box, (e) => e.tag === 'input' && e.type === 'checkbox' && e.value === 'm-b')[0]; lab.value = 'CI'; mchk.checked = true;
+      await go.onclick(); await new Promise((r) => setTimeout(r, 0));
+      s3.created = calls[1] === '/api/apikey/create {"label":"CI","expiresDays":0,"models":["m-b"]}' && rendered[1] === 'mills_new';
+    } catch (e) { s3.err = e.message; }
+    check('R570', 'the key list code of Settings → API access shows each key with its label, prefix, calls, last use and limits; Revoke asks once more and then revokes just that key; Create key sends the label, expiry and only the ticked limits, and shows the new secret once', !!(s3.rows && s3.confirm && s3.revoked && s3.created), JSON.stringify(s3));
   }
   // R544 (T-291; R527, then R535, until 5.46.1 and 5.48.0 took them): the Theme menu opens on top of every panel. The page's placement function (button rect + list size +
   // window -> where the list goes) runs here in vm on wide, narrow, low and tiny windows; the served markup keeps the list
@@ -8491,7 +10520,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const L334 = 'linked machines service install (T-313): ONE template (pgm-net-internal::machine::service) makes a systemd USER unit (Restart=on-failure, WantedBy=default.target, no User=, never root, no restart after exit 3 / 4) and a per-user Windows Scheduled Task (logon trigger, LeastPrivilege, restart on failure, no administrator, no SYSTEM) with .sh and .cmd twins; `vr-host machine install | uninstall` write and remove them; the machine refuses to start (exit 4) when the state folder, or the token / key / scope in it, is group- or world-readable (Linux) or has a broad ACL (Windows, the icacls helper)';
     const L335 = 'linked machines, the apps use the library (T-313): the host-side pc_job is gone, the AI host\'s PC role is the library\'s Machine (scope + the one canonicaliser, audit, kill switch; an older hub that signs nothing is still served as the owner), the hub still relays the pc engine to older hosts, no copy of the canonicaliser exists outside pgm-net-internal (the desktop app\'s local file paths use it too), vr-desktop links this computer and serves it while open or as the persistent service, only the Tools window may call those commands (the hub\'s page, scoped to the hub origin, cannot), and the machine parity R328 stays green';
     const L336 = 'linked machines, Jcode PGM (T-313): `jcodepgm machine link | run | install | uninstall | scope | stop | start | status` on the mirrored library, run against a fake hub (link by device code, signed calls served, unsigned / other-key / outside-folder refused, revoked wipe, state folder check, local scope edits audited, kill switch), the credential files owner-only, the library mirrored byte for byte from this repo';
-    const L339 = 'linked machines cross-test (T-313): the library tests R321 to R333 and R340 run on Linux (machine:: unit tests), the Windows path rules are pure logic that run on any host, and the Windows run is documented for Gee in the pgm-net-internal README; the Windows run itself is PENDING';
+    const L339 = 'linked machines cross-test (T-313): the library tests R321 to R333 and R340 run on Linux and on Windows (machine:: unit tests; the Unix-permission ones are cfg(unix), the icacls one cfg(windows)), the Windows path rules are pure logic that run on any host, and the Windows run is documented in the pgm-net-internal README';
     const why334 = buildNative();
     const ct334 = spawnSync('cargo', ['test', '-p', 'pgm-net-internal', '-p', 'pgm-ai-internal', '--', 'machine::', 'the_pc_role_is_the_librarys_machine'], { cwd: path.join(MILLS, 'native'), env: env334, encoding: 'utf8', timeout: 1800000 });
     if (ct334.error) { for (const [id, l] of [['R334', L334], ['R335', L335], ['R339', L339]]) skip(id, l, 'no Rust toolchain here (' + ct334.error.code + ')'); }
@@ -8499,7 +10528,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const out334 = String(ct334.stdout || '') + String(ct334.stderr || '');
       const okT = (name) => new RegExp('^test ' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\.\\.\\. ok$', 'm').test(out334);
       const nOk = (out334.match(/^test machine::[^ ]+ \.\.\. ok$/gm) || []).length;
-      const svcTests = ['the_systemd_unit_is_a_user_unit_that_restarts_on_failure_and_never_runs_as_root', 'the_windows_task_is_per_user_least_privilege_and_restarts', 'sh_and_cmd_twins_exist_and_the_sh_refuses_root', 'install_writes_the_unit_and_uninstall_removes_it', 'a_group_or_world_readable_state_folder_or_secret_is_refused'];
+      // the service tests this OS compiles: the Unix-permission ones are cfg(unix), the icacls one is cfg(windows)
+      const svcTests = ['the_systemd_unit_is_a_user_unit_that_restarts_on_failure_and_never_runs_as_root', 'the_windows_task_is_per_user_least_privilege_and_restarts', 'sh_and_cmd_twins_exist_and_the_sh_refuses_root',
+        ...(WIN ? ['a_broad_acl_on_the_state_folder_is_refused'] : ['install_writes_the_unit_and_uninstall_removes_it', 'a_group_or_world_readable_state_folder_or_secret_is_refused'])];
       const svcOk = svcTests.filter((t) => okT('machine::service::tests::' + t));
       const runnerSrc = rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'runner.rs'), hostSrc = rd('native', 'crates', 'vr-host', 'src', 'machine.rs');
       const srcOk334 = (runnerSrc.match(/check_state_dir\(&o\.state_dir\)/g) || []).length >= 2 && /fn install_sh|install_cmd/.test(rd('native', 'crates', 'pgm-net-internal', 'src', 'machine', 'service.rs')) && /"install" \| "uninstall"/.test(hostSrc) && /EXIT_REFUSED/.test(hostSrc);
@@ -8531,7 +10562,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         live = { ok: inst.status === 0 && have.length === names.length && unitOk && taskOk && twinsOk && refuse.every(Boolean), why: `install ${inst.status} files ${have.length}/${names.length} unit ${unitOk} task ${taskOk} twins ${twinsOk} refusal ${refuse.map((b) => (b ? 'exit4' : 'NO')).join('/')}` };
       } else if (WIN) live = { ok: true, why: 'the live shell checks run on Linux; the Windows run is in the README' };
       else if (isRoot) live = { ok: true, why: 'running as root: `machine install` refuses root by design, the live check is skipped (the unit tests cover the text)' };
-      check('R334', L334, ct334.status === 0 && svcOk.length === svcTests.length && srcOk334 && live.ok, `cargo test ${ct334.status}: service tests ${svcOk.length}/${svcTests.length}; ${live.why}; Windows: the ACL test and the task are written but not run here (no Windows)`);
+      check('R334', L334, ct334.status === 0 && svcOk.length === svcTests.length && srcOk334 && live.ok, `cargo test ${ct334.status}: service tests ${svcOk.length}/${svcTests.length}; ${live.why}${WIN ? '; Windows: the icacls ACL test ran here' : ''}`);
 
       // ---- R335
       const allRs = rsFiles(cratesDir), outside = allRs.filter((f) => !f.includes(path.join('crates', 'pgm-net-internal') + path.sep));
@@ -8558,8 +10589,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const readme = rd('native', 'crates', 'pgm-net-internal', 'README.md');
       const winDoc = /Running the linked-machines tests on Windows \(R339\)/.test(readme) && /cargo test -p pgm-net-internal machine::/.test(readme) && /vr-host\.exe machine install --files-only/.test(readme) && /schtasks \/Query/.test(readme);
       const winTests = (fs.readFileSync(path.join(cratesDir, 'pgm-net-internal', 'src', 'machine', 'paths.rs'), 'utf8').match(/fn w\(|Flavor::Windows/g) || []).length;
-      check('R339', L339, ct334.status === 0 && nOk >= 80 && !/FAILED|panicked/.test(out334) && winDoc && winTests >= 5,
-        `Linux: cargo test ${ct334.status}, ${nOk} machine:: tests ok; Windows path rules are pure logic (${winTests} Windows-flavour uses in paths.rs) and run here; Windows run: PENDING (Gee: the README commands; the cfg(windows) ACL test and the Scheduled Task were never run)`);
+      const minOk339 = WIN ? 60 : 80; // Windows compiles fewer: the cfg(unix) link / permission tests are not there
+      check('R339', L339, ct334.status === 0 && nOk >= minOk339 && !/FAILED|panicked/.test(out334) && winDoc && winTests >= 5,
+        `${WIN ? 'Windows' : 'Linux'}: cargo test ${ct334.status}, ${nOk} machine:: tests ok (at least ${minOk339}); Windows path rules are pure logic (${winTests} Windows-flavour uses in paths.rs) and run here`);
     }
 
     // ---- R336 (Jcode PGM): its tests live in the Jcode PGM repo; here, the files, the mirror and the test list
@@ -8791,6 +10823,143 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       for (const mm of ((await call('/api/machines', U)).data.machines || [])) if (/^r3(28|30)-/.test(mm.name || '')) await mcall('DELETE', '/api/machines/' + mm.id, U);
       if (created.password) await call('/api/admin/delete', A, { username: 't-r330' });
       try { fs.rmSync(mdir, { recursive: true, force: true }); } catch {}
+    }
+  }
+  // R600-R605 (T-371): the browser sign-in for Jcode PGM (plans/pgm-accounts-keys-app.md section 1): check -> authorize (signed in as the
+  // person) -> exchange (a PKCE verifier, no sign-in) gives a per-device token. The scratch hub's code lifetime is 3 s (appSignin.codeSeconds).
+  async function r600Check() {
+    const b64u = (b) => Buffer.from(b).toString('base64url'), sha = (s) => crypto.createHash('sha256').update(s).digest();
+    const AUDIT = path.join(SB, 'security', 'audit.jsonl');
+    const made = []; // the devices these checks sign in: all revoked at the end (R237 counts the person's devices later)
+    const secrets = []; // every code, verifier and token this check makes: none may reach the security log
+    const REDIR = 'http://127.0.0.1:51734/cb', DEVICE = 'R600 Laptop (test)';
+    const newReq = (over = {}) => { const verifier = b64u(crypto.randomBytes(32)); secrets.push(verifier); return { verifier, client: 'jcodepgm', device: DEVICE, redirect: REDIR, state: b64u(crypto.randomBytes(12)), ...over, challenge: over.challenge || b64u(sha(verifier)) }; };
+    const qs = (r) => new URLSearchParams({ client: r.client, device: r.device, redirect: r.redirect, state: r.state, challenge: r.challenge }).toString();
+    const IPC = { v: '198.51.100.60' }; // the address a section's requests come from (CF-Connecting-IP): one rate-limit bucket per section
+    const chk = (r, ip = IPC.v) => call('/api/app-signin/check?' + qs(r), null, undefined, { 'CF-Connecting-IP': ip });
+    const auth = async (tok, r, ip = IPC.v) => { const x = await call('/api/app-signin/authorize', tok, { client: r.client, device: r.device, redirect: r.redirect, state: r.state, challenge: r.challenge }, { 'CF-Connecting-IP': ip }); const u = new URL((x.data && x.data.redirectTo) || 'http://x/'); x.code = u.searchParams.get('code') || ''; x.back = u; if (x.code) secrets.push(x.code); return x; };
+    const exch = async (r, code, ip = '198.51.100.61', over = {}) => { const x = await call('/api/app-signin/exchange', null, { code, verifier: r.verifier, redirect: r.redirect, client: r.client, device: r.device, ...over }, { 'CF-Connecting-IP': ip }); if (x.data && x.data.token) { secrets.push(x.data.token); made.push(x.data.deviceId); } return x; };
+    const devices = async (t = U) => ((await call('/api/devices', t)).data || {}).devices || [];
+    const hex64 = /^[0-9a-f]{64}$/;
+    const seen = {};
+    // ---- R600: the whole flow
+    if (!RUST_HUB) skip('R600', 'the browser sign-in works end to end (T-371)', 'the Rust hub\'s: --rust-hub runs it');
+    else {
+      const r = newReq(), c = await chk(r), anon = await auth(null, r), a = await auth(U, r), x = await exch(r, a.code);
+      const tok = (x.data || {}).token, who = tok ? await call('/api/check', tok) : {}, list = await devices();
+      const mine = list.find((d) => d.id === (x.data || {}).deviceId) || {};
+      const r2 = newReq({ client: 'jcodepgm-desktop', device: 'R600 Desktop', redirect: 'http://localhost:51735/cb' }), a2 = await auth(U, r2), x2 = await exch(r2, a2.code);
+      const rv = await call('/api/devices/revoke', U, { id: (x.data || {}).deviceId }), after = tok ? await call('/api/check', tok) : {}, list2 = await devices();
+      const rv2 = await call('/api/devices/revoke', x2.data.token, { id: (x2.data || {}).deviceId }), after2 = await call('/api/check', x2.data.token);
+      seen.r600 = { check: [c.status, c.data.ok, c.data.device, c.data.client], anon: anon.status, authorize: [a.status, a.back.origin + a.back.pathname, hex64.test(a.code), a.back.searchParams.get('state') === r.state], exchange: [x.status, hex64.test(tok || ''), (x.data || {}).username, typeof (x.data || {}).deviceId],
+        who: [who.status, (who.data || {}).username], listed: [mine.name, mine.client, mine.kind], desktop: [a2.status, x2.status, x2.data.username], revoke: [rv.status, after.status, list2.some((d) => d.id === (x.data || {}).deviceId)], selfRevoke: [rv2.status, after2.status] };
+      const s = seen.r600;
+      check('R600', 'the browser sign-in works end to end (T-371): the page asks GET /api/app-signin/check (client, device, redirect, state, challenge) and gets {ok, device, client}; POST /api/app-signin/authorize signed in as the person (a visitor gets 401) answers {redirectTo} = the loopback redirect with ?code=<64 hex>&state=<the state>; POST /api/app-signin/exchange with no sign-in (code, verifier, redirect, client, device) answers {token, username, deviceId}; that token works on the API (/api/check names the person), is listed under Settings, Signed-in devices named by the device with the client id (jcodepgm and jcodepgm-desktop, a localhost redirect too), and revoking it (the person\'s, or the device\'s own) stops it',
+        RUST_HUB ? s.check.join() === `200,true,${DEVICE},jcodepgm` && s.anon === 401 && s.authorize[0] === 200 && s.authorize[1] === 'http://127.0.0.1:51734/cb' && s.authorize[2] && s.authorize[3] && s.exchange[0] === 200 && s.exchange[1] && s.exchange[2] === 't-user' && s.exchange[3] === 'string'
+          && s.who.join() === '200,t-user' && s.listed.join() === `${DEVICE},jcodepgm,device` && s.desktop.join() === '200,200,t-user' && s.revoke.join() === '200,401,false' && s.selfRevoke.join() === '200,401' : true, JSON.stringify(s));
+    }
+    if (!RUST_HUB) { skip('R601', 'a browser sign-in code is single-use and short-lived (T-371)', 'the Rust hub\'s: --rust-hub runs it'); skip('R602', 'a wrong verifier, redirect, client or device is refused (T-371)', 'the Rust hub\'s: --rust-hub runs it'); skip('R603', 'a non-loopback or malformed redirect is refused, a linked machine cannot authorize (T-371)', 'the Rust hub\'s: --rust-hub runs it'); skip('R604', 'the browser sign-in is rate-limited per address and logged without secrets (T-371)', 'the Rust hub\'s: --rust-hub runs it'); }
+    else {
+      // ---- R601: single use (the replay revokes the token the first exchange made), expiry
+      {
+        IPC.v = '198.51.100.66';
+        const r = newReq(), a = await auth(U, r), x1 = await exch(r, a.code), t1 = (x1.data || {}).token, ok1 = t1 ? (await call('/api/check', t1)).status : 0;
+        const x2 = await exch(r, a.code), after = t1 ? (await call('/api/check', t1)).status : 0, listed = (await devices()).some((d) => d.id === (x1.data || {}).deviceId);
+        const e = newReq(), ae = await auth(U, e); await sleep(3500); const xe = await exch(e, ae.code);
+        const e2 = newReq(), ae2 = await auth(U, e2), xe2 = await exch(e2, ae2.code);
+        seen.r601 = { first: [x1.status, ok1], replay: [x2.status, typeof x2.data.error, after, listed], expired: [xe.status, /expired/i.test(xe.data.error || '')], freshAfter: xe2.status };
+        const s = seen.r601;
+        check('R601', 'a browser sign-in code is single-use and short-lived (T-371): the first exchange works; presenting the same code again is a 400 {error} and revokes the token the first exchange made (it stops working and leaves Signed-in devices); a code older than the lifetime (3 s in this scratch hub, 120 by default) is a 400 that says it expired; a fresh one still works',
+          s.first.join() === '200,200' && s.replay.join() === '400,string,401,false' && s.expired.join() === '400,true' && s.freshAfter === 200, JSON.stringify(s));
+      }
+      // ---- R602: every binding of the code
+      {
+        IPC.v = '198.51.100.67'; let n = 0;
+        const before = (await devices()).length, rows = [];
+        const tries = { verifier: (r) => ({ verifier: b64u(crypto.randomBytes(32)) }), redirect: () => ({ redirect: 'http://localhost:51734/cb' }), 'redirect port': () => ({ redirect: 'http://127.0.0.1:51799/cb' }), client: () => ({ client: 'jcodepgm-desktop' }), device: () => ({ device: 'Another device' }), 'no verifier': () => ({ verifier: '' }), 'short verifier': () => ({ verifier: 'short' }) };
+        for (const [name, over] of Object.entries(tries)) {
+          const r = newReq(), a = await auth(U, r), ipn = '198.51.100.7' + (n++), bad = await exch(r, a.code, ipn, over(r)), right = await exch(r, a.code, ipn);
+          rows.push([name, bad.status, typeof bad.data.error, right.status]);
+        }
+        const unknown = await exch(newReq(), '0'.repeat(64), '198.51.100.62'), junk = await exch(newReq(), 'not-a-code', '198.51.100.62');
+        seen.r602 = { rows, unknown: unknown.status, junk: junk.status, devicesMade: (await devices()).length - before };
+        const s = seen.r602;
+        check('R602', 'a browser sign-in code is bound to what asked for it (T-371): an exchange with a wrong verifier, another redirect (host or port), another client, another device is a 400 {error}, and the code is burnt: the right exchange right afterwards is refused too, so no token is made; a missing or malformed verifier is a 400 as well but is only a bad request (the code is not burnt: the right exchange then works, 2 tokens); an unknown or malformed code is a 400',
+          rows.slice(0, 5).every((x) => x[1] === 400 && x[2] === 'string' && x[3] === 400) && rows.slice(5).every((x) => x[1] === 400 && x[2] === 'string' && x[3] === 200) && rows.length === 7 && s.unknown === 400 && s.junk === 400 && s.devicesMade === 2, JSON.stringify(s));
+      }
+      // ---- R603: refused requests; a linked machine cannot authorize
+      {
+        IPC.v = '198.51.100.68';
+        const base = newReq(), bads = [];
+        const table = { 'other host': { redirect: 'http://evil.example:51734/cb' }, https: { redirect: 'https://127.0.0.1:51734/cb' }, 'no port': { redirect: 'http://127.0.0.1/cb' }, 'port 80': { redirect: 'http://127.0.0.1:80/cb' }, 'port 1023': { redirect: 'http://127.0.0.1:1023/cb' }, 'port 70000': { redirect: 'http://127.0.0.1:70000/cb' }, 'other path': { redirect: 'http://127.0.0.1:51734/x' }, query: { redirect: 'http://127.0.0.1:51734/cb?a=1' }, fragment: { redirect: 'http://127.0.0.1:51734/cb#f' }, credentials: { redirect: 'http://u:p@127.0.0.1:51734/cb' }, 'look-alike host': { redirect: 'http://127.0.0.1.evil.example:51734/cb' }, 'ipv6': { redirect: 'http://[::1]:51734/cb' }, 'trailing slash': { redirect: 'http://127.0.0.1:51734/cb/' },
+          'unknown client': { client: 'vr-machine' }, 'no client': { client: '' }, 'empty device': { device: '' }, 'long device': { device: 'a'.repeat(61) }, 'html device': { device: '<b>x</b>' }, 'emoji device': { device: 'my pc \u{1F600}' }, 'short state': { state: 'abc' }, 'odd state': { state: 'abcdefgh&x=1' }, 'short challenge': { challenge: 'abc' }, 'padded challenge': { challenge: b64u(sha('x')) + '=' } };
+        for (const [name, over] of Object.entries(table)) { const r = { ...base, ...over }; const c = await chk(r), a = await auth(U, r); bads.push([name, c.status, a.status, a.code]); }
+        const ok1 = await chk({ ...base, redirect: 'http://localhost:65535/cb' }), ok2 = await chk({ ...base, device: 'My PC (work)_1.2-b' });
+        // a linked machine's token
+        const k = crypto.generateKeyPairSync('ed25519'), pub = k.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
+        const ms = await call('/api/device/start', null, { client: 'vr-machine', device: 'r603-box', publicKey: pub, machineId: 'mach-r603-aaaa', os: 'linux', app: 'vr-host', appVersion: '1.2.3', mode: 'persistent', folder: '/srv/r603/work' });
+        const map = await call('/api/device/approve', U, { userCode: (ms.data || {}).userCode }), mp = await call('/api/device/poll', null, { deviceCode: (ms.data || {}).deviceCode }), mt = (mp.data || {}).token;
+        const viaMachine = mt ? await auth(mt, base) : { status: 0 };
+        if (mp.data && mp.data.deviceId) await call('/api/devices/revoke', U, { id: mp.data.deviceId });
+        seen.r603 = { bads: bads.filter((x) => x[1] !== 400 || x[2] !== 400 || x[3]).map((x) => x.join(':')), count: bads.length, okLocalhost: ok1.status, okDevice: ok2.status, machine: [ms.status, map.status, !!mt, viaMachine.status, !!viaMachine.code] };
+        const s = seen.r603;
+        check('R603', 'a browser sign-in request is validated before anything is shown or made (T-371): at check AND at authorize a redirect that is not exactly http://127.0.0.1:<port>/cb or http://localhost:<port>/cb (other host or look-alike host, https, no port, a port under 1024 or over 65535, another path, a query, a fragment, credentials, IPv6, a trailing slash), a client outside jcodepgm / jcodepgm-desktop, a device name that is empty, over 60 characters or not plain (markup, emoji), a short or odd state and a challenge that is not 43 base64url characters are each a 400 and no code is made; a localhost redirect on port 65535 and a name with letters, digits, space and - _ . ( ) pass; a linked machine\'s token cannot authorize (403, no code)',
+          s.bads.length === 0 && s.count === 23 && s.okLocalhost === 200 && s.okDevice === 200 && s.machine.join() === '200,200,true,403,false', JSON.stringify(s));
+      }
+      // ---- R604: the rate limit per address, and the security log
+      {
+        IPC.v = '198.51.100.69';
+        const ipA = '198.51.100.63', ipB = '198.51.100.64', codes = [];
+        for (let i = 0; i < 12; i++) codes.push((await exch(newReq(), '1'.repeat(64), ipA)).status);
+        const other = await exch(newReq(), '1'.repeat(64), ipB);
+        const rr = newReq(), ra = await auth(U, rr), rx = await exch(rr, ra.code, '198.51.100.65'), rbad = newReq(), rba = await auth(U, rbad), rbx = await exch(rbad, rba.code, '198.51.100.65', { client: 'jcodepgm-desktop' });
+        const au = await call('/api/admin/audit?limit=1000', A), es = (au.data.entries || []).filter((e) => /^app-signin\./.test(e.action));
+        const mine = (act) => es.filter((e) => e.action === act && e.actor === 't-user');
+        const file = fs.existsSync(AUDIT) ? fs.readFileSync(AUDIT, 'utf8') : '';
+        const authE = mine('app-signin.authorize').find((e) => e.detail && e.detail.client === 'jcodepgm' && e.detail.device === DEVICE), exE = mine('app-signin.exchange').find((e) => e.detail && e.detail.device === DEVICE);
+        const reasons = new Set(es.filter((e) => e.action === 'app-signin.refused').map((e) => e.detail && e.detail.reason));
+        seen.r604 = { first10: codes.slice(0, 10).every((s) => s === 400), limited: codes.slice(10).every((s) => s === 429), otherAddress: other.status, afterGood: [rx.status, rbx.status], logged: [!!authE, !!exE, au.status], reasons: [...reasons].sort().join(), noSecrets: !!file && secrets.length > 20 && !secrets.some((x) => file.includes(x)) && !file.includes(REDIR), fieldsOnly: es.every((e) => Object.keys(e.detail || {}).every((k) => ['client', 'device', 'reason'].includes(k))) };
+        const s = seen.r604;
+        check('R604', 'the browser sign-in is limited per address and logged (T-371): ten exchanges a minute from one address (wrong ones count), the next ones are 429 while another address is still answered; the security log (GET /api/admin/audit) has app-signin.authorize and app-signin.exchange for the person with the client and device, and app-signin.refused (with a reason: rate, mismatch, reused, expired, unknown ...); never a code, verifier or token (none of the ' + 'values this check made is in the log file) and no other fields',
+          s.first10 && s.limited && s.otherAddress === 400 && s.afterGood.join() === '200,400' && s.logged.join() === 'true,true,200' && ['expired', 'mismatch', 'rate', 'reused', 'unknown'].every((x) => s.reasons.split(',').includes(x)) && s.noSecrets && s.fieldsOnly, JSON.stringify(s));
+      }
+    }
+    for (const id of made) await call('/api/devices/revoke', U, { id });
+    // ---- R605: the page
+    {
+      const html = fs.readFileSync(path.join(MILLS, 'web', 'appsignin.html'), 'utf8'), js = fs.readFileSync(path.join(MILLS, 'web', 'appsignin.js'), 'utf8'), sw = fs.readFileSync(path.join(MILLS, 'web', 'sw.js'), 'utf8');
+      const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{23E9}-\u{23FA}\u{25B6}\u{27F3}\u{21A9}\u{21AA}\u{2713}\u{2715}\u{25A0}]/u;
+      const st = { plainFiles: !EMOJI.test(html) && !EMOJI.test(js), svg: /<svg[^>]*aria-hidden="true"/.test(html), noImages: !/<img\b/i.test(html), noCache: !/appsignin/.test(sw), buttons: /id="approve"[^>]*>Approve</.test(html) && /id="cancel"[^>]*>Cancel</.test(html), csp: /script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'/.test(html) && !/<script>/.test(html) && !/\son[a-z]+="/i.test(html),
+        wiring: /\/api\/app-signin\/check\?/.test(js) && /\/api\/app-signin\/authorize/.test(js) && /error=access_denied&state=/.test(js) && !/innerHTML|document\.write|eval\(/.test(js), onlyValidated: (js.match(/location\.replace\(/g) || []).length === 2 && /startsWith\(req\.redirect \+ '\?'\)/.test(js) && !/location\.(href|assign)\s*=/.test(js) && /qn\.append\('Link ', dev, ' \(', cli, '\) to your account ', acc, '\?'\)/.test(js) };
+      if (RUST_HUB) {
+        const pg = await fetch(H + '/app-signin?client=jcodepgm'), body = await pg.text(), sj = await fetch(H + '/appsignin.js');
+        st.served = [pg.status, /text\/html/.test(pg.headers.get('content-type') || ''), pg.headers.get('cache-control'), body === html, sj.status, /javascript/.test(sj.headers.get('content-type') || '')].join();
+        // the page's script, run against the real hub with stand-in DOM: a good request shows the question and goes back with a code; cancel goes back with access_denied;
+        // a bad redirect shows an error and never navigates
+        const run = async (req, signedIn) => {
+          const ids = ['busy', 'bad', 'login', 'ask', 'done', 'title', 'badText', 'username', 'password', 'loginErr', 'question', 'askErr', 'approve', 'cancel', 'loginCancel', 'doneText'], els = {};
+          for (const id of ids) els[id] = { id, hidden: ['bad', 'login', 'ask', 'done'].includes(id), textContent: '', value: '', disabled: false, on: {}, addEventListener(t, f) { this.on[t] = f; }, focus() {}, append(...a) { this.textContent += a.map((x) => (typeof x === 'string' ? x : x.textContent)).join(''); } };
+          const nav = [];
+          const ctx = { document: { getElementById: (id) => els[id], createElement: () => ({ textContent: '' }) }, location: { search: '?' + new URLSearchParams(req).toString(), replace: (u) => nav.push(u) }, URLSearchParams, fetch: (p, o) => fetch(H + p, o), sessionStorage: { getItem: () => (signedIn ? U : null) }, localStorage: { getItem: () => null, setItem() {} }, crypto: require('crypto').webcrypto, navigator: { language: 'en' }, Intl, Error, JSON, Promise, console };
+          require('vm').runInNewContext(js, ctx);
+          for (let i = 0; i < 60 && !(els.ask.hidden === false || els.bad.hidden === false || els.login.hidden === false); i++) await sleep(50);
+          return { els, nav };
+        };
+        const good = newReq(), pgGood = await run(good, true);
+        const asked = pgGood.els.ask.hidden === false && pgGood.els.question.textContent === `Link ${DEVICE} (jcodepgm) to your account t-user?`;
+        await pgGood.els.approve.on.click();
+        const back = new URL(pgGood.nav[0] || 'http://x/'), ex = await exch(good, back.searchParams.get('code') || '');
+        const cx = newReq(), pgCancel = await run(cx, true); await pgCancel.els.cancel.on.click();
+        const bad = newReq({ redirect: 'http://evil.example:51734/cb' }), pgBad = await run(bad, true);
+        const anon = newReq(), pgAnon = await run(anon, false);
+        st.behaviour = { asked, navigated: [pgGood.nav.length, back.origin + back.pathname, back.searchParams.get('state') === good.state, ex.status, JSON.stringify(Object.values(pgGood.els).map((e) => e.textContent)).includes(back.searchParams.get('code') || '\0')], cancel: pgCancel.nav.join() === `${REDIR}?error=access_denied&state=${cx.state}`, bad: [pgBad.els.bad.hidden, pgBad.nav.length, pgBad.els.ask.hidden], anon: [pgAnon.els.login.hidden, pgAnon.els.ask.hidden, pgAnon.nav.length] };
+        const b = st.behaviour;
+        st.behaviourOk = b.asked && b.navigated.join() === `1,${REDIR},true,200,false` && b.cancel && b.bad.join() === 'false,0,true' && b.anon.join() === 'false,true,0';
+        st.servedOk = st.served === `200,true,no-store,true,200,true`;
+      }
+      for (const id of made) await call('/api/devices/revoke', U, { id });
+      check('R605','the /app-signin page (T-371): one small plain page and script of its own (SVG icon, no emoji, no images, a strict content policy with no inline script, not in the service worker\'s cache list); it asks check first, shows "Link <device> (<client>) to your account <username>?" with Approve and Cancel, signs the person in with the normal password sign-in when the tab has no session, goes back only to the redirect check accepted (with the code when approved, with error=access_denied&state=... when cancelled), never shows the code, and shows an error without navigating for a bad redirect' + (RUST_HUB ? '' : ' (static; the served page and its behaviour run with --rust-hub)'),
+        st.plainFiles && st.svg && st.noImages && st.noCache && st.buttons && st.csp && st.wiring && st.onlyValidated && (!RUST_HUB || (st.servedOk && st.behaviourOk)), JSON.stringify(st));
     }
   }
   // R337: the owner's list over HTTP (scope in words, mode, status, in-use while a run uses it), nobody else sees or manages it, the
@@ -9261,6 +11430,22 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
 
   check('R11', 'account password files unchanged (scratch and production)', sha(path.join(SB, 'profiles', 't-admin', 'auth.json')) === authBefore
     && prodAccountFiles().every((f) => prodBefore[f] === sha(f)));
+
+  // R643: a program started in the background on Windows gets a hidden console of its own, never none (DETACHED_PROCESS): with
+  // none, every console program it starts (Ollama's llama-server / gpu-discover, nvidia-smi, Python helpers) opens a window
+  // that flashes up and takes the keyboard and mouse (production bug 2026-11-16)
+  {
+    const rsAll = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === 'target' ? [] : rsAll(path.join(dir, e.name))) : e.name.endsWith('.rs') ? [path.join(dir, e.name)] : []));
+    const crates643 = path.join(MILLS, 'native', 'crates');
+    const detached = rsAll(crates643).flatMap((f) => fs.readFileSync(f, 'utf8').split('\n').map((l, i) => [f, i + 1, l]))
+      .filter(([, , l]) => /creation_flags\([^)]*(0x0000_0008|0x00000008|0x8|DETACHED_PROCESS)/.test(l.replace(/\/\*[^*]*\*\//g, '')))
+      .map(([f, n]) => path.relative(MILLS, f) + ':' + n);
+    const proc643 = fs.readFileSync(path.join(crates643, 'pgm-platform-internal', 'src', 'proc.rs'), 'utf8');
+    const spawnD = (/pub fn spawn_detached[\s\S]*?\n\}/.exec(proc643) || [''])[0];
+    check('R643', 'no console windows flash up on Windows: no native code starts a program with DETACHED_PROCESS (it leaves the program without a console, so every console program it starts opens a window that takes the focus); spawn_detached gives a hidden console of its own (CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP)',
+      detached.length === 0 && /CREATE_NO_WINDOW \| 0x0000_0200/.test(spawnD),
+      `DETACHED_PROCESS uses: ${detached.join(', ') || 'none'}; spawn_detached hidden console + own group ${/CREATE_NO_WINDOW \| 0x0000_0200/.test(spawnD)}`);
+  }
 
   // Ship hygiene (real repo, read-only)
   const terms = fs.existsSync(path.join(MILLS, 'docs', 'hygiene-terms.txt'))

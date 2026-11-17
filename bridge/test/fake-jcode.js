@@ -39,6 +39,18 @@ const home = process.env.JCODE_HOME || '';
       extra += ' MCP:' + JSON.stringify(r);
     } catch (e) { extra += ' MCP:' + JSON.stringify({ ok: false, error: e.message }); }
   }
+  // an OpenRouter run on the hub (T-370): report what the hub handed over and, for "ORCALL", make one model call the way jcode's
+  // OpenRouter provider does: its API base (the hub's per-run relay), the (dummy) key as the bearer, the model it was given
+  const base = process.env.JCODE_OPENROUTER_API_BASE || '';
+  if (base) {
+    const keyShown = process.env.OPENROUTER_API_KEY || '';
+    const leak = Object.values(process.env).some((v) => String(v).includes('sk-or-v1-')) || argv.some((a) => a.includes('sk-or-v1-'));
+    extra += ` or[base=${base} key=${keyShown} order=${process.env.JCODE_OPENROUTER_PROVIDER_ORDER || ''} fallbacks=${process.env.JCODE_OPENROUTER_ALLOW_FALLBACKS || ''} shared=${process.env.JCODE_PGM_PROXY_SHARED || ''} leak=${leak} argv=${argv.join(' ')}]`;
+    if (message.includes('ORCALL')) {
+      const r = await fetch(base + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + keyShown }, body: JSON.stringify({ model: process.env.JCODE_OPENROUTER_MODEL || model, stream: false, messages: [{ role: 'user', content: message }] }) }).then(async (x) => ({ status: x.status, j: await x.json().catch(() => ({})) })).catch((e) => ({ status: 0, j: { error: { message: e.message } } }));
+      extra += ` orcall=${r.status}:${((((r.j.choices || [])[0] || {}).message || {}).content) || (r.j.error || {}).message || ''}`;
+    }
+  }
   if (message.includes('TOOL')) {
     out({ type: 'tool_start', id: 't1', name: 'bash' });
     out({ type: 'tool_input', delta: '{"command":"echo hi"}' });
@@ -52,6 +64,6 @@ const home = process.env.JCODE_HOME || '';
   const overlay = home && fs.existsSync(path.join(home, 'prompt-overlay.md')) ? 'overlay:yes' : 'overlay:no';
   const text = `jcode-answer model=${model} provider=${provider} cwd=${process.cwd()} resume=${resume ? 'yes' : 'no'} ${overlay}${extra}`;
   out({ type: 'text_delta', text });
-  out({ type: 'tokens', input: 120, output: 30, cache_read_input: 0, cache_creation_input: 0 });
+  out({ type: 'tokens', input: 120, output: 30, cache_read_input: 0, cache_creation_input: 0, ...(base ? { cost: 0.02 } : {}) });
   out({ type: 'done', session_id: session, provider, model, text, usage: { input: 120, output: 30 } });
 })();

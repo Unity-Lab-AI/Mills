@@ -219,7 +219,7 @@ impl WorkflowHost for HubHost {
                 v => {
                     let list = pgm_ai_internal::work::providers_list(&*ai, &self.user);
                     let found = list.iter().find(|p| [p["id"].as_str(), p["label"].as_str(), p["baseUrl"].as_str(), p["kind"].as_str()].iter().flatten().any(|x| x.to_lowercase().contains(v)));
-                    match found { Some(p) => p["id"].as_str().unwrap_or("").to_string(), None => return Err(unreachable(format!("{} has no {v} provider (Settings → AI providers)", self.user))) }
+                    match found { Some(p) => p["id"].as_str().unwrap_or("").to_string(), None => return Err(unreachable(format!("{} has no {v} provider (AI Admin → My AIs)", self.user))) }
                 }
             };
             let system: Vec<String> = req.messages.iter().filter(|m| m["role"] == "system").filter_map(|m| m["content"].as_str().map(str::to_string)).collect();

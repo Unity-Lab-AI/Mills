@@ -1,6 +1,6 @@
 //! The desktop app's switch for hosting this computer's AI: it drives the native AI host (vr-host, shipped next to this
 //! app) in its own folder, through vr-host's own commands, so the host keeps running (and updating itself) whether or
-//! not the app is open. Setting it up takes one of the person's hosts from the hub (Settings → My AI hosts → "Run on
+//! not the app is open. Setting it up takes one of the person's hosts from the hub (AI Admin → My AI hosts → "Run on
 //! this PC"): its ai-node.json is written here, private.
 use serde_json::{json, Value};
 use std::path::PathBuf;
