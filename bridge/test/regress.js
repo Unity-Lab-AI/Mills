@@ -8532,9 +8532,9 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const blkProv = pageOr.slice(pageOr.indexOf('async function renderProviders()'), pageOr.indexOf('function sysSettings('));
     const orIcons = (blkOr + blkProv).match(/href="#(i-[a-z-]+)"/g) || [], symbols = pageOr.match(/<symbol id="(i-[a-z-]+)"/g) || [];
     check('R599', 'the page: AI Admin → Global → Team OpenRouter (Settings → My AIs before T-379) offers the OpenRouter kind (the key field, a pairs editor with id, label, OpenRouter model, provider order and allow-fallbacks per row, add and remove a pair; the owner can edit the pairs and replace the key later, the key is never filled back in); the Work AI picker shows two kinds of group, "Claude (<host>)" and "OpenRouter" (a pair shows its label, a provider the server cannot run is greyed with its reason); Settings has an OpenRouter budget box (the month\'s spend against the cap with a meter, the opt-in fallback switch with its pair, and for admins everyone\'s month with a cap field per person); only SVG icons from the page\'s own set, no emoji',
-      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /id="agOrBox"/.test(pageOr) && /kind: 'openrouter', label: label\.value, apiKey: key\.value, pairs: pe\.get\(\)/.test(aiAdm) && /orProviderEditor\(p, renderTeamOr\)/.test(aiAdm) && /pairsEditor\(p\.pairs/.test(blkOr) && /body\.apiKey = nk\.value/.test(blkOr) && !/nk\.value = p/.test(blkOr) && !/'openrouter', 'OpenRouter/.test(blkProv)
+      /id="sgOpenRouter"/.test(pageOr) && /id="orBox"/.test(pageOr) && /id="agOrBox"/.test(pageOr) && /kind: 'openrouter', label: 'Team OpenRouter', apiKey: key\.value\.trim\(\), pairs: \[\], shared: true/.test(aiAdm) && /'Add another fallback'/.test(aiAdm) // T-381: the team key, then entries picked from the catalogue && /pairsEditor\(p\.pairs/.test(blkOr) && /body\.apiKey = nk\.value/.test(blkOr) && !/nk\.value = p/.test(blkOr) && !/'openrouter', 'OpenRouter/.test(blkProv)
       && /allow fallbacks/.test(blkOr) && /OpenRouter model, e\.g\./.test(blkOr) && /providers in order/.test(blkOr) && /Add a pair/.test(blkOr)
-      && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
+      && /'Claude \(' \+ \(p\.nickname \|\| p\.label\) \+ '\)'/.test(blkPick) && /g\.label = orp \? \(p\.personal \? 'OpenRouter · my key' : 'This hub · OpenRouter'/.test(blkPick) && /pairLabel\[m\]/.test(blkPick) && /o\.disabled = p\.online === false \|\| !!p\.workOff/.test(blkPick) && /not set up on this server/.test(blkPick)
       && /\/api\/openrouter\/budget'\)/.test(blkOr) && /\/api\/openrouter\/fallback/.test(blkOr) && /\/api\/openrouter\/budget\/all/.test(aiAdm) && /\/api\/openrouter\/budget\/cap/.test(aiAdm) && /Use OpenRouter when Claude is unavailable/.test(blkOr) && /'orMeter'/.test(blkOr)
       && orIcons.length >= 3 && orIcons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blkOr),
       `served page ${pageOr.length}b; icons ${orIcons.join(',')}`);
@@ -8851,7 +8851,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R612', 'the page: AI Admin → My OpenRouter (Settings → OpenRouter budget before T-379) has "My OpenRouter key" (a password field to paste or replace it, "Stored: …abcd" from the last four characters the hub sends, Test and a Remove with an icon, the key never filled back in), "My own models (optional)" with the same pairs editor, a line for what the person spent on their own key beside the team key\'s, and for admins the "Allow personal OpenRouter keys" switch; Settings → My AIs lists "my OpenRouter" without share, remove or edit buttons; the Work picker names its group "OpenRouter · my OpenRouter"; icons are SVG symbols that exist and no emoji',
       /My OpenRouter key/.test(blk) && /ki\.type = 'password'/.test(blk) && /'Stored: ' \+ mykey\.last4/.test(blk) && !/ki\.value = mykey/.test(blk) && /\/api\/openrouter\/mykey'/.test(blk) && /\/api\/openrouter\/mykey\/remove/.test(blk) && /\/api\/openrouter\/mykey\/test/.test(blk) && /\/api\/openrouter\/personal/.test(aiAdm)
       && /My own models \(optional\)/.test(blk) && /pairsEditor\(mykey\.pairs/.test(blk) && /Your own key: /.test(blk) && /team key /.test(blk) && /Allow personal OpenRouter keys/.test(aiAdm) && /Which key pays/.test(blk)
-      && /owner === me\.username && !p\.personal/.test(blkP) && /p\.personal/.test(blkPick) && /g\.label = orp \? 'OpenRouter'/.test(blkPick)
+      && /owner === me\.username && !p\.personal/.test(blkP) && /p\.personal/.test(blkPick) && /g\.label = orp \? \(p\.personal \? 'OpenRouter · my key' : 'This hub · OpenRouter'/.test(blkPick)
       && icons.length >= 3 && icons.every((h) => symbols.includes('<symbol id="' + h.slice(7, -1) + '"')) && !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(blk + blkP),
       `served ${page.length}b; icons ${icons.join(',')}`);
 
@@ -8919,10 +8919,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         JSON.stringify(seen));
     } catch (e) { if (e.stopAfter) throw e; for (const id of ['R643', 'R644', 'R645']) if (!seen[id]) check(id, L643[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen)); }
     finally {
-      // the team limits back to wide ones (the ledger stays in the hub's memory) and nothing left behind
+      // the team limits back to the defaults and no management key: the settings file goes (the hub reads it on every request;
+      // setting wide limits through the route would be refused while the hub still holds the key's own limit of 15 for a minute)
       fakeOr.keyLimit = undefined;
-      await call('/api/openrouter/team/caps', A, { fiveHourUsd: 1000, weekUsd: 1000, monthUsd: 1000 });
-      await call('/api/openrouter/team/management-key', A, { apiKey: '' });
+      try { fs.unlinkSync(path.join(SB, 'openrouter-team.json')); } catch {}
       if (k) await call('/api/apikey/revoke', A, { id: k.id });
       if (tp.id) await call('/api/providers/remove', A, { id: tp.id });
     }
