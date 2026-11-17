@@ -1364,6 +1364,17 @@
     <div class="setSave"><button type="button" id="saveSettings">Save app settings</button> <span id="setMsg" class="status"></span></div>
   </div>
 </div>
+<!-- Settings as a page (T-380): from the main menu Settings opens here, a screen like the others; from anywhere else
+     (Work, chat, a profile card, /settings) it is the modal above. One Settings: the #settings element itself moves
+     between the two (settingsAs()), so both always carry the same options. -->
+<div id="settingsPage" class="screen" hidden>
+  <header>
+    <button class="ghost back" data-back><svg class="ic lead"><use href="#i-back"/></svg>Menu</button>
+    <b>Settings</b>
+    <span class="folder">Your profile, look, Work, sounds and connections</span>
+  </header>
+  <div id="settingsPageBody"></div>
+</div>
 <!-- Downloads (T-378: its own window, no longer a Settings tab): VibeRoller (the native app and the AI host, pre-built
      by the Rust hub, vr-hub downloads.rs), Jcode PGM and Jcode PGM Desktop, the team's other products (/api/releases),
      the chat app from the browser and how everything stays up to date. Every Download button opens it. -->
@@ -2399,8 +2410,8 @@ async function enter() {
 // Screens: login → menu → work (#shell) / chat (#room) / admin. "← Menu" goes back.
 let workStarted = false;
 function showScreen(name) {
-  if (PRODUCT && !['menu', 'admin', ...PRODUCT.screens].includes(name)) name = 'menu'; // a product has only its own screens
-  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows']) $(id).hidden = true;
+  if (PRODUCT && !['menu', 'admin', 'settingsPage', ...PRODUCT.screens].includes(name)) name = 'menu'; // a product has only its own screens
+  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'settingsPage', 'board', 'cal', 'assist', 'notes', 'library', 'workflows']) $(id).hidden = true;
   $(name).hidden = false;
   if (name === 'board' || name === 'cal') BOARD.show(name); // web/board.js
   if (name === 'notes') NOTES.show(); // web/notes.js
@@ -2433,7 +2444,7 @@ function signOut() {
   if (NATIVE && token) NATIVE.call('set_session', { token: '' }).catch(() => {});
   token = null; me = null; sessionStorage.removeItem(TOKEN_KEY); appForget(); sentIdle = null; sentScreen = ''; presenceMap = {};
   stopRoomPolling(); chatPriv = null; chatPubJwk = null; resetRoomData(); ttsStop(); stopClip(true); leaveCall(true); callInit = false; call.state = {};
-  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'board', 'cal', 'settings', 'downloads', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
+  for (const id of ['menu', 'shell', 'room', 'admin', 'aiAdmin', 'settingsPage', 'board', 'cal', 'settings', 'downloads', 'roomFloat', 'assist', 'notes', 'workflows']) $(id).hidden = true;
   BOARD.stop(); NOTES.stop(); agentsPanel.stop(); if (typeof COVIEW !== 'undefined') COVIEW.stop(); if (typeof PRESENCE !== 'undefined') PRESENCE.reset();
   clearInterval(assistTimer); assistTimer = null; assistLoaded = false; $('assistLog').textContent = '';
   for (const o of [...watching.keys()]) closeWatch(o);
@@ -5398,7 +5409,14 @@ $('floatDock').onclick = () => { layout.roomMode = 'dock'; applyLayout(); };
 
 // ── Settings (main menu, chat, Work bar): nickname + colour (everyone sees them), sounds, pop-ups ──
 let pickedColor = null;
-function openSettings() {
+// T-380: Settings is one element shown two ways: the page (#settingsPage, from the main menu) or the modal (everywhere else)
+function settingsAs(page) {
+  const s = $('settings'); if (page === s.classList.contains('asPage')) return;
+  if (page) $('settingsPageBody').append(s); else $('downloads').before(s);
+  s.classList.toggle('asPage', page);
+}
+function openSettings(asPage) {
+  settingsAs(asPage === true);
   const P = prefs();
   $('setNick').value = P.nick; pickedColor = P.color;
   const sw = $('setColors'); sw.textContent = '';
@@ -6051,16 +6069,17 @@ $('saveSettings').onclick = async () => {
     await refreshMembers(); selectConv(currentConv);
   } catch (err) { $('setMsg').textContent = err.message; $('setMsg').className = 'status'; }
 };
-$('closeSettings').onclick = () => { const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; }); };
+$('closeSettings').onclick = () => { if ($('settings').classList.contains('asPage')) return; const from = settingsFrom; settingsFrom = null; genieIn($('settings').querySelector('.box'), from, () => { $('settings').hidden = true; if (!$('settingsPage').hidden) { settingsAs(true); $('settings').hidden = false; } }); };
 // T-318: every way out of Settings is the same one (Close, a click beside the box, Escape): it goes back into its button.
 // Escape first clears "Find a setting" (web/profile.js) and leaves a menu or a profile card open over it to close first.
-$('settings').onclick = (e) => { if (e.target.id === 'settings') $('closeSettings').click(); };
+$('settings').onclick = (e) => { if (e.target.id === 'settings' && !$('settings').classList.contains('asPage')) $('closeSettings').click(); };
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || e.defaultPrevented || $('settings').hidden || !$('profileCard').hidden || document.querySelector('.vrMenu')) return;
+  if (e.key !== 'Escape' || e.defaultPrevented || $('settings').hidden || $('settings').classList.contains('asPage') || !$('profileCard').hidden || document.querySelector('.vrMenu')) return;
   $('closeSettings').click();
 });
 let settingsFrom = null; // the button Settings came out of (it goes back into it)
 document.querySelectorAll('[data-settings]').forEach((b) => { b.onclick = () => { settingsFrom = b; openSettings(); genieOut($('settings').querySelector('.box'), b); }; });
+$('goSettings').onclick = () => { openSettings(true); showScreen('settingsPage'); }; // T-380: the main menu's Settings is a page
 // ── Downloads (T-378: a window of its own): Vibe Roller Desktop and Vibe Roller AI Host, for Windows and Linux, built by
 // the hub from the code it runs, then Jcode PGM and the team's other products. Every Download button (menu, Work's bar,
 // the chat app) opens it; Close, a click beside it and Escape close it, back into its button. ──
@@ -6490,7 +6509,7 @@ $('adminClearChat').replaceWith(confirmButton('Clear chat history', () => adminC
 // (api() signs out then); any other failure keeps it and shows the sign-in page with what went wrong.
 // Never a black page: when no screen at all is showing and something failed (or opening takes over 20 s), the sign-in
 // form comes back and says what went wrong (the session is kept; it is also in the browser console).
-const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'aiAdmin', 'board', 'cal', 'assist', 'notes', 'library', 'workflows'];
+const SCREENS = ['login', 'menu', 'shell', 'room', 'admin', 'aiAdmin', 'settingsPage', 'board', 'cal', 'assist', 'notes', 'library', 'workflows'];
 function nothingShown() { return SCREENS.every((id) => !$(id) || $(id).hidden); }
 function bootTrouble(msg) {
   if (!nothingShown()) return;

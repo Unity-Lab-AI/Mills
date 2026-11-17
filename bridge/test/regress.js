@@ -4920,6 +4920,33 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       Object.values(seen).every(Boolean), JSON.stringify(seen));
   }
   if (RUST_HUB) { if (!process.argv.includes('--only-r495')) await r495Check(); } else skip('R495', R495_LABEL, 'the Rust hub\'s: --rust-hub runs it (two Rust hubs of its own)');
+  { // R642 (T-380): Settings is a page from the main menu and the modal from everywhere else, one Settings moved between the two
+    const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8'), seen = {};
+    // settingsAs, run on stand-ins: it moves the one #settings into the page's body or back beside the modals, and marks it
+    const src = (page.match(/\nfunction settingsAs\(page\) \{[\s\S]*?\n\}\n/) || [''])[0];
+    const node = (id) => ({ id, parent: null, kids: [], cls: new Set(), classList: null });
+    const els = { settings: node('settings'), settingsPageBody: node('settingsPageBody'), downloads: node('downloads'), body: node('body') };
+    const S = els.settings; S.classList = { contains: (c) => S.cls.has(c), toggle: (c, on) => (on ? S.cls.add(c) : S.cls.delete(c)) };
+    const move = (n, to) => { if (n.parent) n.parent.kids = n.parent.kids.filter((k) => k !== n); n.parent = to; to.kids.push(n); };
+    els.settingsPageBody.append = (n) => move(n, els.settingsPageBody);
+    els.downloads.parent = els.body; els.body.kids.push(els.downloads); els.downloads.before = (n) => move(n, els.body);
+    move(S, els.body);
+    const where = () => (S.parent === els.settingsPageBody ? 'page' : 'modal') + (S.cls.has('asPage') ? '+asPage' : '');
+    try {
+      const ctx = { $: (id) => els[id] }; require('vm').runInNewContext(src + '\nthis.go = settingsAs;', ctx);
+      const steps = []; for (const p of [true, true, false, false, true]) { ctx.go(p); steps.push(where()); }
+      seen.moves = steps.join(' ');
+    } catch (e) { seen.err = e.message; }
+    // who opens which: the main menu's Settings the page, every other Settings button (Work's bar, the chat app, a profile card) the modal
+    seen.menuPage = /\$\('goSettings'\)\.onclick = \(\) => \{ openSettings\(true\); showScreen\('settingsPage'\); \};/.test(page) && /function openSettings\(asPage\) \{\n  settingsAs\(asPage === true\);/.test(page)
+      && /document\.querySelectorAll\('\[data-settings\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => \{ settingsFrom = b; openSettings\(\);/.test(page);
+    seen.screen = /<div id="settingsPage" class="screen" hidden>\s*<header>\s*<button class="ghost back" data-back>[\s\S]*?<b>Settings<\/b>[\s\S]*?<div id="settingsPageBody"><\/div>/.test(page) && /'settingsPage'/.test((page.match(/const SCREENS = \[[^\]]*\]/) || [''])[0]);
+    // the page: no Close, Escape and a click beside it do nothing; it scrolls as a whole, tabs on top, Save at the bottom
+    seen.pageWaysOut = /if \(\$\('settings'\)\.classList\.contains\('asPage'\)\) return;/.test(page) && /\$\('settings'\)\.classList\.contains\('asPage'\) \|\| !\$\('profileCard'\)\.hidden/.test(page) && /#settings\.asPage \.setBox > \.bar > span, #settings\.asPage #closeSettings \{ display: none; \}/.test(css);
+    seen.pageScroll = /#settings\.asPage \{[^}]*overflow-y: auto;[^}]*padding: 0 max\(1rem, calc\(\(100% - 900px\) \/ 2\)\); \}/.test(css) && /#settings\.asPage \.setTabs \{ position: sticky; top: 0;/.test(css) && /#settings\.asPage \.setSave \{ position: sticky; bottom: 0;/.test(css);
+    check('R642', 'Settings opens as its own page (← Menu, the whole page scrolls, the tabs stay on top and Save at the bottom, no Close) only from the main menu; Settings in Work, the chat app, a profile card or /settings is the modal; both are the same Settings (the one element moves between the page and the modal, so the options are always the same)',
+      seen.moves === 'page+asPage page+asPage modal modal page+asPage' && seen.menuPage && seen.screen && seen.pageWaysOut && seen.pageScroll && !seen.err, JSON.stringify(seen));
+  }
   { // R641 (T-379): the menu's Settings / Downloads beside My status; Site admin and AI Admin on the page; who sees what
     const page = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8'), css = fs.readFileSync(path.join(MILLS, 'web', 'polish.css'), 'utf8');
     const sa = fs.readFileSync(path.join(MILLS, 'web', 'siteadmin.js'), 'utf8'), aa = fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8'), seen = {};
@@ -7115,7 +7142,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       // the page as a product's shell (5.2.0): PRODUCT from the placeholder, everything stored under NS, the base path, only its screens
       && /const PRODUCT = \(\(\) => \{ const v = '__MILLS_PRODUCT__';/.test(page170) && /const NS = PRODUCT \? PRODUCT\.id \+ '\.' : '';/.test(page170) && /const TOKEN_KEY = NS \+ 'mills\.token';/.test(page170)
       && /localStorage\.getItem\(NS \+ k\)/.test(page170) && /indexedDB\.open\(NS \+ 'mills', 1\)/.test(page170) && !/localStorage\.(get|set)Item\('mills/.test(page170) && !/sessionStorage\.(get|set)Item\('/.test(page170)
-      && /return location\.origin \+ \(PRODUCT \? PRODUCT\.base : ''\);/.test(page170) && /if \(PRODUCT && !\['menu', 'admin', \.\.\.PRODUCT\.screens\]\.includes\(name\)\) name = 'menu';/.test(page170)
+      && /return location\.origin \+ \(PRODUCT \? PRODUCT\.base : ''\);/.test(page170) && /if \(PRODUCT && !\['menu', 'admin', 'settingsPage', \.\.\.PRODUCT\.screens\]\.includes\(name\)\) name = 'menu';/.test(page170)
       && (await call('/')).status === 200 && /__MILLS_PRODUCT__/.test(await fetch(H + '/').then((r) => r.text())); // the hub leaves the placeholder: PRODUCT stays null here
     if (RUST_HUB) {
       const notAdmin = await call('/api/admin/gateway/products', U, { id: 'prodsuit', name: 'PGM Prod Suit' });
@@ -9252,7 +9279,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const screens = [...page.matchAll(/<div id="(\w+)" class="screen"[^>]*>\s*<header>([\s\S]*?)<\/header>/g), ...page.matchAll(/<div id="(shell)" hidden>\s*<header>([\s\S]*?)<\/header>/g)];
     seen.screens = screens.length; seen.noWayBack = screens.filter((m) => !/<button class="ghost back" data-back>/.test(m[2]) || !/<b[^>]*>[^<]+<\/b>/.test(m[2])).map((m) => m[1]);
     seen.back = /document\.querySelectorAll\('\[data-back\]'\)\.forEach\(\(b\) => \{ b\.onclick = \(\) => showScreen\('menu'\); \}\);/.test(page);
-    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings'\) \$\('closeSettings'\)\.click\(\); \};/.test(page) && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
+    seen.close = /\$\('settings'\)\.onclick = \(e\) => \{ if \(e\.target\.id === 'settings' && !\$\('settings'\)\.classList\.contains\('asPage'\)\) \$\('closeSettings'\)\.click\(\); \};/.test(page) // the modal; the page (T-380) has its own way back && /if \(e\.key !== 'Escape'[^\n]*\$\('settings'\)\.hidden[^\n]*\n\s*\$\('closeSettings'\)\.click\(\);/.test(page);
     const ok = pjs.status === 200 && !seen.missing.length && seen.groups >= 13 && !seen.headless && seen.aiGroups === 'AI source,My AIs,My OpenRouter,My AI hosts' && seen.appGroups === 'Appearance,Desktop Unity' && seen.workGroups === 'Chat and Work,My projects,When the AI asks' && seen.soundGroups === 'Sounds,Read aloud,Calls and voice clips'
       && seen.connGroups === 'API access,Signed-in devices,My machines,My Forgejo'
       && !!body && !seen.saveIds.length && seen.saved === 200 && seen.kept === '42,classic,130,mine,true,15,7,high,nord,true'

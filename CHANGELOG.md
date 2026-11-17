@@ -7,6 +7,14 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.70.3 — 2026-11-16
+
+PATCH: **Settings is a page of its own from the main menu** (T-380, from Sponge). The main menu's Settings opens a screen like the
+others (← Menu, the whole page scrolls with the scrollbar at the window edge, the tabs stay on top and Save at the bottom).
+Settings in Work, the chat app, a profile card or /settings stays the modal. Both are the same Settings: the one element
+moves between the page and the modal (settingsAs()), so the options never differ. web/index.html 1.54.1, web/polish.css
+1.1.2. New check R642.
+
 ## 5.70.2 — 2026-11-16
 
 PATCH: **the Tools window opens on Windows.** Opening it from the site's Tools tile or the tray built the WebView2
