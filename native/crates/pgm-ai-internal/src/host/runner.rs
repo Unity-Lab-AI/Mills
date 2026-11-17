@@ -751,8 +751,9 @@ mod tests {
         assert_eq!(none.len(), 4);
         // a configured Modelfile is taken as given (a wrong path is said, not swapped for another)
         let dir = std::env::temp_dir().join(format!("vr-brain-{}", std::process::id())); let _ = std::fs::remove_dir_all(&dir); std::fs::create_dir_all(dir.join("models").join("unity-brain")).unwrap();
-        let mut s = super::HostSettings::new(dir.join("ai-node.json")); s.raw.insert("unity".into(), serde_json::json!({ "modelfile": "/nowhere/Modelfile" }));
-        assert_eq!(super::brain_modelfile(&s, &dir), Some(PathBuf::from("/nowhere/Modelfile")));
+        let nowhere = if cfg!(windows) { r"C:\nowhere\Modelfile" } else { "/nowhere/Modelfile" }; // absolute on this OS
+        let mut s = super::HostSettings::new(dir.join("ai-node.json")); s.raw.insert("unity".into(), serde_json::json!({ "modelfile": nowhere }));
+        assert_eq!(super::brain_modelfile(&s, &dir), Some(PathBuf::from(nowhere)));
         s.raw.remove("unity");
         assert_eq!(super::brain_modelfile(&s, &dir), None, "no Modelfile anywhere yet");
         std::fs::write(dir.join("models").join("unity-brain").join("Modelfile"), "FROM llama3\n").unwrap();
