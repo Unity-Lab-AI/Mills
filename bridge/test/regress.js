@@ -79,6 +79,7 @@ const L647 = { // T-381: AI Admin → Team OpenRouter (r647Check)
   R648: 'a team entry is a named chain: when model 1\'s provider is down before answering, the hub sends the same request to model 2 (each step its own model on exactly its provider endpoint) and says so in words (model 1: … unavailable (503: …), switching to model 2: …), on every way in (OpenAI chat, the Anthropic-shaped /v1/messages) and also when a stream fails as its first event; a credits refusal (402) is never passed on to the next model',
   R649: 'a key has optional limits for everyone on it together (5 hours and 7 days rolling, the month; a new key has none) that only its owner or Manage AI changes and never above the key\'s own limit on OpenRouter; spend reaching one is refused in the caller\'s API shape naming the key, the window and when it frees up; everyone sees the windows, the key\'s limit and, with a management key set, the account\'s credits left',
   R652: 'AI Admin\'s provider picker says everything OpenRouter does about each provider of a model (T-385): its deal with the price before it, its service tier, every other price and the tiered ones (above a prompt size, or by time of day), uptime over 5 minutes / 30 minutes / a day, limits and parameters, and who runs it (headquarters, datacenters, privacy policy); the model search can be only the models some provider gives a deal on, or only the free ones, and the page shows those facts as words',
+  R653: 'each provider of a model shows what it does with your data, as OpenRouter\'s model page marks it (T-386): green for no training and keeping nothing, yellow for keeping prompts (and for how many days), red for training on them, read from the model\'s own page on OpenRouter\'s site without the API key; a different thing from the ZDR list (a provider on the list may still keep prompts, one off it may keep nothing), with filters for green only and no training',
   R650: 'the page: AI Admin searches models and picks a provider by price, speed and data policy to add a fallback or another fallback; Work\'s picker names the team\'s entries This hub · OpenRouter and a person\'s own key by its name, and Work shows the OpenRouter line (for that key) only while the session on screen runs on an OpenRouter key',
 };
 const L637 = { // T-379: Site admin and AI Admin (siteRolesCheck)
@@ -256,6 +257,14 @@ Object.assign(R647_ENDPOINTS[0], { service_tier: 'flex', uptime_last_5m: 100, up
 Object.assign(R647_ENDPOINTS[0].pricing, { overrides: [{ utc_start: 1600, utc_end: 0, prompt: '0.0000002', completion: '0.0000008' }] }); // an off-peak price (Tencent's shape)
 Object.assign(R647_ENDPOINTS[1], { max_prompt_tokens: 120000, supported_parameters: ['tools', 'reasoning'] });
 Object.assign(R647_ENDPOINTS[1].pricing, { discount: 0, web_search: '0.01', overrides: [{ min_prompt_tokens: 200000, prompt: '0.0000005', completion: '0.0000019' }] });
+// R653 (T-386): the model's page on OpenRouter's site, in its own shape (each endpoint's JSON inside a script string, quotes
+// escaped): DeepInfra keeps nothing and does not train (green), SiliconFlow keeps prompts 30 days (yellow), Chutes trains (red)
+const R653_PAGE = (() => {
+  const ep = (slug, policy) => ({ provider_display_name: slug, provider_slug: slug, derived_service_tier: null, quantization: 'fp8', variant: 'standard', is_free: false, data_policy: policy, pricing: { prompt: '0.0000001', discount: 0 } });
+  const no = { training: false, trainingOpenRouter: false, retainsPrompts: false, canPublish: false, safetyRetention: false };
+  const eps = [ep('deepinfra/fp4', { ...no, termsOfServiceURL: 'https://deepinfra.example/terms', privacyPolicyURL: 'https://deepinfra.example/privacy' }), ep('siliconflow/fp8', { ...no, retainsPrompts: true, retentionDays: 30 }), ep('chutes', { ...no, training: true, retainsPrompts: true })];
+  return '<!DOCTYPE html><html><body><script>self.__next_f.push([1,"' + JSON.stringify({ endpoints: eps }).replace(/"/g, '\\"') + '"])</script></body></html>';
+})();
 const R652_PROVIDERS = [{ name: 'DeepInfra', slug: 'deepinfra', privacy_policy_url: 'https://deepinfra.example/privacy', terms_of_service_url: 'https://deepinfra.example/terms', status_page_url: null, headquarters: 'US', datacenters: ['US', 'DE'] },
   { name: 'Chutes', slug: 'chutes', privacy_policy_url: 'javascript:alert(1)', terms_of_service_url: null, status_page_url: null, headquarters: 'US', datacenters: [] }];
 const R591_KEY = 'sk-or-v1-r591-secret-0123456789';
@@ -428,6 +437,7 @@ function startFakeOllama() {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ data: { id, name: 'DeepSeek: V3.1', endpoints: R647_ENDPOINTS.map((e) => ({ ...e, throughput_last_30m: keyed ? e.throughput_last_30m : null, latency_last_30m: keyed ? e.latency_last_30m : null })) } }));
       }
+      if (req.url === '/orapi/deepseek/deepseek-chat-v3.1') { fakeOr.pageAuth = req.headers.authorization || 'none'; res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(R653_PAGE); } // R653: the model's page
       if (req.url === '/orapi/providers') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: R652_PROVIDERS })); } // R652
       if (req.url === '/orapi/endpoints/zdr') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ model_id: 'deepseek/deepseek-chat-v3.1', provider_name: 'DeepInfra', tag: 'deepinfra/fp4', safety_retention: false }, { model_id: 'deepseek/deepseek-chat-v3.1', provider_name: 'SiliconFlow', tag: 'siliconflow/fp8', safety_retention: true }] })); }
       if (req.url === '/orapi/credits') { const ok = req.headers.authorization === 'Bearer ' + R647_MGMT; res.writeHead(ok ? 200 : 403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(ok ? { data: { total_credits: 30, total_usage: 5 } } : { error: { code: 403, message: 'Only management keys can fetch credits' } })); }
@@ -8962,6 +8972,23 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           && /a provider gives 20% off/.test(s652.line || '') && !s652.pageErr;
         check('R652', L647.R652, ok652, JSON.stringify(s652));
       }
+      // R653 (T-386): each provider's own data policy from the model's page, apart from the ZDR list
+      {
+        const by = (n) => e.find((x) => x.provider === n) || {};
+        const s653 = {};
+        s653.hub = ['DeepInfra', 'SiliconFlow', 'Chutes'].map((n) => { const x = by(n); return [n, x.data, x.policy && x.policy.level, x.policy && x.policy.training.words, x.policy && x.policy.retention.words, x.policy && x.policy.retention.days].join(' '); }).join(' | ');
+        s653.keyToPage = fakeOr.pageAuth;
+        try {
+          const AA = require('vm').runInNewContext(fs.readFileSync(path.join(MILLS, 'web', 'aiadmin.js'), 'utf8') + '\nAIADMIN', {});
+          s653.page = ['DeepInfra', 'SiliconFlow', 'Chutes'].map((n) => { const f = AA.endpointFacts(by(n)); return n + ': ' + f.marks.map((m) => m.join(' ')).join(', ') + ' · ' + f.zdr + ' · ' + f.level; }).join(' | ');
+          s653.links = AA.endpointFacts(by('DeepInfra')).links.map((l) => l.join('=')).join(';');
+        } catch (err) { s653.pageErr = err.message; }
+        const ok653 = s653.hub === 'DeepInfra zdr green No training Keeps nothing  | SiliconFlow safety yellow No training Keeps prompts 30 days 30 | Chutes train red Trains on your prompts Keeps prompts '
+          && s653.keyToPage === 'none'
+          && s653.page === 'DeepInfra: green No training, green Keeps nothing · On OpenRouter\'s ZDR list · green | SiliconFlow: green No training, yellow Keeps prompts 30 days · On OpenRouter\'s ZDR list (keeps prompts for safety checks) · yellow | Chutes: red Trains on your prompts, yellow Keeps prompts · Not on OpenRouter\'s ZDR list · red'
+          && s653.links === 'Privacy policy=https://deepinfra.example/privacy;Terms=https://deepinfra.example/terms' && !s653.pageErr;
+        check('R653', L647.R653, ok653, JSON.stringify(s653));
+      }
       // R648: an entry is a named chain; model 1 down (503) gives way to model 2, said in words; credits (402) never switch
       const steps = [{ model: 'dead/r647', provider: 'stepfun' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4', label: 'deepseek via deepinfra' }];
       const up = await call('/api/providers/update', A, { id: tp.id, pairs: [{ id: 'deepseek', label: 'deepseek', steps }, { id: 'broke', label: 'broke', steps: [{ model: 'broke/r647', provider: 'x' }, { model: 'deepseek/deepseek-chat-v3.1', provider: 'deepinfra/fp4' }] },
@@ -9006,7 +9033,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && near(w1('fiveHour').spentUsd, r2(base('fiveHour') + 0.06)) && w1('fiveHour').over === true && w1('week').over === false && w1('month').over === false
         && cr.totalUsd === 30 && cr.usedUsd === 5 && cr.leftUsd === 25 && cr.from === 'management key' && seen.key === 15 && seen.mgmtHidden,
         JSON.stringify(seen));
-    } catch (e) { if (e.stopAfter) throw e; for (const id of ['R647', 'R652', 'R648', 'R649']) if (!seen[id]) check(id, L647[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen)); }
+    } catch (e) { if (e.stopAfter) throw e; for (const id of ['R647', 'R652', 'R653', 'R648', 'R649']) if (!seen[id]) check(id, L647[id], false, 'the check itself failed: ' + e.message + ' · ' + JSON.stringify(seen)); }
     finally {
       // the team limits back to the defaults and no management key: the settings file goes (the hub reads it on every request;
       // setting wide limits through the route would be refused while the hub still holds the key's own limit of 15 for a minute)

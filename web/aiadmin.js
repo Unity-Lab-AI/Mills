@@ -57,6 +57,7 @@ const AIADMIN = (() => {
   const MORE_NAMES = { cacheWrite1hPerM: 'cache write (1 hour)', reasoningPerM: 'reasoning', audioPerM: 'audio in', audioCachePerM: 'audio cache', imageTokenPerM: 'image tokens', imageOutputPerM: 'image out', imageEach: 'per input image', webSearchEach: 'per web search', requestEach: 'per request' };
   const each = (n) => '$' + (n >= 0.01 ? n.toFixed(2) : String(+n.toPrecision(3)));
   const pct = (x) => (x == null ? '–' : (Math.round(x * 10) / 10) + '%');
+  const RANK = { green: 0, yellow: 1, red: 2, unknown: 3 };
   const kTok = (n) => (n == null ? '' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
   function endpointFacts(e) {
     const pi = e.providerInfo || null;
@@ -72,7 +73,12 @@ const AIADMIN = (() => {
       limits: [e.context ? kTok(e.context) + ' context' : '', e.maxPrompt ? kTok(e.maxPrompt) + ' prompt at most' : '', e.maxOut ? kTok(e.maxOut) + ' out at most' : ''].filter(Boolean).join(' · '),
       params: (e.params || []).join(', '),
       where: pi ? [pi.headquarters ? 'Based in ' + pi.headquarters : '', (pi.datacenters || []).length ? 'runs in ' + pi.datacenters.join(', ') : ''].filter(Boolean).join(', ') : '',
-      links: pi ? [['Privacy policy', pi.privacyUrl], ['Terms', pi.termsUrl], ['Status', pi.statusUrl]].filter(([, u]) => /^https?:\/\//.test(u || '')) : [],
+      links: [['Privacy policy', (pi && pi.privacyUrl) || (e.policy && e.policy.privacyUrl)], ['Terms', (pi && pi.termsUrl) || (e.policy && e.policy.termsUrl)], ['Status', pi && pi.statusUrl]].filter(([, u]) => /^https?:\/\//.test(u || '')),
+      // T-386: what this provider does with the prompts (OpenRouter's green / yellow / red markers, from its model page),
+      // and, a separate thing, whether it is on OpenRouter's ZDR list
+      marks: e.policy ? [[e.policy.training.level, e.policy.training.words], [e.policy.retention.level, e.policy.retention.words]].concat(e.policy.openRouterTrains ? [['red', 'OpenRouter may train on them']] : []) : [],
+      level: e.policy ? e.policy.level : 'unknown',
+      zdr: e.data === 'zdr' ? 'On OpenRouter\'s ZDR list' : e.data === 'safety' ? 'On OpenRouter\'s ZDR list (keeps prompts for safety checks)' : 'Not on OpenRouter\'s ZDR list',
     };
   }
   /** A model in the search list: its prices, a deal some provider gives on it, free, tiered prices. */
@@ -270,9 +276,11 @@ const AIADMIN = (() => {
       prov.textContent = '';
       prov.append(mk('h4', '', m.name + ': pick a provider'));
       const filt = mk('select'); filt.setAttribute('aria-label', 'Data policy');
-      for (const [v, l] of [['', 'Any data policy'], ['zdr', 'No retention only'], ['nott', 'No training (no retention or safety retention)']]) { const o = mk('option', '', l); o.value = v; filt.append(o); }
+      for (const [v, l] of [['', 'Any data policy'], ['green', 'Green only: no training, keeps nothing'], ['notrain', 'No training (green or yellow)'], ['zdr', 'On OpenRouter\'s ZDR list']]) { const o = mk('option', '', l); o.value = v; filt.append(o); }
+      const policyOk = (e) => !filt.value || (filt.value === 'green' ? !!e.policy && e.policy.level === 'green'
+        : filt.value === 'notrain' ? (e.policy ? e.policy.training.level === 'green' && !e.policy.openRouterTrains : e.data !== 'train') : e.data === 'zdr' || e.data === 'safety');
       const sort = mk('select'); sort.setAttribute('aria-label', 'Sort by');
-      for (const [v, l] of [['tps', 'Fastest first'], ['in', 'Cheapest input first'], ['out', 'Cheapest output first'], ['deal', 'Biggest deal first'], ['cache', 'Cheapest cache read first'], ['uptime', 'Most reliable first'], ['latency', 'Quickest first token']]) { const o = mk('option', '', l); o.value = v; sort.append(o); }
+      for (const [v, l] of [['tps', 'Fastest first'], ['in', 'Cheapest input first'], ['out', 'Cheapest output first'], ['deal', 'Biggest deal first'], ['policy', 'Best data policy first'], ['cache', 'Cheapest cache read first'], ['uptime', 'Most reliable first'], ['latency', 'Quickest first token']]) { const o = mk('option', '', l); o.value = v; sort.append(o); }
       const tiers = [...new Set((d.endpoints || []).map((e) => e.serviceTier || ''))];
       const tierSel = mk('select'); tierSel.setAttribute('aria-label', 'Service tier'); tierSel.hidden = tiers.length < 2;
       for (const v of ['*'].concat(tiers)) { const o = mk('option', '', v === '*' ? 'Any service tier' : v || 'Standard tier'); o.value = v; tierSel.append(o); }
@@ -287,10 +295,10 @@ const AIADMIN = (() => {
         const hr = mk('tr'); for (const h of ['Provider', 'In $/M', 'Out $/M', 'Cache $/M', 'Speed', 'First token', 'Uptime', 'Context', 'Data policy', '', '']) hr.append(mk('th', '', h)); t.append(hr);
         const words = pq.value.toLowerCase().split(/\s+/).filter(Boolean);
         const hay = (e) => [e.provider, e.route, e.quantization, e.serviceTier, ...((e.providerInfo || {}).datacenters || []), (e.providerInfo || {}).headquarters].filter(Boolean).join(' ').toLowerCase();
-        let eps = (d.endpoints || []).filter((e) => (!filt.value || (filt.value === 'zdr' ? e.data === 'zdr' : e.data !== 'train')) && (tierSel.value === '*' || (e.serviceTier || '') === tierSel.value)
+        let eps = (d.endpoints || []).filter((e) => policyOk(e) && (tierSel.value === '*' || (e.serviceTier || '') === tierSel.value)
           && (!dealsOnly.checked || e.discount) && words.every((w) => hay(e).includes(w)));
         const num = (x, d0) => (x == null ? d0 : x);
-        const by = { tps: (a, b) => num(b.tpsP50, -1) - num(a.tpsP50, -1), in: (a, b) => num(a.inPerM, 1e9) - num(b.inPerM, 1e9), out: (a, b) => num(a.outPerM, 1e9) - num(b.outPerM, 1e9), deal: (a, b) => num(b.discount, 0) - num(a.discount, 0),
+        const by = { tps: (a, b) => num(b.tpsP50, -1) - num(a.tpsP50, -1), in: (a, b) => num(a.inPerM, 1e9) - num(b.inPerM, 1e9), out: (a, b) => num(a.outPerM, 1e9) - num(b.outPerM, 1e9), deal: (a, b) => num(b.discount, 0) - num(a.discount, 0), policy: (a, b) => RANK[endpointFacts(a).level] - RANK[endpointFacts(b).level],
           cache: (a, b) => num(a.cacheReadPerM, 1e9) - num(b.cacheReadPerM, 1e9), uptime: (a, b) => num(b.uptime30m, -1) - num(a.uptime30m, -1), latency: (a, b) => num(a.latencyP50Ms, 1e9) - num(b.latencyP50Ms, 1e9) };
         eps = eps.slice().sort(by[sort.value]);
         if (!eps.length) { const tr = mk('tr'), td = mk('td', 'status', 'No provider matches.'); td.colSpan = COLS; tr.append(td); t.append(tr); }
@@ -300,7 +308,11 @@ const AIADMIN = (() => {
           const pn = mk('td'); pn.append(mk('b', '', e.provider)); if (e.quantization) pn.append(mk('small', '', ' ' + e.quantization)); if (f.tier) pn.append(' ', mk('span', 'orTier', f.tier)); pn.title = e.route + (e.detail ? ' · ' + e.detail : '');
           const price = (now, before) => { const td = mk('td'); if (before) td.append(mk('s', 'orBefore', before), ' '); td.append(perM(now)); if (before) td.append(' ', mk('span', 'orDeal', f.deal)); return td; };
           const up = mk('td', '', e.uptime30m != null ? Math.round(e.uptime30m) + '%' : '–'); up.title = f.uptime;
-          const dp = mk('td'); dp.append(mk('span', 'orData ' + e.data, DATA_WORDS[e.data] || e.dataLabel)); if (f.where) dp.title = f.where;
+          // the provider's own markers; without them (not on OpenRouter's page) the ZDR list's words as before, said to be only that
+          const dp = mk('td', 'orPolicy');
+          if (f.marks.length) { for (const [lv, w] of f.marks) dp.append(mk('span', 'orMark ' + lv, w)); if (e.data !== 'train') { const z = mk('span', 'orData zdr', 'ZDR'); z.title = f.zdr; dp.append(z); } }
+          else { dp.append(mk('span', 'orData ' + e.data, DATA_WORDS[e.data] || e.dataLabel)); dp.append(mk('small', '', ' (ZDR list only: the provider\'s own policy is unknown)')); }
+          dp.title = [f.marks.map((x) => x[1]).join(' · '), f.zdr, f.where].filter(Boolean).join('\n');
           const more = mk('td'); const mb = mk('button', 'ghost', 'More'); mb.type = 'button'; mb.setAttribute('aria-expanded', 'false'); more.append(mb);
           const use = mk('td'); const b = mk('button', '', 'Use'); b.type = 'button';
           b.onclick = () => { const label = m.name.replace(/^[^:]+:\s*/, '') + ' via ' + e.provider + (e.quantization ? ' (' + e.quantization + ')' : '') + (e.serviceTier ? ' ' + e.serviceTier : ''); done({ model: d.model.id || m.id, provider: e.route, label }, name.value.trim()); p.remove(); };
@@ -310,6 +322,7 @@ const AIADMIN = (() => {
           // the rest, a row under it: tiered and other prices, uptime over time, limits, parameters, who runs it and their policies
           const xr = mk('tr', 'orMoreRow'); xr.hidden = true; const xd = mk('td'); xd.colSpan = COLS; xr.append(xd);
           const line = (label, text) => { if (text) { const r = mk('div'); r.append(mk('b', '', label + ': '), text); xd.append(r); } };
+          line('Data', (f.marks.length ? f.marks.map((x) => x[1]).join(' · ') : 'The provider\'s own policy is unknown') + ' · ' + f.zdr);
           line('Deal', f.deal ? f.deal + ' (was in ' + f.inBefore + '/M, out ' + f.outBefore + '/M)' : '');
           line('Tiered prices', f.tiers.join(' · ')); line('Other prices', f.more.join(' · ')); line('Uptime', f.uptime.replace(/^Uptime: /, '')); line('Limits', f.limits);
           line('Service tier', f.tier); line('Runs on', f.where); line('Parameters', f.params);

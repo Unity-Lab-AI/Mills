@@ -197,6 +197,14 @@ header b { font-weight: 750; letter-spacing: .01em; }
 .orTier { font-size: .7rem; padding: .05rem .4rem; border-radius: 999px; border: 1px solid var(--hairline); color: var(--muted); white-space: nowrap; }
 .orMoreRow > td { background: var(--surface-sunk); font-size: .85rem; line-height: 1.5; }
 .orMoreRow b { font-weight: 600; }
+/* T-386: each provider's own data policy, OpenRouter's green / yellow / red markers (yellow: halfway from good to bad in
+   oklch, which runs through yellow, so it follows every theme) */
+.orPolicy { display: flex; flex-wrap: wrap; gap: .25rem; align-items: center; }
+.orMark { --mark: var(--muted); font-size: .72rem; padding: .05rem .45rem .05rem .35rem; border-radius: 999px; white-space: nowrap; border: 1px solid color-mix(in srgb, var(--mark) 45%, var(--hairline)); background: color-mix(in srgb, var(--mark) 14%, transparent); }
+.orMark::before { content: ""; display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .3rem; background: var(--mark); vertical-align: baseline; }
+.orMark.green { --mark: var(--good); }
+.orMark.yellow { --mark: color-mix(in oklch, var(--good) 50%, var(--bad)); }
+.orMark.red { --mark: var(--bad); }
 .orUseBar { font-size: .78rem; color: var(--muted); padding: .2rem .8rem; border-bottom: 1px solid var(--hairline); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orUseBar[hidden] { display: none; }
 .orUseBar.over { color: var(--bad); }
