@@ -7,6 +7,18 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.75.2 — 2026-11-18
+
+PATCH: **the OpenRouter keys' data never shows as a change in a hub's checkout** (T-388).
+- Dev's auto-deploy refused 5.75.1 ("live checkout has uncommitted changes"). The hub writes the OpenRouter keys' spend
+  ledger (`bridge/openrouter-team-ledger.jsonl`, T-381) and their limits and management keys (`bridge/openrouter-team.json`,
+  T-383) in its own folder, and git ignored neither. The ledger appeared on dev with the first OpenRouter answer there.
+- Both are in `.gitignore` now. Dev was unblocked by excluding them in its checkout's `.git/info/exclude` (as its other
+  hub data files already are); live has neither file yet.
+- **R656** (new): everything the scratch hub makes in its own folder during the whole suite is tracked or ignored by git,
+  so the next data file the hub writes cannot stop a deploy the same way. It is seen failing on 5.75.1's `.gitignore`: the
+  ledger and the limits file were "not ignored".
+
 ## 5.75.1 — 2026-11-18
 
 PATCH: **Work's context meter works for jcode / OpenRouter sessions, and for every session, not just the first one**

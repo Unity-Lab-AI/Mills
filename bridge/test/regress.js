@@ -11753,6 +11753,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     console.log(`Throwaway hub: ${SCRATCH} on port ${PORT} (no tunnel). Production is only read.\n`);
     if (!(await startHub())) throw new Error('throwaway hub did not start; see ' + path.join(SCRATCH, 'hub.log'));
     await run();
+    // R656 (T-388): everything the scratch hub made in its own folder is tracked or ignored by git; a data file it writes
+    // and git does not ignore shows as a change in a hub's checkout and stops that hub's auto-deploy (dev, 2026-11-18: the
+    // OpenRouter ledger)
+    {
+      const made = fs.readdirSync(SB).filter((n) => !/\.tmp$/.test(n));
+      const loose = made.filter((n) => {
+        const rel = 'bridge/' + n, dir = fs.statSync(path.join(SB, n)).isDirectory();
+        const tracked = spawnSync('git', ['ls-files', '--error-unmatch', rel], { cwd: MILLS, stdio: 'ignore' }).status === 0;
+        return !tracked && spawnSync('git', ['check-ignore', '-q', rel + (dir ? '/' : '')], { cwd: MILLS }).status !== 0;
+      });
+      check('R656', 'every file the hub makes in its own folder while it works (the suite\'s whole run on a scratch hub) is tracked or ignored by git, so a hub\'s checkout never shows the hub\'s own data as a change and its auto-deploy is never stopped by it (the OpenRouter keys\' ledger and limits stopped dev\'s, T-388)',
+        loose.length === 0, loose.length ? 'neither tracked nor ignored: ' + loose.join(', ') : made.length + ' entries, each tracked or ignored');
+    }
   } catch (e) { if (e.stopAfter) console.log(e.message); else { console.log('RUNNER ERROR: ' + e.stack); code = 2; results.push({ id: 'RUNNER', label: 'runner crashed; every check after the last PASS above never ran', status: 'FAIL', detail: e.message }); } }
   stopHub();
   reTestCleanup();

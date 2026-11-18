@@ -60,6 +60,10 @@ bridge/unity.json
 bridge/unity.json.tmp
 # AI providers people hooked up (API keys / login folders / endpoints) and the empty folder API calls run in
 bridge/providers.json
+# OpenRouter keys' spend ledger and their limits / management keys (T-381, T-383): data, never shipped (an untracked one
+# stopped dev's auto-deploy, T-388)
+bridge/openrouter-team-ledger.jsonl
+bridge/openrouter-team.json
 Api/
 # Forgejo issue mirroring: the host's token + repo (never committed); team notes live on the host only
 bridge/forgejo.json
