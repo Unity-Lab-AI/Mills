@@ -117,6 +117,13 @@ pub fn map_event(ev: &Value, skip: &mut Option<String>) -> Vec<Value> {
         _ => vec![],
     }
 }
+/// The session's latest token count (T-388: the server keeps `usage` = `{input, output, cacheRead, cacheWrite,
+/// promptIncludesCache, at}` on the session, from its own runs and from a device's appends) as a usage event for Work's
+/// context meter (usage.rs note_context); None when the session has none (an older server).
+pub fn usage_event(state: &Value) -> Option<Value> {
+    let u = &state["usage"];
+    u.is_object().then(|| json!({ "type": "usage", "usage": crate::usage::claude_usage(u, u["promptIncludesCache"] != json!(false)) }))
+}
 /// The line for the server's answer to a message (None = nothing to say; Err = the plain refusal).
 pub fn routed_line(st: u16, v: &Value) -> Result<Option<String>, String> {
     if !(200..300).contains(&st) { return Err(err_text(v, st)); }
@@ -211,6 +218,15 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
     let w = hub.work().clone();
     let (dir, project, branch) = extra;
     let emit = |ev: Value| w.on_event(&*hub, &a, &sx, ev, "openrouter");
+    // a usage event goes into the session's context with the model and its window (T-388); everything else is shown
+    let show = |mut ev: Value, model: &str, window: Option<u64>| {
+        if ev["type"] != json!("usage") { return emit(ev); }
+        if !model.is_empty() { ev["model"] = json!(model); }
+        if let Some(n) = window { ev["contextWindow"] = json!(n); }
+        w.note_usage(&a, &sx, &ev);
+    };
+    let (model, window): (String, Option<u64>); // set from the session itself, below
+    let mut seen_usage = Value::Null; // the session's count last put into the context
     let line = |ev: Value| w.emit_key(&sx.key, ev);
     let user = a.username.clone();
     let mut fr = frames(sv.clone(), user.clone(), pid.clone(), after);
@@ -222,11 +238,16 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
     let mut is_running;
     match call(&sv, reqwest::Method::GET, &format!("/__srv/sessions/{}?user={}&after={after}", q(&pid), q(&user)), None, Duration::from_secs(15)).await {
         Ok((200, v)) => {
+            let st = state_in(&v); is_running = running(&st).unwrap_or(false);
+            // the model the session runs (its pair's) and that model's context window, from OpenRouter's catalogue (T-388)
+            let pair = s(&st, "pair");
+            model = crate::openrouter::pgm_resolve(&*hub, &user, &pair).map(|(_, e)| s(&e, "model")).filter(|m| !m.is_empty()).unwrap_or_else(|| pair.strip_prefix("my/").unwrap_or(&pair).to_string());
+            window = if model.is_empty() { None } else { crate::openrouter_catalog::context_of(&*hub, &model).await };
             for e in v["events"].as_array().cloned().unwrap_or_default() {
                 let n = e["seq"].as_u64().unwrap_or(0); if n != 0 && n <= after { continue; } after = after.max(n);
-                for x in map_event(&e, &mut skip) { emit(x); }
+                for x in map_event(&e, &mut skip) { show(x, &model, window); }
             }
-            let st = state_in(&v); is_running = running(&st).unwrap_or(false);
+            if let Some(x) = usage_event(&st) { seen_usage = st["usage"].clone(); show(x, &model, window); }
             line(info(format!("PGM session {pid}: {}.", where_text(&st))));
         }
         Ok((404, _)) => { line(error(format!("The Jcode PGM Server does not know this session ({pid}) any more. \"New chat\" starts a new one."))); return end(&hub, &a, &sx, &run, &pid, after, json!(1)); }
@@ -271,12 +292,16 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
                 if ty == "_connected" { ready = true; continue; }
                 if ty == "ping" { continue; }
                 if ty == "session" || ty == "state" {
+                    if f["usage"].is_object() && f["usage"] != seen_usage { if let Some(x) = usage_event(&f) { seen_usage = f["usage"].clone(); show(x, &model, window); } }
                     if let Some(r) = running(&f) {
                         if r { active = true; is_running = true; }
                         else { is_running = false; if waiting && active { waiting = false; } }
                     }
                     continue;
                 }
+                // the server's own run's raw jcode events (T-388): its count goes into the context at once (an older server that
+                // does not keep `usage` on the session still sends these); nothing else of a run frame is shown
+                if ty == "run" { if f["event"]["type"] == json!("tokens") { show(json!({ "type": "usage", "usage": crate::usage::claude_usage(&f["event"], true) }), &model, window); } continue; }
                 if ty == "handover" { line(info(format!("The server asked jcode{} to hand its unfinished work over (stage, commit, push).", { let d = { let l = s(&f, "label"); if l.is_empty() { s(&f, "device") } else { l } }; if d.is_empty() { String::new() } else { format!(" on {d}") } }))); continue; }
                 batch.push(f);
             }
@@ -289,7 +314,8 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
                     if let Ok((200, v)) = call(&sv, reqwest::Method::GET, &format!("/__srv/sessions/{}?user={}&after={after}", q(&pid), q(&user)), None, Duration::from_secs(5)).await {
                         // events the stream has not brought (yet) are shown now (the stream's copies are skipped by their seq), then whether it runs
                         batch.extend(v["events"].as_array().cloned().unwrap_or_default());
-                        polled = running(&state_in(&v));
+                        let sv2 = state_in(&v); polled = running(&sv2);
+                        if sv2["usage"].is_object() && sv2["usage"] != seen_usage { if let Some(x) = usage_event(&sv2) { seen_usage = sv2["usage"].clone(); show(x, &model, window); } }
                     }
                 }
             }
@@ -300,7 +326,7 @@ async fn follow(hub: Arc<dyn AiHub>, a: Account, sx: Sx, run: String, sv: Srv, p
             after = n; last_at = now_ms();
             if s(&f, "kind") == "assistant" { last_text = s(&f, "text"); active = true; }
             if matches!(s(&f, "kind").as_str(), "tool" | "note") { active = true; }
-            for x in map_event(&f, &mut skip) { emit(x); }
+            for x in map_event(&f, &mut skip) { show(x, &model, window); }
             shown += 1; if shown % 20 == 0 { set_pgm(&w, &a, &sx, &pid, after); }
         }
         match polled.take() { Some(false) => { is_running = false; if waiting && active { waiting = false; } } Some(true) => { is_running = true; if waiting { active = true; } } None => {} }
@@ -464,6 +490,15 @@ pub async fn open(hub: &Arc<dyn AiHub>, a: &Account, b: &Value) -> Resp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_sessions_latest_count_becomes_a_usage_event_for_the_context_meter() {
+        let st = json!({ "id": "ps-1", "pair": "deepseek/deepseek-v4-flash", "usage": { "input": 30000, "output": 900, "cacheRead": 25000, "cacheWrite": 0, "promptIncludesCache": true, "at": 1 } });
+        let v = usage_event(&st).unwrap();
+        assert_eq!(v["type"], "usage");
+        assert_eq!(v["usage"], json!({ "input_tokens": 5000, "output_tokens": 900, "cache_read_input_tokens": 25000, "cache_creation_input_tokens": 0 }));
+        assert!(usage_event(&json!({ "id": "ps-2" })).is_none(), "an older server: nothing");
+        assert!(map_event(&json!({ "seq": 8, "from": "server", "kind": "usage", "text": "" }), &mut None).is_empty(), "never a transcript line");
+    }
     #[test]
     fn the_server_s_events_become_the_page_s() {
         let mut skip = Some("hi there".to_string());

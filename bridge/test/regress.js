@@ -74,6 +74,7 @@ const L614 = { // T-375: /transfer in Work (a handoff, then a fresh session that
   R618: 'a Jcode PGM session (an OpenRouter provider) transfers the same way: the handoff is written through its own OpenRouter provider (its key, the handoff writer\'s prompt), and the new session uses the same provider, model and engine (its first run is a Jcode PGM run in the same worktree)',
   R619: 'the page offers /transfer: typed with a focus, in the Commands panel with a tooltip and a confirm modal with a focus box that says what happens (a handoff, a fresh session in the same project and worktree, the switch), a progress line while it works, then it opens the new session; the old session shows "Transferred to …" and the new one "Continued from …" with a link to the other, the session list says "transferred →", and its icons are SVG symbols (no emoji)',
 };
+const L655 = 'Work\'s context meter follows a Work session on the Jcode PGM Server (T-388): the token count of the server\'s run (its run frame, as Jcode PGM 0.99.13 already sends it, or the count the session keeps) fills the session\'s context, an OpenAI-shaped prompt count (cached part inside) counted once, with the window of the pair\'s own model from OpenRouter\'s catalogue (not the 200k default); the count never shows in the transcript; /api/usage?session=<id> answers for that session (the one on screen), not the person\'s first one';
 const L647 = { // T-381: AI Admin → Team OpenRouter (r647Check)
   R647: 'AI Admin\'s model picker reads OpenRouter\'s catalogue with the team key: the models matching every word typed (price per million in and out), one model\'s providers fastest first with price, speed, first-token time and their data policy (no retention, retains without training, retains and may train, from OpenRouter\'s ZDR list); everyone signed in may use it (anyone may add a key of their own and pick its entries, T-383), and an unknown or malformed model is a plain error',
   R648: 'a team entry is a named chain: when model 1\'s provider is down before answering, the hub sends the same request to model 2 (each step its own model on exactly its provider endpoint) and says so in words (model 1: … unavailable (503: …), switching to model 2: …), on every way in (OpenAI chat, the Anthropic-shaped /v1/messages) and also when a stream fails as its first event; a credits refusal (402) is never passed on to the next model',
@@ -248,7 +249,8 @@ const fakeOr = { calls: [] };
 const R647_MGMT = 'sk-or-v1-r647-management-0123456789';
 const R647_MODELS = [{ id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek: V3.1', created: 20, context_length: 163840, supported_parameters: ['tools', 'reasoning'], pricing: { prompt: '0.00000025', completion: '0.00000095' }, architecture: { input_modalities: ['text'] } },
   { id: 'qwen/qwen3-coder', name: 'Qwen: Qwen3 Coder', created: 30, context_length: 262144, supported_parameters: ['tools'], pricing: { prompt: '0.0000002', completion: '0.0000008' } },
-  { id: 'qwen/qwen3-coder:free', name: 'Qwen: Qwen3 Coder (free)', created: 10, context_length: 262144, pricing: { prompt: '0', completion: '0' } }]; // R652: a free variant
+  { id: 'qwen/qwen3-coder:free', name: 'Qwen: Qwen3 Coder (free)', created: 10, context_length: 262144, pricing: { prompt: '0', completion: '0' } }, // R652: a free variant
+  { id: 'anthropic/claude-sonnet-4.5', name: 'Anthropic: Claude Sonnet 4.5', created: 5, context_length: 1000000, pricing: { prompt: '0.000003', completion: '0.000015' } }]; // R655: the or/sonnet pair's model and its window
 const R647_EP = (provider, tag, inp, out, tps) => ({ provider_name: provider, tag, quantization: tag.split('/')[1] || null, pricing: { prompt: inp, completion: out }, context_length: 163840, uptime_last_30m: 99, throughput_last_30m: { p50: tps }, latency_last_30m: { p50: 400 }, status: 0 });
 const R647_ENDPOINTS = [R647_EP('SiliconFlow', 'siliconflow/fp8', '0.00000027', '0.000001', 30), R647_EP('DeepInfra', 'deepinfra/fp4', '0.00000025', '0.00000095', 80), R647_EP('Chutes', 'chutes', '0.0000002', '0.0000008', 50)];
 // R652 (T-385): what else OpenRouter says, as it says it (2026-11-17): Chutes 20 % off (the listed price already discounted), SiliconFlow
@@ -9039,7 +9041,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
           && s654.notAdder === '403 Only the person who added this key may change it. / 403'
           && s654.page === 'DeepSeek V3.1: Down (r654), then Chutes | Qwen3 Coder: any provider (OpenRouter chooses) | ["down-r654","chutes"]'
           && s654.query === 'q=qwen%20coder&tools=1&maxIn=0.5&minContext=128000&sort=price'
-          && s654.search === 'deepseek/deepseek-chat-v3.1 | qwen/qwen3-coder,deepseek/deepseek-chat-v3.1 | qwen/qwen3-coder,qwen/qwen3-coder:free | qwen/qwen3-coder,qwen/qwen3-coder:free';
+          && s654.search === 'deepseek/deepseek-chat-v3.1 | qwen/qwen3-coder,deepseek/deepseek-chat-v3.1 | qwen/qwen3-coder,qwen/qwen3-coder:free | qwen/qwen3-coder,qwen/qwen3-coder:free,anthropic/claude-sonnet-4.5';
         check('R654', L647.R654, ok654, JSON.stringify({ save: save.status, ...s654 }));
       }
       // R649: the team key's limits for everyone together, and what is left (the ledger already holds the earlier checks' spend:
@@ -9285,7 +9287,10 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     const push = (x, ev) => { const e = { seq: ++x.seq, at: Date.now(), ...ev }; x.events.push(e); x.updatedAt = Date.now(); send(x, { type: 'event', session: x.id, event: e, ...e }); return e; };
     const state = (x, running) => { x.running = running; send(x, { type: 'session', session: x.id, ...pub(x) }); };
     const make = (o) => { const id = 'ps-' + crypto.randomBytes(6).toString('hex'); const x = { id, user: o.user, title: o.title || '', project: o.project || '', branch: o.branch || '', pair: o.pair || '', worktree: o.worktree || '', runner: o.runner || { kind: 'server', since: Date.now() }, running: !!o.running, events: [], seq: 0, mode: o.mode || 'server', createdAt: Date.now(), updatedAt: Date.now() }; fk.sessions.set(id, x); return x; };
-    const serverRun = async (x, text) => { state(x, true); await sleep(80); push(x, { from: 'server', kind: 'tool', text: 'ran ls', tool: { name: 'bash', input: { command: 'ls' }, output: 'a.txt b.txt' } }); await sleep(50); push(x, { from: 'server', kind: 'assistant', text: 'server says: ' + text }); if (/SLOW/.test(text)) return; await sleep(50); state(x, false); };
+    const serverRun = async (x, text) => { state(x, true); await sleep(80);
+      if (/r655 live/.test(text)) send(x, { type: 'run', session: x.id, run: 'r655', event: { type: 'tokens', input: 30000, output: 900, cache_read_input: 25000, cache_creation_input: null } }); // R655: as 0.99.13 already sends it
+      if (/r655 kept/.test(text)) x.usage = { input: 40000, output: 1200, cacheRead: 30000, cacheWrite: 0, promptIncludesCache: true, at: Date.now() }; // R655: kept on the session (T-388's server)
+      push(x, { from: 'server', kind: 'tool', text: 'ran ls', tool: { name: 'bash', input: { command: 'ls' }, output: 'a.txt b.txt' } }); await sleep(50); push(x, { from: 'server', kind: 'assistant', text: 'server says: ' + text }); if (/SLOW/.test(text)) return; await sleep(50); state(x, false); };
     const srv = http.createServer((req, res) => {
       let body = ''; req.on('data', (c) => { body += c; });
       req.on('end', async () => {
@@ -9443,6 +9448,19 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         wo.workOff === undefined && pick.status === 200 && /server says: no jcode needed r632/.test(texts(rNo.events)) && done(rNo.events) === 0
         && /jcode-answer model=anthropic\/claude-sonnet-4\.5 provider=openrouter/.test(texts(rOld.events)) && done(rOld.events) === 0 && srvReqs(n4).length === 0,
         `workOff ${wo.workOff} pick ${pick.status}; with server "${texts(rNo.events).slice(0, 80)}" ${done(rNo.events)} err "${errs(rNo.events)}"; old "${texts(rOld.events).slice(0, 120)}" ${done(rOld.events)} err "${errs(rOld.events)}"; server calls ${srvReqs(n4).length}`);
+
+      // R655 (T-388): Work's context meter on a PGM session (the person's current session: /api/usage reports that one)
+      {
+        setLocal('pgmServer', { url: fakeUrl });
+        const made655 = await call('/api/work/sessions/new', U, { title: 'R655 context', provider: tp.id, model: 'or/sonnet' }), sid655 = (made655.data || {}).id || ''; others.push(sid655);
+        const live = await within(chatP(U, 'r655 live tokens', { session: sid655 }), 30000) || { events: [] };
+        const c1 = ((await call('/api/usage?session=' + sid655, U)).data || {}).context || {};
+        const kept = await within(chatP(U, 'r655 kept usage', { session: sid655 }), 30000) || { events: [] };
+        const c2 = ((await call('/api/usage?session=' + sid655, U)).data || {}).context || {};
+        const shown = [...live.events, ...kept.events].some((e) => e.type === 'usage' || /30000|40000/.test(JSON.stringify(e.message || e.hub || {})));
+        const s655 = { made: made655.status, c1: [c1.tokens, c1.window, c1.model].join(' '), c2: [c2.tokens, c2.window, c2.model, c2.cache && c2.cache.turns].join(' '), shown, done: [done(live.events), done(kept.events)].join(',') };
+        check('R655', L655, s655.made === 200 && s655.c1 === '30000 1000000 anthropic/claude-sonnet-4.5' && s655.c2 === '40000 1000000 anthropic/claude-sonnet-4.5 2' && !shown && s655.done === '0,0', JSON.stringify(s655));
+      }
 
       // R633: the real jcodepgm server (VR_TEST_JCODEPGM) with the hub and the fake OpenRouter
       const bin = process.env.VR_TEST_JCODEPGM || '';

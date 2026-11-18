@@ -56,16 +56,24 @@ pub fn command(prov: &Value, model: &str, resume: Option<&str>, message: &str) -
 }
 
 /// Maps jcode's `run --ndjson` events onto the page's event shape. One per run.
-pub struct Mapper { text: String, tool_name: Map<String, Value>, tool_input: Map<String, Value>, current_tool: String, usage: Value, model: String, session: String, started: Instant, ended: bool }
+pub struct Mapper { text: String, tool_name: Map<String, Value>, tool_input: Map<String, Value>, current_tool: String, usage: Value, model: String, session: String, started: Instant, ended: bool, provider: String }
 
 impl Mapper {
-    pub fn new(model: &str) -> Mapper { Mapper { text: String::new(), tool_name: Map::new(), tool_input: Map::new(), current_tool: String::new(), usage: Value::Null, model: model.into(), session: String::new(), started: Instant::now(), ended: false } }
+    pub fn new(model: &str) -> Mapper { Mapper { text: String::new(), tool_name: Map::new(), tool_input: Map::new(), current_tool: String::new(), usage: Value::Null, model: model.into(), session: String::new(), started: Instant::now(), ended: false, provider: String::new() } }
     pub fn ended(&self) -> bool { self.ended }
     fn sid(&self, ev: &Value) -> String { let x = s(ev, "session_id"); if x.is_empty() { self.session.clone() } else { x } }
+    /// jcode's latest count in Claude's shape (T-388): every provider but Anthropic's reports its prompt with the cached
+    /// part in it (OpenRouter's `prompt_tokens`), which comes out once so the context is not counted twice.
     fn usage_block(&self) -> Value {
         if self.usage.is_null() { return Value::Null; }
-        let g = |k: &str| self.usage[k].as_u64().unwrap_or(0);
-        json!({ "input_tokens": g("input"), "output_tokens": g("output"), "cache_read_input_tokens": g("cache_read_input"), "cache_creation_input_tokens": g("cache_creation_input") })
+        let p = self.provider.to_ascii_lowercase();
+        crate::usage::claude_usage(&self.usage, !(p.contains("anthropic") || p.contains("claude")))
+    }
+    /// The model's context window when OpenRouter's catalogue (in the hub's cache) knows it: the result says it as Claude
+    /// Code does (`modelUsage`), so Work's meter has the model's own window instead of the default (T-388).
+    fn model_usage(&self) -> Value {
+        let m = self.model.strip_prefix("my/").unwrap_or(&self.model);
+        match crate::openrouter_catalog::cached_context_of(m) { Some(w) => json!({ m: { "contextWindow": w } }), None => Value::Null }
     }
     /// The buffered text as one assistant message (nothing when there is none).
     fn flush_text(&mut self, out: &mut Vec<Value>) {
@@ -80,7 +88,7 @@ impl Mapper {
         let t = s(&ev, "type");
         match t.as_str() {
             "start" => {
-                self.session = s(&ev, "session_id"); let m = s(&ev, "model"); if !m.is_empty() { self.model = m; }
+                self.session = s(&ev, "session_id"); let m = s(&ev, "model"); if !m.is_empty() { self.model = m; } self.provider = s(&ev, "provider");
                 out.push(json!({ "type": "system", "subtype": "init", "harness": HARNESS, "session_id": self.session, "model": self.model, "provider": ev["provider"] }));
             }
             "session" => { let sid = s(&ev, "session_id"); if !sid.is_empty() { self.session = sid.clone(); out.push(json!({ "type": "system", "subtype": "session", "harness": HARNESS, "session_id": sid })); } }
@@ -107,7 +115,9 @@ impl Mapper {
                 if self.text.is_empty() { let t = s(&ev, "text"); if !t.is_empty() { self.text = t; } }
                 let result = self.text.clone();
                 self.flush_text(&mut out);
-                out.push(json!({ "type": "result", "subtype": "success", "is_error": false, "harness": HARNESS, "session_id": self.sid(&ev), "duration_ms": self.started.elapsed().as_millis() as u64, "result": result, "usage": self.usage_block(), "provider": ev["provider"], "model": ev["model"] }));
+                let mut r = json!({ "type": "result", "subtype": "success", "is_error": false, "harness": HARNESS, "session_id": self.sid(&ev), "duration_ms": self.started.elapsed().as_millis() as u64, "result": result, "usage": self.usage_block(), "provider": ev["provider"], "model": ev["model"] });
+                let mu = self.model_usage(); if !mu.is_null() { r["modelUsage"] = mu; }
+                out.push(r);
             }
             "error" => {
                 self.ended = true;
@@ -135,6 +145,20 @@ mod tests {
         assert_eq!(out[1]["type"], "assistant"); assert_eq!(out[1]["message"]["content"][0]["text"], "Hello"); assert_eq!(out[1]["message"]["usage"]["input_tokens"], 10);
         assert_eq!(out[2]["type"], "result"); assert_eq!(out[2]["is_error"], false); assert_eq!(out[2]["result"], "Hello");
         assert!(m.ended());
+    }
+
+    #[test]
+    fn an_openrouter_prompt_count_holds_its_cache_once_and_anthropics_does_not() {
+        // OpenRouter (any provider but Anthropic's): prompt_tokens 1000 of which 800 cached -> 200 paid + 800 read = 1000 in context
+        let mut m = Mapper::new("deepseek/deepseek-v4-flash");
+        let out = evs(&mut m, &[r#"{"type":"start","session_id":"s4","provider":"viberoller"}"#, r#"{"type":"text_delta","text":"Hi"}"#, r#"{"type":"tokens","input":1000,"output":5,"cache_read_input":800,"cache_creation_input":0}"#, r#"{"type":"done","session_id":"s4","text":"Hi"}"#]);
+        let u = &out[1]["message"]["usage"];
+        assert_eq!((u["input_tokens"].clone(), u["cache_read_input_tokens"].clone(), u["output_tokens"].clone()), (json!(200), json!(800), json!(5)));
+        let mut ctx = Value::Null; crate::usage::note_context(&mut ctx, &out[1], "s4"); assert_eq!(ctx["tokens"], 1000, "the context is the whole prompt, once");
+        // Anthropic's count is without the cache already
+        let mut a = Mapper::new("claude-haiku-5-5");
+        let o2 = evs(&mut a, &[r#"{"type":"start","session_id":"s5","provider":"anthropic"}"#, r#"{"type":"text_delta","text":"Hi"}"#, r#"{"type":"tokens","input":200,"output":5,"cache_read_input":800}"#, r#"{"type":"done","session_id":"s5","text":"Hi"}"#]);
+        assert_eq!(o2[1]["message"]["usage"]["input_tokens"], 200);
     }
 
     #[test]
