@@ -17,7 +17,10 @@ PATCH: **the OpenRouter keys' data never shows as a change in a hub's checkout**
   hub data files already are); live has neither file yet.
 - **R656** (new): everything the scratch hub makes in its own folder during the whole suite is tracked or ignored by git,
   so the next data file the hub writes cannot stop a deploy the same way. It is seen failing on 5.75.1's `.gitignore`: the
-  ledger and the limits file were "not ignored".
+  ledger and the limits file were "not ignored". Its first full run found four more of the hub's own data that git did
+  not ignore: `bridge/agents/` (agent-to-agent messages), `bridge/site-roles.json`, `bridge/transfers/` and
+  `bridge/work-journal.jsonl`. Live and dev have none of them yet, so nothing was stopped, but each would have stopped the
+  deploy after the day it appeared. All four are in `.gitignore` now.
 
 ## 5.75.1 — 2026-11-18
 

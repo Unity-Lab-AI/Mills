@@ -64,6 +64,12 @@ bridge/providers.json
 # stopped dev's auto-deploy, T-388)
 bridge/openrouter-team-ledger.jsonl
 bridge/openrouter-team.json
+# more of the hub's own data in its folder that git did not ignore yet (found by R656, T-388): agent-to-agent messages,
+# the site roles, the transfer area, the Work journal
+bridge/agents/
+bridge/site-roles.json
+bridge/transfers/
+bridge/work-journal.jsonl
 Api/
 # Forgejo issue mirroring: the host's token + repo (never committed); team notes live on the host only
 bridge/forgejo.json

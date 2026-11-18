@@ -11757,7 +11757,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     // and git does not ignore shows as a change in a hub's checkout and stops that hub's auto-deploy (dev, 2026-11-18: the
     // OpenRouter ledger)
     {
-      const made = fs.readdirSync(SB).filter((n) => !/\.tmp$/.test(n));
+      const made = fs.readdirSync(SB).filter((n) => !/\.tmp$/.test(n) && n !== 'host2'); // host2: the suite's own second AI host (R143), not the hub's
       const loose = made.filter((n) => {
         const rel = 'bridge/' + n, dir = fs.statSync(path.join(SB, n)).isDirectory();
         const tracked = spawnSync('git', ['ls-files', '--error-unmatch', rel], { cwd: MILLS, stdio: 'ignore' }).status === 0;
