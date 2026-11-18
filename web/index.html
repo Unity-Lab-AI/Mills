@@ -3717,7 +3717,9 @@ function usageColor(pct) {
 let usageData = null, usageSkew = 0;
 async function refreshUsage() {
   if (!me) return;
-  try { usageData = await json('/api/usage'); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
+  // the context meter is the session on screen's (T-388: before, always the first session's; an older hub ignores ?session)
+  const sid = typeof SESSIONS !== 'undefined' && SESSIONS.onScreen ? SESSIONS.onScreen() : '';
+  try { usageData = await json('/api/usage' + (sid ? '?session=' + encodeURIComponent(sid) : '')); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
   refreshOrUse();
 }
 // T-381 / T-383: the OpenRouter line in Work, for a session whose AI is an OpenRouter key (the team's or one of the

@@ -377,8 +377,11 @@ impl Work {
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
     }
     fn usage_source(&self, ai: &crate::ai_hosts::AiHosts, a: &Account) -> String { match self.effective(ai, &a.username, &s(&self.state(a), "provider")) { Some(p) if p["kind"] == json!("host-claude") => s(&p, "id"), _ => "hub".into() } }
-    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value {
-        let st = self.state(a);
+    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value { self.usage_status_of(hub, a, "") }
+    /// The same for one of the person's sessions (T-388: `/api/usage?session=<id>`, the session on screen): its context, not
+    /// the first session's. "" or a session that is not theirs = the first session (what an older page asks for).
+    pub fn usage_status_of(&self, hub: &dyn AiHub, a: &Account, session: &str) -> Value {
+        let st = match sessions::resolve(a, session) { Some(sx) if !session.is_empty() => sessions::sstate(self, a, &sx), _ => self.state(a) };
         let mut v = hub.ai().usage.status(&self.usage_source(hub.ai(), a), &st["ctx"], st["claudeSessionId"].as_str().unwrap_or(""));
         // answers outside Work (API, Unity, products): the cache ledger of this person's answers; absent until there is one
         let ans = hub.ai().usage.answers(&a.username);
@@ -549,6 +552,13 @@ impl Work {
     pub(crate) fn keep_alive_key(&self, key: &str) { self.keep_alive(key) }
     /// One line of information in a running session's transcript (e.g. an OpenRouter chain switching models, T-381).
     pub fn info_line(&self, key: &str, text: &str) { self.emit(key, json!({ "type": "bridge_info", "text": text })); }
+    /// A session's latest token count from outside its event stream (T-388: a Jcode PGM Server session's `usage` event):
+    /// it goes into the session's context (Work's meter), nothing is shown in the transcript.
+    pub(crate) fn note_usage(&self, a: &Account, sx: &Sx, ev: &Value) {
+        let st = sessions::sstate(self, a, sx); let mut ctx = st["ctx"].clone(); let before = ctx.clone();
+        crate::usage::note_context(&mut ctx, ev, st["claudeSessionId"].as_str().unwrap_or(""));
+        if ctx != before { sessions::supdate(self, a, sx, |m| { m.insert("ctx".into(), ctx); }); }
+    }
     fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); journal(r, &ev); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     pub(crate) fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
@@ -1442,7 +1452,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/work/plan/answer" if post => { let (st, v) = w.plan_answer(&**hub, a, &r.json()); answer(st, v) }
         "/api/work/plans" if get => answer(200, json!({ "plans": w.open_plans(a, &r.param("session").unwrap_or_default()) })),
         "/api/work/questions" if get => answer(200, json!({ "questions": w.open_questions(a, &r.param("session").unwrap_or_default()) })),
-        "/api/usage" if get => answer(200, w.usage_status(&**hub, a)),
+        "/api/usage" if get => answer(200, w.usage_status_of(&**hub, a, &r.param("session").unwrap_or_default())),
         "/api/model" if post => {
             let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let st = sessions::sstate(w, a, &sx); let ai = hub.ai();
             let want = if b.get("provider").is_none() { s(&st, "provider") } else { s(&b, "provider") };

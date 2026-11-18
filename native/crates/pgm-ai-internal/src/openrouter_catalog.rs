@@ -336,6 +336,15 @@ pub fn model_ok(id: &str) -> bool { let mut p = id.split('/'); let (a, b, c) = (
 async fn models_raw(hub: &dyn AiHub) -> Result<Value, String> {
     match cached("models", MODELS_TTL) { Some(v) => Ok(v), None => { let v = get(hub, "/models").await?; keep("models", &v); Ok(v) } }
 }
+/// A model's context window (its `context_length`) in a model list; a variant (`…:free`) falls back to its model.
+pub fn context_in(raw: &Value, model: &str) -> Option<u64> {
+    let find = |id: &str| raw["data"].as_array()?.iter().find(|m| s(m, "id") == id)?["context_length"].as_u64().filter(|n| *n > 0);
+    find(model).or_else(|| find(model.split(':').next().unwrap_or_default()))
+}
+/// A model's context window from OpenRouter's catalogue, asked for when it is not in the cache (T-388: Work's context meter).
+pub async fn context_of(hub: &dyn AiHub, model: &str) -> Option<u64> { context_in(&models_raw(hub).await.ok()?, model) }
+/// The same from the cache only (for code that cannot wait); None when the catalogue was not asked for in the last day.
+pub fn cached_context_of(model: &str) -> Option<u64> { context_in(&cached("models", MODELS_TTL)?, model) }
 /// The model list, searched and filtered, with the deals index's state: `deals` = { ready, building, at (ms), models (how
 /// many have a deal) }. Asking with `deals` starts the index when it is missing or old; the list says so until it is built.
 pub async fn models(hub: &Arc<dyn AiHub>, q: &str, f: ModelFilter) -> Result<Value, String> {
@@ -526,6 +535,13 @@ mod tests {
         assert_eq!((Sort::named("price"), Sort::named("context"), Sort::named("deal"), Sort::named("anything")), (Sort::Cheapest, Sort::Context, Sort::Deal, Sort::Newest));
         let v = models_view(&raw, "thinker", None, &Value::Null, ModelFilter::default());
         assert_eq!((v["models"][0]["tools"].clone(), v["models"][0]["reasoning"].clone(), v["models"][0]["input"].clone()), (json!(true), json!(true), json!(["text", "image"])));
+    }
+    #[test]
+    fn a_models_context_window_comes_from_the_catalogue_and_a_variant_falls_back_to_its_model() {
+        let raw = json!({ "data": [{ "id": "deepseek/deepseek-v4-flash", "context_length": 1048576 }, { "id": "x/zero", "context_length": 0 }] });
+        assert_eq!(context_in(&raw, "deepseek/deepseek-v4-flash"), Some(1048576));
+        assert_eq!(context_in(&raw, "deepseek/deepseek-v4-flash:free"), Some(1048576));
+        assert_eq!(context_in(&raw, "x/zero"), None, "a zero window is no window"); assert_eq!(context_in(&raw, "no/such"), None);
     }
     #[test]
     fn only_a_real_model_id_reaches_openrouters_path() {

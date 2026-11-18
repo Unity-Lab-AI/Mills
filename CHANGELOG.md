@@ -7,6 +7,40 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.75.1 — 2026-11-18
+
+PATCH: **Work's context meter works for jcode / OpenRouter sessions, and for every session, not just the first one**
+(T-388; Sponge: "context tracking within a session isnt working on viberoller -- jcode lets you track context we just
+arent showing it with the open router model").
+
+- **Two causes.** A Work session on the Jcode PGM Server (`ps-…`) is shown from the server's session events, which carry
+  no token count: on dev, s-3a855411788e's 4 replies had none, and its result's usage was null. And `/api/usage` always
+  answered with the person's *first* session's context, whatever session was on screen, so any other session showed
+  nothing (or the first one's).
+- **The count.** The run that follows a PGM session now puts its token count into the session's context:
+  - from the server's `run` frames: jcode's `tokens`, which Jcode PGM 0.99.13 already streams, so it works with the
+    server on dev today;
+  - from the count the session keeps (`usage`, Jcode PGM 0.99.14: from the server's own runs and a device's appends), so a
+    reload or a run on a device has it too.
+  The count is never shown in the transcript.
+- **Counted once.** jcode's prompt count for every provider but Anthropic's (OpenRouter's `prompt_tokens`) already holds
+  the cached part. It is now taken out once, in the PGM path and in the hub's own jcode runs, so the context is not counted
+  twice.
+- **The model's own window.** The meter's window is the pair's model's `context_length` from OpenRouter's catalogue (e.g.
+  1M), not the 200k Claude default. The hub's own jcode runs use it when the catalogue is in the cache.
+- **The session on screen.** `/api/usage?session=<id>` answers for that session, and the page asks for the one on
+  screen. An older page (no parameter) gets the first session's as before, and an older hub ignores the parameter.
+- Checks: **R655** (seen failing on 5.75.0: no context at all): a run frame's count fills the session's context
+  (30 000, once), the count the session keeps does too (40 000, 2 turns), with the model's 1M window from the catalogue,
+  never in the transcript, read through `?session=`. Unit tests:
+  - `a_usage_event_fills_the_context_with_its_model_and_window_and_counts_an_openai_prompt_once`
+  - `the_sessions_latest_count_becomes_a_usage_event_for_the_context_meter`
+  - `an_openrouter_prompt_count_holds_its_cache_once_and_anthropics_does_not`
+  - `a_models_context_window_comes_from_the_catalogue_and_a_variant_falls_back_to_its_model`
+  R654's search by context now also finds the catalogue's Sonnet (1M).
+- Modules: web/index.html 1.56.1; pgm-ai-internal's usage.rs, pgm_work.rs, jcode.rs, work.rs, openrouter_catalog.rs.
+  Jcode PGM 0.99.14 is the server and device side.
+
 ## 5.75.0 — 2026-11-17
 
 MINOR: **an OpenRouter key carries its models, each on the providers its owner ticked, in their order; only the person
