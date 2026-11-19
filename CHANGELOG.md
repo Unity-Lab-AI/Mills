@@ -7,6 +7,21 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.75.3 — 2026-11-19
+
+PATCH: **a Super Admin can act on another Super Admin's account** (Gee, 2026-11-19: "i needed to reset sponges lock but
+this is a major propblem if an admin gets locked out an d the other super admin cant do shit about it, you need to rectify
+this super admin is super that means they can do shit like this" / "not peer rescuew just make super admin be able to do
+super admin shit FUCK!").
+
+### Fixed
+- Sponge was locked out and Gee, also Super Admin, got "you act only on accounts below your own role" on Reset lock. A role
+  holding ADMINISTRATOR (Super Admin, Co-owner) now acts on accounts of its own rank too: new password, reset lock, allow one
+  more device, sign out, stop, delete and roles. Roles you give still have to be below your own; the hub's own account
+  stays untouchable. Admins (no ADMINISTRATOR) still act only on accounts below theirs. (native pgm-identity-internal
+  siteroles.)
+- **R657** (new): a Super Admin resets another Super Admin's lock, both ways; neither touches the hub's own account.
+
 ## 5.75.2 — 2026-11-18
 
 PATCH: **the OpenRouter keys' data never shows as a change in a hub's checkout** (T-388).

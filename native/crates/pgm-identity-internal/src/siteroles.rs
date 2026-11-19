@@ -6,7 +6,8 @@
 //!   (Sponge, 2026-11-16: the existing admins keep everything); else Member
 //! - the admin flag follows the role it is given (the frozen JavaScript hub and every `admin` check keep working): on when
 //!   the role holds ADMINISTRATOR or every permission of the builtin Admin
-//! - ranking as in the chat: you act on an account only when your role is strictly above its role (the default account,
+//! - ranking as in the chat: you act on an account only when your role is strictly above its role (or the same role, when
+//!   it holds ADMINISTRATOR: a Super Admin acts on another Super Admin) (the default account,
 //!   the owner, is above everyone and nobody acts on it); you give, make, change and delete only roles strictly below your
 //!   own, and grant only permissions you hold
 //! - custom roles in `<root>/site-roles.json` (`c-<random>`, a name, a colour, a position 1..59 between the builtins');
@@ -154,6 +155,9 @@ impl SiteRoles {
         if actor == target { return if self_ok { Ok(()) } else { Err("Not on your own account: another admin can.".into()) }; }
         if self.is_owner(target) { return Err(format!("Nobody acts on the hub's own account ({target}).")); }
         if below(self.rank_of(actor), self.rank_of(target)) { return Ok(()); }
+        // a role holding ADMINISTRATOR (Super Admin, Co-owner) also acts on its own rank: a locked-out Super Admin is
+        // never stuck waiting on the owner
+        if self.has(actor, ADMINISTRATOR) && self.rank_of(actor) == self.rank_of(target) { return Ok(()); }
         Err(format!("{target} is {} and you are {}: you act only on accounts below your own role.", self.role_of(target).name, self.role_of(actor).name))
     }
     /// May `actor` give / save / delete `role` (strictly below their own, only permissions they hold)?
@@ -232,6 +236,12 @@ mod tests {
         let (d, s) = hub();
         assert!(s.may_act_on("ann", "bob", false).is_ok() && s.may_act_on("bob", "ann", false).is_err() && s.may_act_on("ann", "owner", false).is_err() && s.may_act_on("owner", "ann", false).is_ok());
         assert!(s.may_act_on("ann", "ann", false).is_err() && s.may_act_on("ann", "ann", true).is_ok());
+        // a Super Admin acts on another Super Admin; an Admin never on another Admin
+        s.assign("cid", Some(&builtin("superadmin"))).unwrap();
+        assert!(s.may_act_on("ann", "cid", false).is_ok() && s.may_act_on("cid", "ann", false).is_ok() && s.may_act_on("cid", "owner", false).is_err());
+        s.assign("cid", Some(&builtin("admin"))).unwrap(); s.assign("bob", Some(&builtin("admin"))).unwrap();
+        assert!(s.may_act_on("bob", "cid", false).is_err());
+        s.assign("bob", None).unwrap(); s.assign("cid", None).unwrap();
         assert!(s.may_handle("ann", &builtin("admin")).is_ok() && s.may_handle("ann", &builtin("superadmin")).is_err() && s.may_handle("owner", &builtin("coowner")).is_ok());
         assert_eq!(s.assign("bob", Some(&builtin("admin"))), Ok(true));
         assert_eq!(s.role_of("bob").id, "admin"); assert!(crate::admin_in(&d, "owner", "bob"));

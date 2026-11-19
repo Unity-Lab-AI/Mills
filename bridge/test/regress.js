@@ -88,6 +88,7 @@ const L637 = { // T-379: Site admin and AI Admin (siteRolesCheck)
   R637: 'site roles are the chat\'s ladder: the catalogue and the six roles are served, an existing admin is Super Admin and the hub\'s own account Co-owner; a member is refused the accounts list in words ("Needs the View accounts permission."); an admin gives a member Moderator, who then sees the accounts but cannot make one; nobody gives a role at or above their own, changes their own role or touches the owner; the admin flag follows the role (Admin on, back to Member off), and the security log has each role given',
   R638: 'custom roles: an admin makes "AI keeper" (position 35, Manage AI) and gives it to a member, who then reads AI Admin and the team\'s OpenRouter budgets but still not the accounts; a bad position is refused; an Admin (not Super Admin) cannot make a role with a permission they do not hold; deleting the role puts its people back to Member',
   R639: 'site settings: only Manage hub changes them; the message of the day and the default theme reach everyone\'s /api/check; a message over 500 characters, an unknown role and a role not below yours are refused; a new account gets the role newAccountRole names',
+  R657: 'a Super Admin acts on another Super Admin (Reset lock, Allow one more device, Sign out), both ways; neither acts on the owner (the hub default) account (production bug 2026-11-19: Sponge locked out and Gee, also Super Admin, was refused "you act only on accounts below your own role")',
   R640: 'AI Admin: a Manage AI role (not View accounts) sees every AI host with its owner, every account\'s Unity own-computer tools, and switches them; a View AI hosts role sees the hosts but may not change anything; the default AI set to "host:<someone>" is what /api/check names at once (no restart) and is kept in config.local.json; a value that is not a choice is refused',
 };
 function skip(id, label, why) {
@@ -4369,6 +4370,12 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
         && mGiveAdmin.status === 403 && mDel.status === 403 && gM.status === 200 && gM.data.admin === false && back.admin === false && back.role.id === 'member' && au === 'moderator,admin,member',
         JSON.stringify(seen));
     } catch (e) { if (e.stopAfter) throw e; check('R637', L637.R637, false, 'the check itself failed: ' + e.message); }
+    try { // R657
+      const S = await mkAcct('t-r657s'), gS = await give(D, 't-r657s', 'superadmin');
+      const aUn = await call('/api/admin/unlock', A, { username: 't-r657s' }), aDev = await call('/api/admin/allow-device', A, { username: 't-r657s' }), sUn = await call('/api/admin/unlock', S, { username: 't-admin' }), aOwn = await call('/api/admin/unlock', A, { username: Dname });
+      const seen = { gS: gS.status, aUn: `${aUn.status} ${aUn.data.error || ''}`, aDev: `${aDev.status} ${aDev.data.error || ''}`, sUn: sUn.status, aOwn: aOwn.status };
+      check('R657', L637.R657, gS.status === 200 && aUn.status === 200 && !/below your own role/.test(aDev.data.error || '') && sUn.status === 200 && aOwn.status === 403, JSON.stringify(seen));
+    } catch (e) { if (e.stopAfter) throw e; check('R657', L637.R657, false, 'the check itself failed: ' + e.message); }
     try { // R638
       const seen = {};
       const bad = await call('/api/admin/roles/save', A, { name: 'Bad', color: '#112233', position: 40, perms: [] });
