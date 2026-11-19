@@ -7,6 +7,17 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.75.4 — 2026-11-19
+
+PATCH: **the regression suite never touches the machine's real Ollama and leaves nothing running.**
+
+### Fixed
+- The suite's AI hosts found the machine's own Ollama (127.0.0.1:11434) and loaded its Unity brain on the GPU; on Windows
+  a host's `run` was killed but the `host` it started kept running after the suite, still using it. Every host the suite
+  starts now finds the suite's fake Ollama (OLLAMA_HOST), R188's two hosts have auto-detect off (its plain host must offer
+  nothing), and every host the suite starts is ended with everything it started.
+- R606 checks the key file's 0600 mode only where files have Unix modes (not on Windows), like the other key files' checks.
+
 ## 5.75.3 — 2026-11-19
 
 PATCH: **a Super Admin can act on another Super Admin's account** (Gee, 2026-11-19: "i needed to reset sponges lock but
