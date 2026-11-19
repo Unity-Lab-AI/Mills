@@ -329,22 +329,21 @@ impl Work {
     fn host_entry(&self) -> Value { json!({ "id": "host", "kind": "host", "label": "Host Claude (default)", "owner": "", "shared": true, "models": self.model_ids() }) }
     /// bridge/providers.json; a custom endpoint (openai) or a Claude config folder on this machine (claude-cli) counts
     /// only while its owner is an admin (only admins with an AI host of their own may make one: openai.rs); an OpenRouter
-    /// one while its owner holds the Manage AI permission (T-379)
+    /// key always (anyone may add one, T-383: its address is fixed)
     fn own_providers(&self) -> Vec<Value> {
+        crate::openrouter::migrate(&self.root); // T-383: the keys of before, once
         let def = self.cfg.get("defaultUsername").and_then(Value::as_str).unwrap_or("mills").to_string();
         read_json(&self.root.join("providers.json")).and_then(|v| v["providers"].as_array().cloned()).unwrap_or_default().into_iter()
-            .filter(|p| { let o = p["owner"].as_str().unwrap_or(""); if p["kind"] == json!(crate::openrouter::KIND) { pgm_identity_internal::siteroles::has_perm(&self.root, &def, o, pgm_identity_internal::siteroles::MANAGE_AI) } else { !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, o) } }).collect()
+            .filter(|p| { let o = p["owner"].as_str().unwrap_or(""); p["kind"] == json!(crate::openrouter::KIND) || !crate::openai::admin_only(p) || pgm_identity_internal::admin_in(&self.root, &def, o) }).collect()
     }
-    /// The team's OpenRouter provider (the first shared one with pairs): the pairs a person's own key uses unless they list their own (T-372).
+    /// The team's first OpenRouter key, with entries or not yet (T-381: AI Admin reads the catalogue with it before the
+    /// first entry is made).
+    pub fn team_key_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !s(p, "apiKey").is_empty()) }
+    /// The team's first OpenRouter key with entries (the entries the older pages offer a person's own key).
     pub fn team_provider(&self) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && p["shared"] == json!(true) && !crate::openrouter::pairs_of(p).is_empty()) }
-    /// A person's own OpenRouter provider `or-me:<user>` (their key; None without a key, with personal keys off, or without pairs).
-    pub fn personal_for(&self, user: &str) -> Option<Value> {
-        if user.is_empty() { return None; }
-        let team = self.team_provider();
-        crate::openrouter::personal_provider(&self.root, team.as_ref(), user)
-    }
+    /// An OpenRouter key the person may use: a team key, or one of their own (T-383: their keys are records like any).
+    pub fn any_openrouter_key(&self, user: &str) -> Option<Value> { self.own_providers().into_iter().find(|p| p["kind"] == json!(crate::openrouter::KIND) && !s(p, "apiKey").is_empty() && (p["shared"] == json!(true) || p["owner"] == json!(user))) }
     pub fn provider_get(&self, ai: &crate::ai_hosts::AiHosts, id: &str, user: &str) -> Option<Value> {
-        if id.starts_with("or-me:") { return if !user.is_empty() && id == crate::openrouter::personal_id(user) { self.personal_for(user) } else { None }; } // only that person's own
         if id.is_empty() || id == "host" { return if self.hub_claude() { Some(self.host_entry()) } else { None }; }
         if id.starts_with("h:") { return ai.provider(id, user); }
         self.own_providers().into_iter().find(|p| p["id"] == json!(id)).filter(|p| user.is_empty() || p["shared"] == json!(true) || p["owner"] == json!(user))
@@ -378,8 +377,11 @@ impl Work {
         Self::claude_env(p).map(|_| crate::jcode::CLAUDE_HARNESS)
     }
     fn usage_source(&self, ai: &crate::ai_hosts::AiHosts, a: &Account) -> String { match self.effective(ai, &a.username, &s(&self.state(a), "provider")) { Some(p) if p["kind"] == json!("host-claude") => s(&p, "id"), _ => "hub".into() } }
-    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value {
-        let st = self.state(a);
+    pub fn usage_status(&self, hub: &dyn AiHub, a: &Account) -> Value { self.usage_status_of(hub, a, "") }
+    /// The same for one of the person's sessions (T-388: `/api/usage?session=<id>`, the session on screen): its context, not
+    /// the first session's. "" or a session that is not theirs = the first session (what an older page asks for).
+    pub fn usage_status_of(&self, hub: &dyn AiHub, a: &Account, session: &str) -> Value {
+        let st = match sessions::resolve(a, session) { Some(sx) if !session.is_empty() => sessions::sstate(self, a, &sx), _ => self.state(a) };
         let mut v = hub.ai().usage.status(&self.usage_source(hub.ai(), a), &st["ctx"], st["claudeSessionId"].as_str().unwrap_or(""));
         // answers outside Work (API, Unity, products): the cache ledger of this person's answers; absent until there is one
         let ans = hub.ai().usage.answers(&a.username);
@@ -548,6 +550,15 @@ impl Work {
     pub(crate) fn emit_run(&self, run: &str, ev: Value) { let key = self.runs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(_, r)| r.id == run).map(|(k, _)| k.clone()); if let Some(k) = key { self.emit(&k, ev); } }
     /// A wait of this session's run (an agent's answer) keeps it alive for the liveness check, as a question does.
     pub(crate) fn keep_alive_key(&self, key: &str) { self.keep_alive(key) }
+    /// One line of information in a running session's transcript (e.g. an OpenRouter chain switching models, T-381).
+    pub fn info_line(&self, key: &str, text: &str) { self.emit(key, json!({ "type": "bridge_info", "text": text })); }
+    /// A session's latest token count from outside its event stream (T-388: a Jcode PGM Server session's `usage` event):
+    /// it goes into the session's context (Work's meter), nothing is shown in the transcript.
+    pub(crate) fn note_usage(&self, a: &Account, sx: &Sx, ev: &Value) {
+        let st = sessions::sstate(self, a, sx); let mut ctx = st["ctx"].clone(); let before = ctx.clone();
+        crate::usage::note_context(&mut ctx, ev, st["claudeSessionId"].as_str().unwrap_or(""));
+        if ctx != before { sessions::supdate(self, a, sx, |m| { m.insert("ctx".into(), ctx); }); }
+    }
     fn emit(&self, key: &str, ev: Value) { if let Some(r) = self.runs.lock().unwrap_or_else(|e| e.into_inner()).get_mut(key) { if ev["type"] != json!("ping") { r.last = now_ms(); journal(r, &ev); } let _ = r.tx.send(line(ev.clone())); r.ev.push(ev); } }
     pub(crate) fn on_event(&self, hub: &dyn AiHub, a: &Account, sx: &Sx, ev: Value, source: &str) {
         // every harness event (here, or from an AI host's run, whichever harness made it) leaves as HubEvent: the alias
@@ -1099,7 +1110,7 @@ pub(crate) async fn chat(hub: &Arc<dyn AiHub>, a: &Account, r: &Req) -> Resp {
     let hprov = or_plan.as_ref().map(|p| p.prov.clone()).unwrap_or_else(|| prov.clone());
     let mut or_tok: Option<String> = None;
     if let Some(pl) = &or_plan {
-        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed);
+        let tok = crate::openrouter::relay_token(&a.username, &s(&prov, "id"), &pl.routed, &sx.sid, &sx.key);
         relay_env = crate::openrouter::relay_env(hub.cfg().port, &tok); relay_env.extend(pl.env.iter().cloned());
         or_tok = Some(tok);
         if let Some(l) = &fb_line { w.emit(&sx.key, json!({ "type": "bridge_info", "text": l })); }
@@ -1294,17 +1305,11 @@ pub fn providers_list(hub: &dyn AiHub, user: &str) -> Vec<Value> {
         let mut v = json!({ "id": p["id"], "kind": p["kind"], "label": p["label"], "owner": p["owner"], "shared": p["shared"] == json!(true), "models": if p["models"].is_array() { p["models"].clone() } else { json!([]) }, "hasKey": !s(&p, "apiKey").is_empty(), "createdAt": p["createdAt"] });
         for k in ["baseUrl", "configDir"] { if !s(&p, k).is_empty() { v[k] = p[k].clone(); } }
         if p["kind"] == json!(crate::openrouter::KIND) {
-            v["baseUrl"] = json!(crate::openrouter::BASE); v["pairs"] = if p["pairs"].is_array() { p["pairs"].clone() } else { json!([]) };
+            crate::openai::or_view(&p, &mut v); // T-383: a person's own key shows under its name to them alone (no key in this view)
             if let Some(why) = crate::openrouter::work_off(hub, &p) { v["workOff"] = json!(why); } // Work needs Jcode PGM on the server: why it is not offered
         }
         out.push(v);
     } }
-    // T-372: their own OpenRouter key as the provider "my OpenRouter" (theirs alone; no key in this view)
-    if let Some(p) = w.personal_for(user) {
-        let mut v = crate::openrouter::personal_public(&p);
-        if let Some(why) = crate::openrouter::work_off(hub, &p) { v["workOff"] = json!(why); }
-        out.push(v);
-    }
     out.extend(hub.ai().providers_for(user));
     out
 }
@@ -1425,7 +1430,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
     if p == "/api/work/sessions/transfer" && post { return Some(crate::transfer::route(hub, a, r).await); }
     if let Some(resp) = sessions::route(hub, r, a).await { return Some(resp); }
     if let Some(resp) = crate::gitpanel::route(hub, r, a).await { return Some(resp); }
-    if p == "/api/openrouter/mykey/test" && post { return Some(crate::openrouter::test_mykey(hub, u).await); } // T-372: the optional "test my key" call (async)
+    if p == "/api/openrouter/mykey/test" && post { return Some(crate::openrouter::test_mykey(hub, u, &s(&r.json(), "key")).await); } // T-372 / T-383: the optional "test my key" call (async), any key of theirs
     if let Some(resp) = crate::projects::route(hub, r, a).await { return Some(resp); }
     // the session a request names (plans/multi-session.md; none = the first one, as older pages send it)
     let sess = |b: &Value| sessions::resolve(a, &sessions::wanted(r, b));
@@ -1447,7 +1452,7 @@ pub async fn route(hub: &Arc<dyn AiHub>, r: &Req, a: &Account) -> Option<Resp> {
         "/api/work/plan/answer" if post => { let (st, v) = w.plan_answer(&**hub, a, &r.json()); answer(st, v) }
         "/api/work/plans" if get => answer(200, json!({ "plans": w.open_plans(a, &r.param("session").unwrap_or_default()) })),
         "/api/work/questions" if get => answer(200, json!({ "questions": w.open_questions(a, &r.param("session").unwrap_or_default()) })),
-        "/api/usage" if get => answer(200, w.usage_status(&**hub, a)),
+        "/api/usage" if get => answer(200, w.usage_status_of(&**hub, a, &r.param("session").unwrap_or_default())),
         "/api/model" if post => {
             let b = r.json(); let Some(sx) = sess(&b) else { return Some(no_session()) }; let st = sessions::sstate(w, a, &sx); let ai = hub.ai();
             let want = if b.get("provider").is_none() { s(&st, "provider") } else { s(&b, "provider") };

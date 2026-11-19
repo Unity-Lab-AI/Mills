@@ -7,6 +7,270 @@ resets the lower numbers to 0, and every merge into develop moves the version up
 touches and the project by its largest bump, and adds a section here. Every change of any tracked file is
 logged here in the same commit, newest first (hub law 15).
 
+## 5.75.4 — 2026-11-19
+
+PATCH: **the regression suite never touches the machine's real Ollama and leaves nothing running.**
+
+### Fixed
+- The suite's AI hosts found the machine's own Ollama (127.0.0.1:11434) and loaded its Unity brain on the GPU; on Windows
+  a host's `run` was killed but the `host` it started kept running after the suite, still using it. Every host the suite
+  starts now finds the suite's fake Ollama (OLLAMA_HOST), R188's two hosts have auto-detect off (its plain host must offer
+  nothing), and every host the suite starts is ended with everything it started.
+- R606 checks the key file's 0600 mode only where files have Unix modes (not on Windows), like the other key files' checks.
+
+## 5.75.3 — 2026-11-19
+
+PATCH: **a Super Admin can act on another Super Admin's account** (Gee, 2026-11-19: "i needed to reset sponges lock but
+this is a major propblem if an admin gets locked out an d the other super admin cant do shit about it, you need to rectify
+this super admin is super that means they can do shit like this" / "not peer rescuew just make super admin be able to do
+super admin shit FUCK!").
+
+### Fixed
+- Sponge was locked out and Gee, also Super Admin, got "you act only on accounts below your own role" on Reset lock. A role
+  holding ADMINISTRATOR (Super Admin, Co-owner) now acts on accounts of its own rank too: new password, reset lock, allow one
+  more device, sign out, stop, delete and roles. Roles you give still have to be below your own; the hub's own account
+  stays untouchable. Admins (no ADMINISTRATOR) still act only on accounts below theirs. (native pgm-identity-internal
+  siteroles.)
+- **R657** (new): a Super Admin resets another Super Admin's lock, both ways; neither touches the hub's own account.
+
+## 5.75.2 — 2026-11-18
+
+PATCH: **the OpenRouter keys' data never shows as a change in a hub's checkout** (T-388).
+- Dev's auto-deploy refused 5.75.1 ("live checkout has uncommitted changes"). The hub writes the OpenRouter keys' spend
+  ledger (`bridge/openrouter-team-ledger.jsonl`, T-381) and their limits and management keys (`bridge/openrouter-team.json`,
+  T-383) in its own folder, and git ignored neither. The ledger appeared on dev with the first OpenRouter answer there.
+- Both are in `.gitignore` now. Dev was unblocked by excluding them in its checkout's `.git/info/exclude` (as its other
+  hub data files already are); live has neither file yet.
+- **R656** (new): everything the scratch hub makes in its own folder during the whole suite is tracked or ignored by git,
+  so the next data file the hub writes cannot stop a deploy the same way. It is seen failing on 5.75.1's `.gitignore`: the
+  ledger and the limits file were "not ignored". Its first full run found four more of the hub's own data that git did
+  not ignore: `bridge/agents/` (agent-to-agent messages), `bridge/site-roles.json`, `bridge/transfers/` and
+  `bridge/work-journal.jsonl`. Live and dev have none of them yet, so nothing was stopped, but each would have stopped the
+  deploy after the day it appeared. All four are in `.gitignore` now.
+
+## 5.75.1 — 2026-11-18
+
+PATCH: **Work's context meter works for jcode / OpenRouter sessions, and for every session, not just the first one**
+(T-388; Sponge: "context tracking within a session isnt working on viberoller -- jcode lets you track context we just
+arent showing it with the open router model").
+
+- **Two causes.** A Work session on the Jcode PGM Server (`ps-…`) is shown from the server's session events, which carry
+  no token count: on dev, s-3a855411788e's 4 replies had none, and its result's usage was null. And `/api/usage` always
+  answered with the person's *first* session's context, whatever session was on screen, so any other session showed
+  nothing (or the first one's).
+- **The count.** The run that follows a PGM session now puts its token count into the session's context:
+  - from the server's `run` frames: jcode's `tokens`, which Jcode PGM 0.99.13 already streams, so it works with the
+    server on dev today;
+  - from the count the session keeps (`usage`, Jcode PGM 0.99.14: from the server's own runs and a device's appends), so a
+    reload or a run on a device has it too.
+  The count is never shown in the transcript.
+- **Counted once.** jcode's prompt count for every provider but Anthropic's (OpenRouter's `prompt_tokens`) already holds
+  the cached part. It is now taken out once, in the PGM path and in the hub's own jcode runs, so the context is not counted
+  twice.
+- **The model's own window.** The meter's window is the pair's model's `context_length` from OpenRouter's catalogue (e.g.
+  1M), not the 200k Claude default. The hub's own jcode runs use it when the catalogue is in the cache.
+- **The session on screen.** `/api/usage?session=<id>` answers for that session, and the page asks for the one on
+  screen. An older page (no parameter) gets the first session's as before, and an older hub ignores the parameter.
+- Checks: **R655** (seen failing on 5.75.0: no context at all): a run frame's count fills the session's context
+  (30 000, once), the count the session keeps does too (40 000, 2 turns), with the model's 1M window from the catalogue,
+  never in the transcript, read through `?session=`. Unit tests:
+  - `a_usage_event_fills_the_context_with_its_model_and_window_and_counts_an_openai_prompt_once`
+  - `the_sessions_latest_count_becomes_a_usage_event_for_the_context_meter`
+  - `an_openrouter_prompt_count_holds_its_cache_once_and_anthropics_does_not`
+  - `a_models_context_window_comes_from_the_catalogue_and_a_variant_falls_back_to_its_model`
+  R654's search by context now also finds the catalogue's Sonnet (1M).
+- Modules: web/index.html 1.56.1; pgm-ai-internal's usage.rs, pgm_work.rs, jcode.rs, work.rs, openrouter_catalog.rs.
+  Jcode PGM 0.99.14 is the server and device side.
+
+## 5.75.0 — 2026-11-17
+
+MINOR: **an OpenRouter key carries its models, each on the providers its owner ticked, in their order; only the person
+who added a key changes it; the model search has filters and orders** (T-387; Sponge: "setup the key and then configure
+what models and providers of the models can be used per key and re-configure things later … let only who added the key
+modify the models, providers, ext." and "type in and somewhat search for models, find a model … click on a model, search
+providers, and do some fancy search things inside viberoller").
+
+- **Models on this key** replaces a key's "Entries". "Add models" opens the search: words (name, maker, description),
+  filters (deals, free, zero data retention, takes tools, reasons, reads images, at most this input price per million, at
+  least this context) and an order (newest, cheapest, most context, biggest deal). The last search is kept for the next
+  time. Clicking a model opens its providers with their search, filters and sort (T-385/T-386). Tick the providers to
+  allow: the order they were ticked in is the order they are tried. Or "Allow any provider": OpenRouter chooses.
+- Each model on a key can be renamed, removed, have its providers moved up or down or removed, and "Change providers"
+  reopens its provider list with the ticks it has. People pick the model by its id in Work, the API and jcode's
+  viberoller provider, shown by its name.
+- Saved as the hub's entries, unchanged in shape: id = the model's id, the ticked providers are the steps of one chain
+  (the next is tried when one is unavailable, said in the session), any provider = `allowFallbacks` with no order. So the
+  hub, the API and the Jcode PGM Server route them as before, and an older entry made of several models still runs (shown
+  as "an older chain", and removable). A key may hold 100 models (was 30) and a model 24 providers (was 8); an entry id
+  may be 120 characters (model ids).
+- **Only the person who added a key changes it**: its models and providers, name, sharing, limits, management key, and
+  removing it. Manage AI no longer changes another person's team key (Sponge: "admins can change whatever whenever as long
+  as they added it"); they are told "Only the person who added this key may change it." (403). Only a key with no owner on
+  record is left to Manage AI, so none becomes unchangeable. Each key says who added it, and to everyone else its models
+  read "Only <name>, who added this key, changes its models and providers." Each person's monthly cap on the team's keys
+  stays with Manage AI.
+- `GET /api/openrouter/catalog/models` takes `tools=1`, `reasoning=1`, `image=1`, `maxIn=` ($/M), `minContext=`
+  (tokens) and `sort=price|context|deal`, finds words in the description too, and adds `tools` and `reasoning` per model.
+- Checks: **R654** (the page's own entry builder saves a model on two ticked providers and one on any provider; the
+  first provider down gives way to the second with the switch said; any provider leaves OpenRouter free; someone who did
+  not add the key gets 403 on changing and removing it; the search's filters and price order; the page's words);
+  **R611** now says an admin may not change, rename, re-model, limit or remove a teammate's key (seen failing on 5.74.0:
+  the admin could, and even removed it); **R591**'s teammate changing the admin's team key now gets that 403 (was a
+  plain 400); R599 and R650 follow the page's new words; unit test
+  `the_model_search_filters_by_what_a_model_takes_reads_costs_and_holds_and_sorts_four_ways`.
+- Modules: web/aiadmin.js 1.5.0, web/polish.css 1.4.1; pgm-ai-internal's openrouter.rs, openrouter_team.rs,
+  openrouter_catalog.rs, openai.rs.
+
+## 5.74.0 — 2026-11-17
+
+MINOR: **each provider of a model shows its data policy as a green, yellow or red marker, from OpenRouter's API only;
+the model search can be only the models with a zero-data-retention endpoint** (T-386; Sponge: the ZDR list and the
+per-provider markers are separate things, and "I just need this direct from their API where it is possible … using their
+page directly can break at any point in time").
+
+- What OpenRouter's API gives (its docs, 2026-11-17): every endpoint's data policy as **three tiers**, through
+  `GET /endpoints/zdr` and its `safety_retention` flag: **zero data retention** (nothing stored, so nothing trained on),
+  **safety retention** (may be kept only to detect abuse, never trained on) and **retention and training** (may be kept
+  and trained on under the provider's policy; OpenRouter also puts an endpoint here when its policy is unclear). Also
+  documented: `GET /models?zdr=true` (models with a ZDR endpoint) and the request's `provider.data_collection: "deny"`.
+- What it does not give: the finer marks on OpenRouter's website (training apart from keeping prompts, how many days).
+  They are on the site only (no field in the endpoint schema, its changelog, `/model/{author}/{slug}` or `/providers`),
+  so the hub does not show them: reading the website could break at any time.
+- The picker's Data policy column is a marker per endpoint: **green** "No retention", **yellow** "Retains, no training",
+  **red** "Retains, may train", with what OpenRouter says each means (hover, and the "More" row). Filters: green only,
+  no training (green or yellow); sort: best data policy first. The model search's **Zero data retention only** lists the
+  models with an endpoint on the ZDR list, and each model says how many it has.
+- `GET /api/openrouter/catalog/endpoints` adds `dataLevel` (green / yellow / red) and `dataMeaning` per endpoint;
+  `…/models` takes `zdr=1` and adds `zdrEndpoints` per model. Add-only.
+- Checks: **R653** (the three tiers as markers with their meanings, the ZDR model filter, the page's words, and that the
+  hub never asks OpenRouter's website); unit test
+  `the_data_policy_is_openrouters_three_tiers_from_its_api_with_a_marker_each_and_a_zdr_model_filter`.
+- Modules: web/aiadmin.js 1.4.0, web/polish.css 1.4.0; pgm-ai-internal's openrouter_catalog.rs.
+
+## 5.73.0 — 2026-11-17
+
+MINOR: **AI Admin's OpenRouter picker shows everything OpenRouter says about each provider of a model: its deals, every
+price, its service tier, its uptime over time and who runs it; the model search can be only the deals or only the free
+models** (T-385; Sponge: "we will need all of that information").
+
+- **Deals.** OpenRouter puts a provider's deal in `pricing.discount` (113 of 1,443 endpoints had one on 2026-11-17, up to
+  70 % off), already taken off the listed price. The picker shows the price with the price before the deal struck through
+  (price / (1 − discount)) and a "41% off" badge, sorts by the biggest deal, and filters to "Deals only".
+- **Deals only, across models.** The model list never says a deal (only a model's endpoints do), so the hub keeps a deals
+  index: in the background it asks every model's providers, four at a time, keeps each answer in the catalogue's cache
+  (provider lists then open at once) and holds each model's biggest deal for 6 hours. The search's "Deals only" lists the
+  models some provider gives a deal on ("up to 41% off"), and says it is still looking them up the first time. "Free
+  only" lists the free models (`:free`).
+- **Every price:** cache read and write, and in "More" the tiered prices (OpenRouter's `overrides`: dearer from 200k
+  prompt tokens, say, or **by time of day**: Tencent is cheaper from 16:00 to midnight UTC, an off-peak deal; OpenRouter
+  sends `utc_start` / `utc_end` as hhmm) and every other price (reasoning, audio, image tokens, cache write for an hour per million; per
+  input image, per web search, per request). Prices under $0.10 per million show three decimals.
+- **Service tier** (flex / priority / ultrafast; a provider may list the same model on several) as a badge, with a
+  filter; the entry's name says it.
+- **Uptime** over the last 5 minutes, 30 minutes and a day; limits (context, prompt at most, out at most); the
+  parameters the endpoint takes.
+- **Who runs it**, from OpenRouter's provider list (`GET /providers`, a day in the cache): headquarters, the countries
+  its datacenters are in, links to its privacy policy, terms and status page (only http(s) links). The provider filter
+  matches countries and tiers too.
+- `GET /api/openrouter/catalog/models` takes `deals=1` and `free=1` and answers each model's `cacheReadPerM`,
+  `cacheWritePerM`, `more`, `tiers`, `free`, `bestDeal` and the index's state (`deals`); `…/endpoints` adds `discount`,
+  `inPerMBefore`, `outPerMBefore`, `cacheWritePerM`, `more`, `tiers`, `free`, `serviceTier`, `uptime5m`, `uptime1d`,
+  `maxPrompt`, `params`, `toolChoice`, `implicitCaching`, `latency`, `throughput` (the percentiles) and `providerInfo`.
+  All add-only.
+- Checks: **R652** (the hub against the fake OpenRouter: the deal and the price before it, the tier, tiered and other
+  prices, uptime, limits, who runs it, a `javascript:` policy link never shown, "deals only" once the index is built,
+  "free only", and the page's own words for all of it, run from aiadmin.js); unit tests
+  `a_deal_shows_with_the_price_before_it_and_every_other_fact_an_endpoint_has` and
+  `the_model_list_can_be_only_the_deals_or_only_the_free_ones`.
+- Modules: web/aiadmin.js 1.3.0, web/polish.css 1.3.1; pgm-ai-internal's openrouter_catalog.rs.
+
+## 5.72.0 — 2026-11-17
+
+MINOR: **OpenRouter keys are named, anyone adds them, each a person's own or the team's, each with optional limits; and
+jcode's one `viberoller` provider** (T-383, from Sponge; team note plans/openrouter-keys-and-jcode-provider.md). Jcode PGM
+0.99.13 is the jcode side.
+
+- **Named keys, any number:** anyone may add an OpenRouter key under a name of their choosing. It shows in the AI dropdown under that name.
+  - **Kept to themselves**, only its owner uses it (they pay OpenRouter; no hub budget applies, their own counter shows what it spent).
+  - **Put into the team's keys**, the whole team may use it, each person within their month budget.
+  - The "allow personal keys" switch is gone: people may always use their own keys. An older page that still sends it is told so, and nothing changes.
+- **Optional limits per key, for everyone on it together:** 5 hours and 7 days rolling, the calendar month.
+  - Each is optional: empty means no limit, and a new key has none. Example: a key with $500 of credit, limited to $20 a month for the whole team.
+  - At a limit, every request on that key is refused before OpenRouter is asked, naming the key, the window and when it frees up. An answer already being written finishes (the only overflow).
+  - The owner sets the limits; for a team key, anyone holding Manage AI can set them too. A limit above the key's own limit on OpenRouter is refused.
+  - Each key may have its own management key, to show the account's credits.
+- **AI Admin:**
+  - *Yours → My OpenRouter* shows your month and **My OpenRouter keys**: add a key (name, key, "Put it into the team's keys", limits). Each key is a card with what is left, its limits, its management key, its entries (the same model and provider picker), Rename, Test and Remove.
+  - *Global → Team OpenRouter keys* lists every team key the same way, with "Add a team key" and everyone's month.
+  - "Which key pays" is gone: the dropdown names the key.
+- **Work's OpenRouter line** follows the session's key: a team key ("This hub · OpenRouter · <name>"), or your own ("OpenRouter · <name>").
+- **`GET /v1/models?usable=1`** (add-only) is what jcode's `viberoller` provider lists. It gives only what can answer a client that is not Claude Code right now:
+  - an AI host that is offline or at its cap drops out;
+  - a host's Claude subscription login is never listed (it serves Claude Code only);
+  - each model has its way, `route: "openrouter"` (an OpenRouter key's entry: jcode sends it through the Jcode PGM Server) or `"hub"` (this API).
+
+  The plain `/v1/models` keeps its shape.
+- **Moved over by itself, once:**
+  - The team key of before gets the team's old limits as its own (the defaults $10 / $20 / $20 when none were set), the hub-wide management key, and the old ledger lines.
+  - A person's key in `profiles/<user>/openrouter-key.json` becomes their key "my OpenRouter" (`or-me:<user>`): their own entries, else a copy of the team's. The old file is kept as `openrouter-key.json.migrated`.
+  - `providers.json` only gains fields (`limits`, `managementKey`); the JavaScript hub still reads it.
+- **Data:** the ledger lines name their key (`key`). Routes:
+  - new: `GET /api/openrouter/keys`;
+  - `GET /api/openrouter/team?key=`, and `POST …/team/caps` / `…/team/management-key` with `key` (null = no limit);
+  - `/api/openrouter/mykey` works on the key `or-me:<user>` for older pages;
+  - the catalogue is open to everyone signed in.
+- **Versions:** web/index.html 1.56.0, web/aiadmin.js 1.2.0, web/polish.css 1.3.0.
+- **Checks:**
+  - R611 now checks named keys (a teammate's own key, sharing it, its limit, who may change it, the old switch).
+  - R651 is new (`/v1/models?usable=1`).
+  - R591, R606, R612 and R647–R650 follow the new behaviour.
+  - R647–R650 now use their own team key. In the full run, R611 had already asked OpenRouter about the shared test key, and the hub asks about a key at most once a minute, so R649 saw "no limit of its own" instead of the fake's limit. It failed once in the full `--rust-hub` run and passes in suite order now.
+  - Unit tests cover the migration (once; old caps or defaults; personal keys) and the per-key ledger and limits.
+
+## 5.71.1 — 2026-11-17
+
+PATCH: **the fallback chain on every way in, also for a stream that fails as its first event** (T-381 follow-up, from
+Sponge: "make sure the things I should know are coded in").
+
+- **Every way to OpenRouter walks the chain:** the OpenAI chat API and Work's relay as before, now also the Anthropic-shaped `/v1/messages`, the Responses API translated to chat, and the hub's own calls (Unity, the prompt enhancer, a /transfer handoff writer).
+  - The walk moved into one place (`openrouter::send_chain`, used by the gateway's `oa_upstream` and the hub's text paths).
+  - The switch lines reach the caller on every answer (`x-vr-openrouter-switch`), also on answers the hub builds itself and on the error when every step failed. The hub's own calls write them to the log.
+- **A stream that fails as its first event** (OpenRouter sends a failure after the 200 that way) now gives way to the next step too. The hub reads the stream up to its first data event; if that is a switchable error, the next step is tried, otherwise what was read goes on first and the rest follows. The Jcode PGM Server does the same (Jcode PGM 0.99.12).
+- **Work's OpenRouter line** says "credits: needs a management key (AI Admin)" when the balance cannot be shown, instead of leaving it out.
+- **Versions:** web/index.html 1.55.1.
+- **Checks:** R648 also sends the chain through `/v1/messages` and through a stream whose first event is the failure. A unit test covers reading a stream's first event.
+
+## 5.71.0 — 2026-11-17
+
+MINOR: **Team OpenRouter in AI Admin: model + provider picker, named fallback chains, the key's own limits, credits in
+Work** (T-381, from Sponge; team note plans/openrouter-team-admin.md). Jcode PGM 0.99.11 is the server and jcode side.
+
+- **The picker (jcode's model fetching, shared):** search OpenRouter's models, then pick one of a model's providers. Each provider shows:
+  - input and output price per million tokens;
+  - speed (tokens per second) and time to the first token;
+  - uptime, quantization and context;
+  - its **data policy**: *No retention* (ZDR), *Retains, no training* (safety retention) or *Retains, may train*, from OpenRouter's ZDR list; an endpoint not on the list counts as retains and may train, as OpenRouter itself rules.
+
+  The list can be filtered by data policy, sorted by speed, price, uptime or first token, and searched. The types and detail line are jcode's (`jcode-provider-openrouter`), now in the library `pgm-ai-internal::openrouter_catalog`. Speed and latency are asked for with the team key, since OpenRouter gives them only to a key. Routes `GET /api/openrouter/catalog/models?q=` and `/endpoints?model=` (Manage AI).
+- **Entries are named fallback chains** hosted by this hub:
+  - They start empty. **Add a fallback** picks a model and a provider and names the entry (e.g. "deepseek"); **Add another fallback** adds model 2, 3, …, any model on any provider. Steps can be moved up, removed and renamed.
+  - Each step goes to exactly its endpoint (`provider.order: [<endpoint tag>]`, no fallback of OpenRouter's own).
+  - When a step fails **before it answers** (404, 408, 429, 5xx, not reached), the next one is tried, and the switch is said in words: *"model 1: deepseek via stepfun unavailable (503: …), switching to model 2: deepseek via cloudflare"*. In a Work run this is a line in the transcript; on the API it is the header `x-vr-openrouter-switch`; through the Jcode PGM Server it is a status line in jcode.
+  - Credits, budgets, a refused key or a bad request (400, 401, 402, 403) never switch.
+  - Data: a pair's `steps: [{model, provider, label}]` (add-only; step 1 stays the pair's `model` / `providers`, so older code runs it). `/__pgm/route` gives the chain (`steps`, `switchOn`, add-only).
+- **The team key's own limits, for everyone together:**
+  - Windows: 5 hours and 7 days rolling, the calendar month (UTC); defaults **$10 / $20 / $20**, set in AI Admin (Manage AI).
+  - Spend reaching one is refused for every team-key path before OpenRouter is asked: the API, Work's relay and the Jcode PGM Server. The refusal is in the caller's API shape and names the window and when it frees up.
+  - A limit above the key's own limit on OpenRouter is refused. With an unlimited key the limits may be higher than the credits on the account (no top-up happens by itself).
+  - The ledger `openrouter-team-ledger.jsonl` and the settings `openrouter-team.json` are Rust-only data. A person's own key is never counted.
+- **What is left:** the account's credits (OpenRouter tells them to a **management key**, set optionally next to the team key), the key's own limit and spend, the three windows.
+  - In Work, a line under the usage bar shows, while the session on screen runs on the team's OpenRouter, *This hub · OpenRouter · 5h $x / $10 · 7d … · month … · credits $y left · this session $z*. A Work run's spend is kept per session.
+  - Routes `GET /api/openrouter/team[?session=]`, `POST …/team/caps`, `POST …/team/management-key`.
+- **This hub is the host:** Work's picker group is "This hub · OpenRouter"; a person's own key is "OpenRouter · my key".
+- **Fixed on the way:** a model id like `../x` reached OpenRouter's path, and two keys ending in the same 4 characters shared OpenRouter's answer for a minute.
+- **Versions:** web/aiadmin.js 1.1.0, web/index.html 1.55.0, web/polish.css 1.2.0.
+- **Checks:** R647–R650 are new (the catalogue, the chains, the limits and credits, the page). R591 now accepts a team key with no entries.
+
 ## 5.70.5 — 2026-11-17
 
 PATCH: **No more console windows popping up and stealing focus on Windows**, and the regression suite runs clean on Windows (from
@@ -33,6 +297,7 @@ test that u ran if it is out dated").
 
 ### Added
 - Regression check R643: nothing native starts a program with DETACHED_PROCESS again.
+
 ## 5.70.4 — 2026-11-17
 
 PATCH: **the release summary: everything on dev since live 5.57.4** (no code change; the detail of each item is in its own

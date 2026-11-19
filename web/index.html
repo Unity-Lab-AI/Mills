@@ -1522,7 +1522,7 @@
       <h2 class="adminPartHead">Global<small>For everyone on this hub. Any admin can change it (the Manage AI permission).</small></h2>
       <section class="setGroup" id="agDefault" hidden><h3>Default AI for everyone</h3><p class="setHint">What answers Work and the API for everyone whose AI source is on Default: this hub's own Claude, or one person's AI host. A person who picks a source of their own keeps it.</p>
         <div id="agDefaultBox" class="apiBox"></div></section>
-      <section class="setGroup" id="agOpenRouter" hidden><h3>Team OpenRouter</h3><p class="setHint">The team's OpenRouter key and the models (model + provider pairs) everyone may use with it, everyone's monthly budget on the team key, and whether people may use a personal key of their own.</p>
+      <section class="setGroup" id="agOpenRouter" hidden><h3>Team OpenRouter keys</h3><p class="setHint">The OpenRouter keys the whole team may use (each under its name, with its own optional limits for everyone on it together), their entries, and everyone's monthly budget on them. Anyone may put a key of theirs in here (AI Admin → Yours); people may always use their own keys.</p>
         <div id="agOrBox" class="apiBox"></div></section>
       <section class="setGroup" id="agHosts" hidden><h3>AI hosts on this hub</h3><p class="setHint">Every AI host connected to this hub: whose it is, whether it is online, its version and who is using it now. Only its owner controls it (AI Admin → My AI hosts on their account).</p>
         <div id="agHostsBox" class="apiBox"></div></section>
@@ -1537,7 +1537,7 @@
         <div id="srcBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My AIs</h3><p class="setHint">Hook up an AI of your own and use it in Work, through the API, and (if you share it) let the team use it too. The host's Claude stays the default for everyone.</p>
         <div id="provBox" class="provBox"></div></section>
-      <section class="setGroup" id="sgOpenRouter"><h3>My OpenRouter</h3><p class="setHint">Which key pays for your OpenRouter models, and your month. The team's OpenRouter models cost money, so each person has a monthly budget (US dollars, counted from what OpenRouter charges for each answer). At the cap OpenRouter answers stop until the 1st. You can also let a Work session fall back to an OpenRouter model when its Claude host is offline or at its cap.</p>
+      <section class="setGroup" id="sgOpenRouter"><h3>My OpenRouter</h3><p class="setHint">Your OpenRouter keys and your month. A key of your own shows in the AI dropdown under its name; keep it to yourself or put it into the team's keys. The team's keys cost money, so each person has a monthly budget on them (US dollars, counted from what OpenRouter charges for each answer); at the cap they stop until the 1st. You can also let a Work session fall back to an OpenRouter model when its Claude host is offline or at its cap.</p>
         <div id="orBox" class="apiBox"></div></section>
       <section class="setGroup"><h3>My AI hosts</h3><p class="setHint">Your own computers lending their AI to this VibeRoller: your Claude login for Work and the API, local models, Unity's engines. Each host has a nickname and a UUID; make one here, download the AI Host package with its config inside, unzip it on that computer and run it. It connects out; no port opens at home. Only the people you list may use it.</p>
         <div id="hostBox" class="apiBox"></div></section>
@@ -1686,6 +1686,9 @@
         <div class="uItem" id="u7d"><span class="uLbl">7d</span><span class="uMini"><i></i></span><span class="uPctS">–</span><span class="uTime">--d --h --m</span></div>
         <div class="uItem uCtx" id="uCtx"><span class="uLbl">Context</span><span class="uTrack"><i></i></span><span class="uPct">–</span></div>
       </div>
+      <!-- T-381: while the session on screen runs on the team's OpenRouter (hosted by this hub): the key's limits for everyone
+           together (5 h, 7 d, month), the credits left on the account and this session's spend -->
+      <div id="orUseBar" class="orUseBar" hidden role="status"></div>
       <div id="useBar" hidden role="status"></div><!-- what this run uses on your computer: web/machines.js (T-314) -->
       <div id="logRow"><!-- the conversation, and the queue panel next to it (web/queue.js, T-188) -->
         <div id="log"><div class="sys">Tell Claude what you need. Open a folder on your PC first so it can build and edit files there.</div></div>
@@ -2721,7 +2724,8 @@ function showModels(d) {
     // two kinds of engine: Claude (Claude Code, through an AI host's login or a key) and OpenRouter (Jcode PGM on the server, T-370)
     const orp = p.kind === 'openrouter', pairLabel = Object.fromEntries((p.pairs || []).map((x) => [x.id, x.label || x.id]));
     const g = document.createElement('optgroup');
-    g.label = orp ? 'OpenRouter' + (provs.filter((x) => x.kind === 'openrouter').length > 1 || p.personal ? ' · ' + p.label : '') + (p.workOff ? ' · not set up on this server' : '')
+    // T-383: a key of one's own by its name
+    g.label = orp ? (p.personal ? 'OpenRouter · ' + (p.label || 'my key') : 'This hub · OpenRouter' + (provs.filter((x) => x.kind === 'openrouter' && !x.personal).length > 1 ? ' · ' + p.label : '')) + (p.workOff ? ' · not set up on this server' : '') // T-381: the team's entries are hosted by this hub
       : (p.kind === 'host-claude' ? 'Claude (' + (p.nickname || p.label) + ')' + (p.owner && p.owner !== me.username ? ' (' + nickOf(p.owner) + ')' : '') : provName(p)) + (p.online === false ? ' · offline' : p.capped ? ' · at its usage cap' : '');
     for (const m of p.models || []) { const o = document.createElement('option'); o.value = p.id + '|' + m; o.textContent = orp ? (pairLabel[m] || m) : modelName(m); o.disabled = p.online === false || !!p.workOff; if (p.workOff) o.title = p.workOff; g.append(o); }
     sel.append(g);
@@ -3713,7 +3717,34 @@ function usageColor(pct) {
 let usageData = null, usageSkew = 0;
 async function refreshUsage() {
   if (!me) return;
-  try { usageData = await json('/api/usage'); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
+  // the context meter is the session on screen's (T-388: before, always the first session's; an older hub ignores ?session)
+  const sid = typeof SESSIONS !== 'undefined' && SESSIONS.onScreen ? SESSIONS.onScreen() : '';
+  try { usageData = await json('/api/usage' + (sid ? '?session=' + encodeURIComponent(sid) : '')); usageSkew = usageData.now - Date.now(); paintUsage(); } catch {}
+  refreshOrUse();
+}
+// T-381 / T-383: the OpenRouter line in Work, for a session whose AI is an OpenRouter key (the team's or one of the
+// person's own): that key's limits, what is left, what this session spent (an older hub has no /api/openrouter/team: the
+// line stays hidden)
+function orSession() {
+  const sid = typeof SESSIONS !== 'undefined' ? SESSIONS.onScreen() : '', s = sid && SESSIONS.byId ? SESSIONS.byId(sid) : null;
+  const pid = (s && s.provider) || (me && me.provider) || '';
+  const p = ((me && me.providers) || []).find((x) => x.id === pid);
+  return p && p.kind === 'openrouter' ? { sid: sid || '', p } : null;
+}
+async function refreshOrUse() {
+  const bar = $('orUseBar'); if (!bar) return;
+  const os = orSession(); if (!os) { bar.hidden = true; return; }
+  const q = ['key=' + encodeURIComponent(os.p.id)]; if (os.sid) q.push('session=' + encodeURIComponent(os.sid));
+  let st; try { st = await json('/api/openrouter/team?' + q.join('&')); } catch { bar.hidden = true; return; }
+  const m = (n) => '$' + Number(n || 0).toFixed(2), w = st.windows || {}, parts = [];
+  for (const [k, l] of [['fiveHour', '5h'], ['week', '7d'], ['month', 'month']]) if (w[k] && w[k].capUsd != null) parts.push(l + ' ' + m(w[k].spentUsd) + ' / ' + m(w[k].capUsd) + (w[k].over ? ' (limit reached)' : ''));
+  if (!st.limited && st.limited !== undefined) parts.push('no limits');
+  if (st.credits) parts.push('credits ' + m(st.credits.leftUsd) + ' left'); else if (st.hasKey) parts.push('credits: needs a management key (AI Admin)'); // OpenRouter tells the balance to a management key only
+  if (st.session) parts.push('this session ' + m(st.session.spentUsd));
+  bar.textContent = (os.p.personal ? 'OpenRouter · ' + (os.p.label || 'my key') : 'This hub · OpenRouter · ' + (os.p.label || 'team key')) + ' · ' + parts.join(' · ');
+  bar.classList.toggle('over', !!st.over);
+  bar.title = 'This key\'s limits for everyone on it together (5 hours and 7 days rolling, the calendar month), what is left on the account and what this session has spent.' + (st.over ? ' A limit is reached: answers on this key wait until it frees up.' : '');
+  bar.hidden = false;
 }
 let usageSoon = null;
 function refreshUsageSoon() { if (!usageSoon) usageSoon = setTimeout(() => { usageSoon = null; refreshUsage(); }, 1500); } // at most one fetch per 1.5 s during a reply
@@ -5712,88 +5743,32 @@ function pairsEditor(initial) {
   wrap.append(list, add);
   return { el: wrap, get: () => rows.map((x) => x.get()) };
 }
-// ── AI Admin → My OpenRouter (T-379; was Settings → OpenRouter budget): which key pays for your OpenRouter models (the
-// team's, counted against your monthly budget, or your own), your month, the fallback and your own key. The team's side
-// (its key and models, everyone's month, the personal-keys switch) is Global → Team OpenRouter (web/aiadmin.js). ──
+// ── AI Admin → My OpenRouter (T-379, T-383): your month on the team's keys, the fallback, and your own named keys (web/
+// aiadmin.js myKeys: add one, keep it to yourself or put it into the team's keys, its limits and entries). The team's keys
+// and everyone's month are Global → Team OpenRouter keys (web/aiadmin.js). ──
 async function renderOrBudget() {
   const box = $('orBox'); if (!box) return;
   let m; try { m = await json('/api/openrouter/budget'); } catch { const g = $('sgOpenRouter'); if (g) g.hidden = true; return; } // an older hub has none
   let provs = []; try { provs = ((await json('/api/providers')).providers || []).filter((p) => p.kind === 'openrouter'); } catch {}
-  let mykey = null; try { mykey = await json('/api/openrouter/mykey'); } catch {}
-  const team = provs.filter((p) => !p.personal), mine = provs.find((p) => p.personal);
-  const g = $('sgOpenRouter'); if (g) g.hidden = !team.length && !(mykey && (mykey.personalKeys || mykey.hasKey));
+  const g = $('sgOpenRouter'); if (g) g.hidden = false; // anyone may add a key of their own (T-383)
   box.textContent = '';
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   const usd = (n) => '$' + Number(n || 0).toFixed(2);
-  box.append(mk('div', '', 'This month (' + m.month + '): team key ' + usd(m.spentUsd) + ' of ' + usd(m.capUsd) + (m.ownCap ? ' (your own cap)' : '') + ' · ' + m.calls + ' answer' + (m.calls === 1 ? '' : 's') + ' · resets ' + new Date(m.resetsAt).toLocaleDateString() + (m.over ? ' · used up' : '')));
-  if (m.hasOwnKey || m.mineCalls) box.append(mk('div', '', 'Your own key: ' + usd(m.mineUsd) + ' · ' + m.mineCalls + ' answer' + (m.mineCalls === 1 ? '' : 's') + ' (you pay OpenRouter; no hub budget applies)'));
+  box.append(mk('div', '', 'This month (' + m.month + ') on the team\'s keys: ' + usd(m.spentUsd) + ' of ' + usd(m.capUsd) + (m.ownCap ? ' (your own cap)' : '') + ' · ' + m.calls + ' answer' + (m.calls === 1 ? '' : 's') + ' · resets ' + new Date(m.resetsAt).toLocaleDateString() + (m.over ? ' · used up' : '')));
+  if (m.hasOwnKey || m.mineCalls) box.append(mk('div', '', 'Your own keys: ' + usd(m.mineUsd) + ' · ' + m.mineCalls + ' answer' + (m.mineCalls === 1 ? '' : 's') + ' (you pay OpenRouter; no hub budget applies)'));
   const meter = mk('div', 'orMeter'); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', usd(m.spentUsd) + ' of ' + usd(m.capUsd) + ' used'); const fill = mk('span'); fill.style.width = (m.capUsd > 0 ? Math.min(100, Math.round(m.spentUsd / m.capUsd * 100)) : 100) + '%'; meter.append(fill); box.append(meter);
-  // which key pays: the team's or your own (T-379). It is the OpenRouter your AI source and your fallback use.
-  if (team.length || mine || (mykey && mykey.personalKeys)) {
-    const fb = m.fallback || {}, srcOr = provs.find((p) => p.id === me.provider), fbOr = fb.on ? provs.find((p) => p.id === fb.provider) : null, cur = srcOr || fbOr;
-    const which = mk('div', 'orWhich'); which.setAttribute('role', 'radiogroup'); which.setAttribute('aria-label', 'Which OpenRouter key pays for your models');
-    which.append(mk('h4', '', 'Which key pays'));
-    const opt = (label, hint, ok) => { const l = mk('label', 'chk'), r = mk('input'), sp = mk('span', '', label); r.type = 'radio'; r.name = 'orWhich'; r.disabled = !ok; sp.append(mk('small', '', hint)); l.append(r, sp); which.append(l); return r; };
-    const rt = opt('The team\'s key', team.length ? 'Counted against your monthly budget above.' : 'The team has no OpenRouter key yet.', team.length > 0);
-    const rm = opt('My own key', mine ? 'You pay OpenRouter directly; no hub budget applies.' : mykey && mykey.personalKeys ? 'Save your key below first.' : 'Personal keys are switched off on this hub.', !!mine);
-    (cur && cur.personal ? rm : rt).checked = true;
-    const note = mk('div', 'status'); which.append(note);
-    const pick = async (to) => {
-      if (!to) return;
-      try {
-        if (srcOr) { await json('/api/model', { method: 'POST', body: JSON.stringify({ provider: to.id, model: '' }) }); await refreshProviders(); }
-        if (fbOr) await json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: true, provider: to.id, pair: ((to.pairs || [])[0] || {}).id || '' }) });
-        note.textContent = (to.personal ? 'Your OpenRouter models now run on your own key.' : 'Your OpenRouter models now run on the team\'s key.') + (srcOr || fbOr ? '' : ' It applies once an OpenRouter model is your AI source or your fallback.');
-        if (srcOr || fbOr) { renderOrBudget(); renderSource(); }
-      } catch (e) { note.textContent = e.message; }
-    };
-    rt.onchange = () => pick(team[0]); rm.onchange = () => pick(mine);
-    box.append(which);
-  }
-  if (provs.length) {
+  if (provs.some((p) => (p.pairs || []).length)) {
     const fb = m.fallback || {};
     const row = mk('div', 'row'); const lab = mk('label', 'chk'); const on = mk('input'); on.type = 'checkbox'; on.checked = fb.on === true; lab.append(on, ' Use OpenRouter when Claude is unavailable');
     const sel = mk('select'); sel.setAttribute('aria-label', 'OpenRouter model for the fallback');
-    for (const p of provs) for (const pr of p.pairs || []) { const o = mk('option', '', (p.personal ? 'my key · ' : '') + (pr.label || pr.id)); o.value = p.id + '|' + pr.id; sel.append(o); }
+    for (const p of provs) for (const pr of p.pairs || []) { const o = mk('option', '', p.label + ' · ' + (pr.label || pr.id)); o.value = p.id + '|' + pr.id; sel.append(o); }
     sel.value = (fb.provider || '') + '|' + (fb.pair || ''); if (sel.selectedIndex < 0) sel.selectedIndex = 0;
     const note = mk('span', 'status');
     const save = () => { const [provider, pair] = sel.value.split('|'); json('/api/openrouter/fallback', { method: 'POST', body: JSON.stringify({ on: on.checked, provider, pair }) }).then(() => { note.textContent = on.checked ? 'On: a Work session whose Claude host is offline or at its cap runs this model through Jcode PGM, and says so.' : 'Off.'; }).catch((e) => { note.textContent = e.message; on.checked = false; }); };
     on.onchange = save; sel.onchange = () => { if (on.checked) save(); };
     row.append(lab, sel, note); box.append(row);
   }
-  // my own OpenRouter key (T-372): kept on the hub, never shown back (only its last four characters); it appears as "my OpenRouter"
-  if (mykey) {
-    const kb = mk('div', 'orMine'); kb.append(mk('h4', '', 'My OpenRouter key'));
-    const kn = mk('span', 'status'); const say = (t) => { kn.textContent = t; };
-    if (!mykey.personalKeys && !mykey.hasKey) kb.append(mk('p', 'setHint', 'Personal OpenRouter keys are switched off on this hub: an admin can allow them (AI Admin → Global → Team OpenRouter).'));
-    else {
-      if (!mykey.personalKeys) kb.append(mk('p', 'setHint', 'An admin switched personal keys off: your stored key stays but is not used.'));
-      kb.append(mk('p', 'setHint', 'Paste your own OpenRouter key to use "my OpenRouter" in the AI picker, the API (model my/<id>) and Work. You pay OpenRouter directly: no hub budget applies, and the hub never shows the key again.'));
-      const row = mk('div', 'row'); const ki = mk('input'); ki.type = 'password'; ki.autocomplete = 'off'; ki.setAttribute('aria-label', 'Your OpenRouter key');
-      ki.placeholder = mykey.hasKey ? 'Replace it: paste a new key (sk-or-…)' : 'Your OpenRouter key (sk-or-…)';
-      const ks = mk('button', '', mykey.hasKey ? 'Replace' : 'Save key'); ks.type = 'button';
-      ks.onclick = () => { if (!ki.value.trim()) { say('Paste a key first.'); return; } json('/api/openrouter/mykey', { method: 'POST', body: JSON.stringify({ apiKey: ki.value.trim() }) }).then(() => { ki.value = ''; renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message)); };
-      row.append(ki, ks);
-      if (mykey.hasKey) {
-        const tag = mk('span', 'orTail'); tag.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-key"/></svg> '; tag.append('Stored: ' + mykey.last4);
-        const kt = mk('button', 'ghost'); kt.type = 'button'; kt.title = 'Ask OpenRouter whether the key works'; kt.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-check"/></svg> Test';
-        kt.onclick = () => { say('Asking OpenRouter…'); json('/api/openrouter/mykey/test', { method: 'POST', body: '{}' }).then((r) => say(r.ok ? 'OpenRouter accepts the key.' : r.error)).catch((e) => say(e.message)); };
-        const kr = mk('button', 'ghost'); kr.type = 'button'; kr.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg> Remove'; kr.setAttribute('aria-label', 'Remove my OpenRouter key');
-        kr.onclick = () => json('/api/openrouter/mykey/remove', { method: 'POST', body: '{}' }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message));
-        row.append(tag, kt, kr);
-      }
-      kb.append(row);
-      if (mykey.hasKey) {
-        const det = mk('details'); det.append(mk('summary', '', 'My own models (optional) · ' + (mykey.pairs.length ? mykey.pairs.length + ' of yours' : 'the team\'s models')));
-        det.append(mk('p', 'setHint', 'Leave it empty to use the team\'s models with your key. Rows you list here are used only for you (model my/<id>).'));
-        const pe3 = pairsEditor(mykey.pairs || []); const sv = mk('button', '', 'Save my models'); sv.type = 'button';
-        sv.onclick = () => { const rows = pe3.get().filter((x) => x.id || x.model); json('/api/openrouter/mykey', { method: 'POST', body: JSON.stringify({ pairs: rows }) }).then(() => { renderOrBudget(); refreshProviders(); }).catch((e) => say(e.message)); };
-        det.append(pe3.el, sv); kb.append(det);
-      }
-    }
-    kb.append(kn);
-    box.append(kb);
-  }
+  if (typeof AIADMIN !== 'undefined' && AIADMIN.myKeys) await AIADMIN.myKeys(box, renderOrBudget);
 }
 // an OpenRouter provider's editor (its allow-list of pairs, and its key replaced, never shown): the team's in AI Admin
 function orProviderEditor(p, done) {
@@ -5816,8 +5791,7 @@ async function renderProviders() {
     const it = document.createElement('div'); it.className = 'provItem';
     const b = document.createElement('b'); b.textContent = p.label; it.append(b);
     const s = document.createElement('small'); s.textContent = KIND_NAMES[p.kind] + (p.id === 'host' ? ' · everyone' : ' · ' + (p.owner === me.username ? 'yours' : nickOf(p.owner) + "'s") + (p.shared ? ' · shared with the team' : ' · private')) + (p.models && p.models.length ? ' · ' + p.models.join(', ') : ''); it.append(s);
-    if (p.personal) s.textContent = 'Your own OpenRouter key · only you see it · no hub budget (set it in AI Admin → My OpenRouter) · ' + (p.models || []).join(', ');
-    if (p.id !== 'host' && p.owner === me.username && !p.personal) {
+        if (p.id !== 'host' && p.owner === me.username && !p.personal) {
       const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'ghost'; sh.textContent = p.shared ? 'Make private' : 'Share with team';
       sh.onclick = () => json('/api/providers/update', { method: 'POST', body: JSON.stringify({ id: p.id, shared: !p.shared }) }).then(() => { renderProviders(); showModels(me); }).catch((e) => sysSettings(e.message));
       const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';

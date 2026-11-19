@@ -52,6 +52,8 @@ pub mod machine_jobs;
 pub mod machine_transfer;
 pub mod openai;
 pub mod openrouter;
+pub mod openrouter_catalog;
+pub mod openrouter_team;
 pub mod pgm_work;
 pub mod plan;
 pub mod planner;

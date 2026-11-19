@@ -150,10 +150,23 @@ pub fn context_window(ctx: &Value, default: u64) -> u64 {
     if tokens > w { w = if tokens <= LARGE_WINDOW { LARGE_WINDOW } else { tokens }; }
     w
 }
-/// The context a run's event shows (input + cache tokens of the latest reply; the window from the result).
+/// jcode's token counts in Claude's usage shape (`input_tokens` without the cache, `cache_read_input_tokens`,
+/// `cache_creation_input_tokens`, `output_tokens`; T-388). jcode names them `input`, `output`, `cache_read_input`,
+/// `cache_creation_input` (its `run --ndjson`), the Jcode PGM Server `input`, `output`, `cacheRead`, `cacheWrite`. An
+/// OpenAI-shaped count (OpenRouter's `prompt_tokens`, what jcode reports for every provider but Anthropic's) already holds the
+/// cached part: `prompt_includes_cache` takes it out once, so the context is never counted twice.
+pub fn claude_usage(u: &Value, prompt_includes_cache: bool) -> Value {
+    let g = |a: &str, b: &str| u[a].as_u64().or_else(|| u[b].as_u64()).unwrap_or(0);
+    let (input, output, read, write) = (g("input", "input_tokens"), g("output", "output_tokens"), g("cache_read_input", "cacheRead"), g("cache_creation_input", "cacheWrite"));
+    json!({ "input_tokens": if prompt_includes_cache { input.saturating_sub(read + write) } else { input }, "output_tokens": output, "cache_read_input_tokens": read, "cache_creation_input_tokens": write })
+}
+/// The context a run's event shows (input + cache tokens of the latest reply; the window from the result). Also a `usage`
+/// event (T-388: a Jcode PGM Server session's latest count, never shown on the page): `usage` in Claude's shape, and
+/// optionally `model` and `contextWindow` (the model's own, from OpenRouter's catalogue).
 pub fn note_context(ctx: &mut Value, ev: &Value, session: &str) {
-    if ev["type"] == "assistant" && ev["message"]["usage"].is_object() {
-        let u = &ev["message"]["usage"];
+    let usage = if ev["type"] == "assistant" && ev["message"]["usage"].is_object() { Some((&ev["message"]["usage"], ev["message"]["model"].as_str().unwrap_or(""))) }
+        else if ev["type"] == "usage" && ev["usage"].is_object() { Some((&ev["usage"], ev["model"].as_str().unwrap_or(""))) } else { None };
+    if let Some((u, model)) = usage {
         let tokens = u["input_tokens"].as_u64().unwrap_or(0) + u["cache_read_input_tokens"].as_u64().unwrap_or(0) + u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
         let mut c = if ctx.is_object() { ctx.clone() } else { json!({}) };
         let sid = if session.is_empty() { ev["session_id"].as_str().unwrap_or("") } else { session };
@@ -161,7 +174,10 @@ pub fn note_context(ctx: &mut Value, ev: &Value, session: &str) {
         let mut k = if c["session"].as_str() == Some(sid) && c["cache"].is_object() { c["cache"].clone() } else { json!({ "turns": 0, "paid": 0, "read": 0, "write": 0 }) };
         let add = |k: &mut Value, n: &str, v: u64| { let cur = k[n].as_u64().unwrap_or(0); k[n] = json!(cur + v); };
         add(&mut k, "turns", 1); add(&mut k, "paid", u["input_tokens"].as_u64().unwrap_or(0)); add(&mut k, "read", u["cache_read_input_tokens"].as_u64().unwrap_or(0)); add(&mut k, "write", u["cache_creation_input_tokens"].as_u64().unwrap_or(0));
-        c["session"] = json!(sid); c["tokens"] = json!(tokens); c["model"] = json!(ev["message"]["model"].as_str().unwrap_or("")); c["at"] = json!(now_ms()); c["cache"] = k;
+        let same = c["session"].as_str() == Some(sid);
+        c["session"] = json!(sid); c["tokens"] = json!(tokens); c["at"] = json!(now_ms()); c["cache"] = k;
+        if !model.is_empty() || !same { c["model"] = json!(model); } // a usage event without a model keeps the session's
+        if let Some(w) = ev["contextWindow"].as_u64().filter(|w| *w > 0) { c["window"] = json!(w); }
         *ctx = c;
     }
     if ev["type"] == "result" { if let Some(m) = ev["modelUsage"].as_object() { let w = m.values().filter_map(|x| x["contextWindow"].as_u64()).max(); if let (Some(w), true) = (w, ctx.is_object()) { ctx["window"] = json!(w); } } }
@@ -172,6 +188,21 @@ mod tests {
     use super::*;
     use pgm_context_internal::ledger::parse_usage;
 
+    #[test]
+    fn a_usage_event_fills_the_context_with_its_model_and_window_and_counts_an_openai_prompt_once() {
+        // the Jcode PGM Server's count (OpenRouter: prompt_tokens 30 000 of which 25 000 cached)
+        let u = claude_usage(&json!({ "input": 30_000, "output": 900, "cacheRead": 25_000, "cacheWrite": 0, "promptIncludesCache": true }), true);
+        assert_eq!(u, json!({ "input_tokens": 5_000, "output_tokens": 900, "cache_read_input_tokens": 25_000, "cache_creation_input_tokens": 0 }));
+        assert_eq!(claude_usage(&json!({ "input": 100, "cache_read_input": 400 }), false)["input_tokens"], 100, "Anthropic's input is without the cache");
+        let mut ctx = Value::Null;
+        note_context(&mut ctx, &json!({ "type": "usage", "usage": u, "model": "deepseek/deepseek-v4-flash", "contextWindow": 1_048_576 }), "s1");
+        assert_eq!((ctx["tokens"].clone(), ctx["model"].clone(), ctx["window"].clone(), ctx["session"].clone()), (json!(30_000), json!("deepseek/deepseek-v4-flash"), json!(1_048_576), json!("s1")));
+        // the next count of the same session without a model keeps the model; the cache ledger adds up
+        note_context(&mut ctx, &json!({ "type": "usage", "usage": { "input_tokens": 1_000, "cache_read_input_tokens": 31_000 } }), "s1");
+        assert_eq!((ctx["tokens"].clone(), ctx["model"].clone(), ctx["cache"]["turns"].clone(), ctx["cache"]["read"].clone()), (json!(32_000), json!("deepseek/deepseek-v4-flash"), json!(2), json!(56_000)));
+        assert_eq!(context_window(&ctx, 200_000), 1_048_576, "the model's own window, not the default");
+        note_context(&mut ctx, &json!({ "type": "usage", "usage": "not an object" }), "s1"); assert_eq!(ctx["tokens"], 32_000, "nothing else changes it");
+    }
     #[test]
     fn only_the_all_models_windows_count_for_the_caps() {
         // a host refused at 43 % "over its 90 % weekly cap": another weekly limit overwrote the all-models week

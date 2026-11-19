@@ -615,6 +615,7 @@ pub async fn route(hub: &Arc<Hub>, r: &Req) -> Routed {
             if let Some(rest) = p.strip_prefix("/api/hyperwork/") { return hyperwork::route(hub, r, &acc, rest).await; }
             if let Some(x) = agents::route(hub, r, &acc).await { return x; } // agent to agent (T-296): the Rust hub's only
             if let Some(x) = work::route(hub, r, &acc).await { return x; }
+            if let Some(x) = openai::openrouter_async(hub, r, &acc).await { return x; } // AI Admin → Team OpenRouter's catalogue (T-381)
             if let Some(x) = openai::route(hub, r, &acc) { return x; } // Settings → API access, → AI providers, → My AI hosts' list
             // clearing the chat's history is the Manage hub permission's (T-379); the chat library still asks for an admin
             if p == "/api/admin/room/clear" && r.method == hyper::Method::POST {
