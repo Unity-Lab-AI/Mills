@@ -34,6 +34,9 @@ const MILLS = path.join(BRIDGE, '..');
 const KEEP = process.argv.includes('--keep');
 const NO_PROD = process.argv.includes('--no-prod');
 const WIN = process.platform === 'win32';
+// ends a spawned program and everything it started (a native host's `run` starts its own `host`: kill() alone left that one
+// running on Windows, still reaching the machine's real Ollama)
+function killTree(p) { if (!p || p.exitCode !== null) return; try { if (WIN) execFileSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); else p.kill(); } catch { try { p.kill(); } catch {} } }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha = (f) => (fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : 'missing');
 
@@ -524,7 +527,7 @@ function startFakeOllama() {
       res.end(JSON.stringify({ done: true, prompt_eval_count: 100, eval_count: 10 }) + '\n'); // Ollama's counts on the final chunk (R186)
     });
   });
-  return new Promise((r) => ollamaSrv.listen(0, '127.0.0.1', () => { OLLAMA_PORT = ollamaSrv.address().port; r(); }));
+  return new Promise((r) => ollamaSrv.listen(0, '127.0.0.1', () => { OLLAMA_PORT = ollamaSrv.address().port; process.env.OLLAMA_HOST = `127.0.0.1:${OLLAMA_PORT}` /* every host the suite starts finds the fake Ollama, never the machine's real one */; r(); }));
 }
 async function setup() {
   SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'mills-test-'));
@@ -1597,8 +1600,8 @@ async function run() {
     gitj('init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'README.md'), 'r188\n'); gitj('add', '-A'); gitj('commit', '-q', '-m', 'r188'); gitj('branch', 'develop');
     const provJ = { id: 'jcode', kind: 'jcode', label: 'R188 jcode', models: ['claude-haiku-5-5', 'claude-sonnet-5-5'], jcodeCommand: process.execPath, jcodeArgs: [path.join(SB, 'test', 'fake-jcode.js')], jcodeProvider: 'viberoller' };
     const jcfg = path.join(jdir, 'ai-node.json'), pcfg = path.join(pdir, 'ai-node.json');
-    fs.writeFileSync(jcfg, JSON.stringify({ hub: H, id: 'jcode-node', token: OLD_NODE_SECRET + '-jc', user: 't-admin', autoUpdate: false, allowWork: true, providers: [provJ], engines: {}, work: { hubRepo: repo, worktreeRoot: path.join(jdir, 'worktrees') } }), { mode: 0o600 });
-    fs.writeFileSync(pcfg, JSON.stringify({ hub: H, id: 'plain-node', token: OLD_NODE_SECRET + '-pl', user: 't-admin', autoUpdate: false, providers: [{ ...provJ }], engines: {} }), { mode: 0o600 });
+    fs.writeFileSync(jcfg, JSON.stringify({ hub: H, id: 'jcode-node', token: OLD_NODE_SECRET + '-jc', user: 't-admin', autoUpdate: false, allowWork: true, providers: [provJ], engines: {}, autoDetect: { ollama: false }, work: { hubRepo: repo, worktreeRoot: path.join(jdir, 'worktrees') } }), { mode: 0o600 });
+    fs.writeFileSync(pcfg, JSON.stringify({ hub: H, id: 'plain-node', token: OLD_NODE_SECRET + '-pl', user: 't-admin', autoUpdate: false, providers: [{ ...provJ }], engines: {}, autoDetect: { ollama: false } }), { mode: 0o600 });
     const hostBin = NATIVE_BIN.host;
     const procs = [[jcfg, jdir], [pcfg, pdir]].map(([cfg, dir]) => { const fd = fs.openSync(path.join(dir, 'out.log'), 'a'); return spawn(hostBin, ['run', '--config', cfg], { cwd: dir, stdio: ['ignore', fd, fd], windowsHide: true }); });
     const nodes = async (id) => { for (let i = 0; i < 80; i++) { const n = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === id); if (n && n.online && (n.caps || []).length) return n; await sleep(250); } return null; };
@@ -1625,7 +1628,7 @@ async function run() {
     await call('/api/apikey/revoke', A, {});
     await call('/api/model', A, { model: 'claude-opus-5-5', provider: 'host' });
     const hostLog = (() => { try { return fs.readFileSync(path.join(jdir, 'out.log'), 'utf8'); } catch { return ''; } })();
-    for (const p of procs) { try { p.kill(); } catch {} }
+    for (const p of procs) killTree(p);
     const hostRs = fs.readFileSync(path.join(MILLS, 'native', 'crates', 'pgm-ai-internal', 'src', 'host', 'work.rs'), 'utf8');
     check('R188', L188,
       !!jn && jn.caps.includes('work-jcode') && ['relay', 'update', 'update-bin'].every((c) => jn.caps.includes(c)) && !!pn && pn.caps.join(',') === 'relay,update,update-bin,control,signed-pc' && (pn.providers || []).length === 0
@@ -1713,7 +1716,7 @@ async function run() {
     const hostCfg189 = JSON.parse(fs.readFileSync(f189, 'utf8'));
     const mine189 = (await call('/api/hosts', A)).data.mine || [], shown = ((mine189.find((h) => h.id === h189.id) || {}).providers || []).find((p) => p.id === 'sc-local') || {};
     const html189 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
-    try { proc189.kill(); } catch {}
+    killTree(proc189);
     await call('/api/apikey/revoke', U, {}); await call('/api/model', U, { model: 'claude-opus-5-5', provider: 'host' }); await call('/api/hosts/remove', A, { id: h189.id });
     check('R189', L189,
       !!loc && loc.models.join() === 'tiny-a,tiny-b' && !loc.scope && unscopedB.status === 200
@@ -1772,7 +1775,7 @@ async function run() {
       `announced ${JSON.stringify(lim0)} · set ${limSet.status} ${JSON.stringify(limSet.data.limits || limSet.data.error || '')} · bad ${limBad.status} · not the owner ${limOther.status} · hub now ${JSON.stringify((s3 || {}).sessionLimits || {})} · saved ${JSON.stringify(saved204)}`);
     const rs = await ctl('restart');
     for (let i = 0; i < 60 && exit191 === null; i++) await sleep(250);
-    try { proc191.kill(); } catch {}
+    killTree(proc191);
     await call('/api/hosts/remove', A, { id: h191.id }); await call('/api/hosts/remove', A, { id: old191.id });
     check('R191', L191,
       !!s0 && s0.online && s0.control === true && s0.caps.includes('control') && typeof s0.status.version === 'string' && s0.status.startedAt > 0 && s0.status.paused === false && Array.isArray(s0.inUse) && s0.providers.some((p) => p.id === 'r191') && otherSees === 0
@@ -6792,7 +6795,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const nproc = spawn(nexe, ['run', '--config', ncfg], { cwd: ndir, stdio: ['ignore', nfd, nfd], env: { ...process.env, OLLAMA_HOST: `127.0.0.1:${nb.address().port}` } });
       let up473 = null; for (let i = 0; i < 80 && !up473; i++) { up473 = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'nobrain-node' && x.online && (x.engines || []).includes('ollama')) || null; if (!up473) await sleep(250); }
       const asked = []; for (let i = 0; i < 3; i++) asked.push((await uchat(U, 'MODEL?')).final);
-      try { nproc.kill(); } catch {}
+      killTree(nproc);
       await new Promise((r) => nb.close(r));
       // the hub counts the second host offline within aiNodeOfflineMs; the checks after this one need Unity's engines back on the first
       for (let i = 0; i < 60; i++) { const h = ((await call('/api/check', A)).data.aiNodes || []).find((x) => x.id === 'nobrain-node'); if (!h || !h.online) break; await sleep(250); }
@@ -7454,7 +7457,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       vh('pause'); let paused = false; for (let i = 0; i < 40 && !paused; i++) { await sleep(250); paused = rstatus().paused === true; }
       vh('resume'); let resumed = false; for (let i = 0; i < 40 && !resumed; i++) { await sleep(250); resumed = rstatus().paused === false; }
       vh('stop', '--now'); for (let i = 0; i < 60 && rExit === null; i++) await sleep(250);
-      if (rExit === null) { try { rproc.kill(); } catch {} }
+      if (rExit === null) killTree(rproc);
       // `run` with no terminal sends the host's lines to ai-node.log (out.log only gets the supervisor's own): read both
       const outLog = ['out.log', 'ai-node.log'].map((n) => { try { return fs.readFileSync(path.join(rdir, n), 'utf8'); } catch { return ''; } }).join('\n');
       check('R164', L164,
@@ -7482,7 +7485,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       await call('/api/apikey/settings', A, { provider: 'h:ollama-node/ollama', model: 'unity-brain:latest' });
       const ans = await fetch(H + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: 'unity-brain:latest', messages: [{ role: 'user', content: 'local r182' }] }) }).then((r) => r.json()).catch(() => ({}));
       await call('/api/apikey/revoke', A, {});
-      try { oproc.kill(); } catch {}
+      killTree(oproc);
       const outText = [olog, path.join(odir, 'ai-node.log')].map((f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } }).join('\n'); // the host's lines go to ai-node.log without a terminal
       const page182 = fs.readFileSync(path.join(MILLS, 'web', 'index.html'), 'utf8');
       check('R182', L182,
@@ -8739,7 +8742,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
     check('R606', 'a person\'s own OpenRouter key is stored owner-only (a key record of theirs in providers.json, mode 0600, theirs alone) and never comes back: the settings, the budget, the provider lists and every answer carry only hasKey and the last four characters (…1111); only a key shaped sk-or-… of a plausible length is accepted (an empty one, an Anthropic one, a short one, one with a space are a plain 400, and no call to OpenRouter is made to save it); "test" asks OpenRouter\'s key endpoint through the configured base and says it works; removing it (POST …/mykey/remove or DELETE …/mykey) deletes the record',
       get0.data.hasKey === false && get0.data.last4 === null && get0.data.personalKeys === true && bad.every((b) => b.status === 400 && b.data.error)
       && setA.status === 200 && setA.data.hasKey === true && setA.data.last4 === '…1111' && getA.data.last4 === '…1111' && budA.data.hasOwnKey === true && budA.data.personalKeys === true
-      && storedA.apiKey === R606_KEY && storedA.owner === 't-admin' && storedA.shared === false && (stKey.mode & 0o777) === 0o600 && pA.hasKey === true && pA.apiKey === undefined && !JSON.stringify(inListOr(chkA)).includes(R606_KEY)
+      && storedA.apiKey === R606_KEY && storedA.owner === 't-admin' && storedA.shared === false && (WIN || (stKey.mode & 0o777) === 0o600) && pA.hasKey === true && pA.apiKey === undefined && !JSON.stringify(inListOr(chkA)).includes(R606_KEY)
       && tOk.status === 200 && tOk.data.ok === true && tOk.data.label === 'r606 key'
       && rmA.status === 200 && rmA.data.hasKey === false && goneFile && setA2.status === 200 && delRes.status === 200 && goneFile2 && leaked() === 0,
       `empty ${get0.status}; bad ${bad.map((b) => b.status)}; set ${setA.status} ${JSON.stringify(setA.data).slice(0, 140)}; mode ${(stKey.mode & 0o777).toString(8)}; test ${JSON.stringify(tOk.data)}; removed ${rmA.status}/${goneFile}; delete ${delRes.status}/${goneFile2}; leaks ${leaked()}`);
@@ -10948,7 +10951,7 @@ http.createServer((req, res) => { res.setHeader('content-type', 'application/jso
       const stMode = fs.statSync(m1.state).mode & 0o777, tokMode = fs.statSync(path.join(m1.state, 'token')).mode & 0o777;
       const card = ((await call('/api/machines', U)).data.machines || []).find((x) => x.id === m1.id) || {};
       // done with the pc_job host: it must not answer the later fallback checks
-      await call('/api/hosts/remove', U, { id: hostId }); hostProc.kill();
+      await call('/api/hosts/remove', U, { id: hostId }); killTree(hostProc);
       check('R328', 'T-311 machine tools, files: a machine linked by device code and run by the library\'s runner answers mcp__pc__list / read / write / delete / mkdir through a Work run exactly as today\'s pc_job does for the same folder (same results for success, a refusal where pc_job refuses, the same files afterwards; paths are relative to the selected folder; nothing written outside it), a read-only scope reads but refuses write / delete / mkdir and does not offer the write tools, machine_info says os, arch, the scope in words, the tools it offers and the shell\'s limits, every call leaves an audit line (denials too, never file contents) and the state folder is owner-only; mcp__pc__* still works with no machine linked (the browser folder)',
         fallbackBefore && [m1, m2, m2b, m3].every((m) => m.code === 0 && m.id) && online && !!hostId && hostRes.length === ops.length && machRes.length === ops.length && sameOp.every(Boolean) && treesEqual && noEscape
         && okB(info) && inf.os === 'linux' && typeof inf.arch === 'string' && /^one folder: /.test(inf.scope || '') && inf.access === 'read-write' && ['machine_info', 'list', 'read', 'write', 'delete', 'mkdir', 'shell_run', 'job_start', 'job_read', 'job_stop', 'proc_kill', 'transfer_get', 'transfer_put'].every((t) => (inf.tools || []).includes(t)) && /^advisory/.test((inf.shell || {}).confinement || '') && (inf.shell || {}).elevation === 'never'
